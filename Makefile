@@ -12,7 +12,7 @@
 #   make build         Build native macOS binary + Electron app
 #   make package       Package everything for distribution
 
-.PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down claude-tfy pi-tfy web desktop \
+.PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-control-plane dev-control-plane-down claude-tfy pi-tfy web desktop \
         test test-file test-e2e test-e2e-fast test-e2e-web test-e2e-web-dev test-install test-watch lint lint-fix \
         format format-check \
         docs-cli \
@@ -37,7 +37,7 @@ CLAUDE_CONTINUE_FLAGS := $(if $(filter 0,$(CLAUDE_CONTINUE)),,--continue)
 help: ## Show available commands
 	@echo ""
 	@echo "  \033[1mDevelopment\033[0m"
-	@grep -E '^(install|dev|dev-daemon|dev-arkd|dev-web|claude-tfy|pi-tfy|web|desktop):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^(install|dev|dev-daemon|dev-arkd|dev-web|dev-stack|dev-stack-down|dev-control-plane|dev-control-plane-down|claude-tfy|pi-tfy|web|desktop):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  \033[1mTesting\033[0m"
 	@grep -E '^(test|test-file|test-e2e|test-install|test-watch|lint|format):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -115,6 +115,37 @@ dev-temporal-down: ## Stop and remove the local Temporal cluster + its data volu
 	docker compose -f .infra/docker-compose.temporal.yaml -p ark-temporal down -v
 	@echo "Ark local Temporal cluster stopped."
 
+# Pick whichever docker compose CLI is on PATH. Modern installs ship the
+# plugin (`docker compose`); older engines + the standalone v2 release
+# ship as `docker-compose`. Some laptop setups have only one of the two.
+DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+
+dev-stack: build-web ## Start local Ark dev stack (Postgres :15433 + Redis :6379) and build web bundle
+	@command -v docker >/dev/null 2>&1 || { echo "Docker required. Install Docker Desktop."; exit 1; }
+	@echo "\033[1mStarting Ark dev stack (Postgres + Redis)...\033[0m"
+	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d --wait
+	@echo ""
+	@echo "  Postgres:  postgres://ark:ark@localhost:15433/ark"
+	@echo "  Redis:     redis://localhost:6379"
+	@echo ""
+	@echo "  Next: source .env.control-plane && bun packages/cli/index.ts server start --hosted"
+
+dev-stack-down: ## Stop and remove the local Ark dev stack + its data volumes
+	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev down -v
+	@echo "Ark local dev stack stopped."
+
+dev-control-plane: dev-stack ## Boot Ark in control-plane (hosted) mode against local Postgres + Redis
+	@test -f .env.control-plane || { echo ".env.control-plane missing -- copy from repo"; exit 1; }
+	@echo "\033[1mStarting Ark control-plane (hosted)...\033[0m"
+	@set -a && . ./.env.control-plane && set +a && \
+	  echo "  ARK_PROFILE=$$ARK_PROFILE  WEB=:$$ARK_WEB_PORT  DB=$$DATABASE_URL" && \
+	  exec $(BUN) packages/cli/index.ts server start --hosted --port $$ARK_WEB_PORT
+
+dev-control-plane-down: ## Stop the running hosted server (port from .env.control-plane)
+	@set -a && . ./.env.control-plane && set +a && \
+	  pid=$$(lsof -nP -iTCP:$$ARK_WEB_PORT -sTCP:LISTEN -t 2>/dev/null | head -1); \
+	  if [ -n "$$pid" ]; then echo "Killing hosted server PID $$pid on :$$ARK_WEB_PORT"; kill $$pid; else echo "No hosted server listening on :$$ARK_WEB_PORT"; fi
+
 spike-temporal-bun: ## Run the Phase 0 Bun / Temporal worker compat spike
 	@./scripts/spike-temporal-bun.sh
 
@@ -183,6 +214,25 @@ test-file: ## Run a single test: make test-file F=packages/core/__tests__/foo.te
 
 test-e2e: test-web-e2e ## Run all end-to-end tests (web Playwright)
 
+# Control-plane e2e: real `ark server start --hosted` against an isolated
+# Docker compose stack (Postgres :15434 + Redis :6380). Distinct from the
+# dev stack so this can run alongside `make dev-stack`.
+#
+# CI must have docker + (for Phase 2) tmux on PATH. The test boots the
+# stack, spawns the real server binary, and exercises the dispatch chain
+# via /api/rpc -- never imports AppContext directly.
+test-e2e-control-plane: ## Run control-plane e2e against isolated Postgres+Redis
+	@command -v docker >/dev/null 2>&1 || { echo "Docker required for control-plane e2e."; exit 1; }
+	@command -v tmux >/dev/null 2>&1 || { echo "tmux required for control-plane e2e (brew install tmux / apt-get install tmux)."; exit 1; }
+	@echo "\033[1mRunning control-plane e2e (Postgres :15434 + Redis :6380)...\033[0m"
+	$(BUN) test e2e/control-plane.test.ts
+
+test-e2e-control-plane-up: ## Bring up the e2e Docker stack only (debug aid)
+	$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e up -d --wait
+
+test-e2e-control-plane-down: ## Tear down the e2e Docker stack and volumes
+	$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e down -v
+
 test-web-e2e: build-web ## Run web end-to-end tests (Playwright against the web dashboard)
 	@# `bunx --bun playwright test` runs Playwright under Bun, which is
 	@# required: fixtures/web-server.ts uses Bun APIs (`import { spawn }
@@ -212,20 +262,20 @@ test-watch: ## Run unit tests in watch mode
 	$(BUN) test --watch
 
 lint: ## Lint the codebase (ESLint + TypeScript)
-	npx eslint packages/ --max-warnings 0
+	bunx --bun eslint packages/ --max-warnings 0
 
 lint-fix: ## Auto-fix lint issues
-	npx eslint packages/ --fix
+	bunx --bun eslint packages/ --fix
 
 drift: ## Check drizzle schema vs generated migrations (both dialects)
 	$(BUN) x drizzle-kit check --config drizzle.config.ts
 	DRIZZLE_DIALECT=postgres $(BUN) x drizzle-kit check --config drizzle.config.ts
 
 format: ## Format code with Prettier
-	npx prettier --write "packages/**/*.{ts,tsx,js,jsx,json,css}"
+	bunx --bun prettier --write "packages/**/*.{ts,tsx,js,jsx,json,css}"
 
 format-check: ## Check code formatting (CI gate)
-	npx prettier --check "packages/**/*.{ts,tsx,js,jsx,json,css}"
+	bunx --bun prettier --check "packages/**/*.{ts,tsx,js,jsx,json,css}"
 
 docs-cli: ## Generate docs/cli-reference.md from the Commander.js command tree
 	$(BUN) run scripts/generate-cli-docs.ts
