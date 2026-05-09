@@ -1,6 +1,12 @@
 name: bare
-description: "Single agent session -- interactive, user decides when done"
+description: "Single agent session -- runs to completion when the agent calls report(completed)"
+# Auto-gate: the stage advances (and the session completes) when the agent
+# self-reports. Most `bare` dispatches today are fire-and-forget bot tasks --
+# the previous `manual` gate left them stuck in `pending` forever after the
+# agent finished, with no UI affordance to advance them (see issues #546 #547).
+# Interactive use (typing follow-up prompts mid-flight) is unaffected: it goes
+# through `ark session attach` / steer, not the gate.
 stages:
   - name: work
     agent: worker
-    gate: manual
+    gate: auto
