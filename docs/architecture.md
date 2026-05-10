@@ -1,7 +1,7 @@
 # Ark Architecture Reference
 
 > Canonical technical reference for the Ark codebase. Terse, factual, no tutorials.
-> Last updated: 2026-04-10
+> Last updated: 2026-05-08
 
 ## Table of Contents
 
@@ -9,25 +9,25 @@
 2. [Deployment Modes](#2-deployment-modes)
 3. [Core Components](#3-core-components)
 4. [ArkD -- Universal Agent Daemon](#4-arkd----universal-agent-daemon)
-5. [Conductor](#5-conductor-control-plane-http-server)
+5. [Conductor -- Merged Daemon](#5-conductor----merged-daemon)
 6. [MCP Socket Pooling](#6-mcp-socket-pooling)
 7. [Channels -- Agent Communication](#7-channels----agent-communication)
 8. [Executors](#8-executors)
-9. [Compute Providers](#9-compute-providers)
+9. [Compute and Isolation](#9-compute-and-isolation)
 10. [Transcript Parsers](#10-transcript-parsers)
 11. [LLM Router + TensorZero](#11-llm-router--tensorzero)
-12. [Knowledge Graph + ops-codegraph](#12-knowledge-graph--ops-codegraph)
-13. [Multi-Tenancy Details](#13-multi-tenancy-details)
-14. [Event Bus + SSE Bus](#14-event-bus--sse-bus)
-15. [Ports Reference](#15-ports-reference)
-16. [Data Locations](#16-data-locations)
+12. [Multi-Tenancy Details](#12-multi-tenancy-details)
+13. [Event Bus + SSE Bus](#13-event-bus--sse-bus)
+14. [Ports Reference](#14-ports-reference)
+15. [Data Locations](#15-data-locations)
+16. [Schema and Migrations](#16-schema-and-migrations)
 17. [Key Architectural Decisions](#17-key-architectural-decisions)
 
 ---
 
 ## 1. Overview
 
-Ark is an autonomous agent ecosystem that orchestrates AI coding agents through DAG-based SDLC flows. It ships as a single codebase that runs in two deployment modes -- **local single-user** (SQLite, file-backed stores, no auth) and **hosted control plane** (Postgres, DB-backed stores, API keys, multi-tenant, multi-user) -- with identical code paths toggled by config (`databaseUrl`, `redisUrl`, `auth.enabled`). Core features include 11 compute providers, 5 runtimes (Claude Code, Codex CLI, Gemini CLI, Goose, Aider), polymorphic transcript parsers, an OpenAI-compatible LLM router, a unified knowledge graph powered by ops-codegraph, MCP socket pooling, bidirectional agent channels, and a universal HTTP daemon (arkd) that runs on every compute target.
+Ark is an autonomous agent ecosystem that orchestrates AI coding agents through DAG-based SDLC flows. It ships as a single codebase that runs in two deployment modes -- **local single-user** (SQLite, file-backed stores, no auth) and **hosted control plane** (Postgres, DB-backed stores, API keys, multi-tenant, multi-user) -- with identical code paths toggled by `app.mode` (a polymorphic capability descriptor built from `config.database.url`). Core features include a two-axis compute layer (5 compute kinds × 4 isolation kinds), 6 agent runtimes (`claude-code`, `claude-agent`, `claude-max`, `codex`, `gemini`, `goose`), polymorphic transcript parsers, an OpenAI-compatible LLM router with optional TensorZero backend, MCP socket pooling, bidirectional agent channels, and a universal HTTP daemon (arkd) that runs on every compute target.
 
 ### 1.1 System Architecture Diagram
 
@@ -36,18 +36,18 @@ graph TB
     %% ── Domain Concepts (top layer) ──
     subgraph domain["Domain Concepts -- managed by AppContext"]
         direction LR
-        Flows["Flows<br/>(15 definitions)"]:::domain
+        Flows["Flows<br/>(YAML definitions)"]:::domain
         Sessions:::domain
         CostTracking["Cost Tracking<br/>(PricingRegistry +<br/>UsageRecorder)"]:::domain
-        SharedMCPs["Shared MCPs /<br/>Compute Templates"]:::domain
-        Recipes["Recipes<br/>(10 templates)"]:::domain
-        LLMRouter["LLM Router<br/>(:8430, 3 policies)"]:::domain
-        SkillsTools["Skills (7) /<br/>Tools"]:::domain
-        KnowledgeGraph["Knowledge Graph<br/>(ops-codegraph,<br/>33 languages)"]:::domain
+        ComputeTemplates["Compute Templates"]:::domain
+        Models["Models<br/>(catalog, 3 layers)"]:::domain
+        Workspaces["Workspaces<br/>(multi-repo)"]:::domain
+        LLMRouter["LLM Router<br/>(:8430)"]:::domain
+        SkillsTools["Skills (7 YAML) /<br/>Tools"]:::domain
     end
 
-    %% ── Ark Server (the actual API gateway) ──
-    ArkServer["Ark Server (:19400)<br/>WebSocket + JSON-RPC 2.0<br/>owns AppContext"]:::server
+    %% ── Conductor (merged daemon) ──
+    Conductor["Ark Conductor (:19400)<br/>WebSocket JSON-RPC + HTTP<br/>owns AppContext"]:::server
 
     %% ── User-facing surfaces ──
     subgraph surfaces["User Surfaces"]
@@ -56,36 +56,31 @@ graph TB
         CLI["CLI<br/>(ark command)"]:::surface
         Desktop["Desktop<br/>(Electron / Tauri)"]:::surface
     end
-    surfaces -- "WebSocket / stdio<br/>JSON-RPC 2.0" --> ArkServer
+    surfaces -- "WebSocket / stdio<br/>JSON-RPC 2.0" --> Conductor
 
     %% ── Internal services owned by AppContext ──
     subgraph appContext["AppContext (packages/core/app.ts)"]
         direction TB
-        SessionService:::internal
+        Lifecycle["Session Services<br/>(create / attach / dispatch /<br/>hooks / stage-advance)"]:::internal
         ComputeService:::internal
-        KnowledgeStore:::internal
         Repos["Repositories<br/>(SQL CRUD)"]:::internal
-        Stores["Resource Stores<br/>(Flow, Skill, Agent,<br/>Recipe, Runtime)"]:::internal
-        TranscriptParsers["Transcript Parsers<br/>(Claude, Codex,<br/>Gemini, Goose)"]:::internal
+        Stores["Resource Stores<br/>(Flow, Skill, Agent,<br/>Runtime, Model, Workspace)"]:::internal
+        TranscriptParsers["Transcript Parsers<br/>(claude, claude-agent,<br/>codex, gemini)"]:::internal
     end
-    ArkServer --> appContext
+    Conductor --> appContext
     domain --> appContext
-
-    %% ── Conductor (agent-facing control plane HTTP) ──
-    Conductor["Conductor (:19100)<br/>HTTP -- agent reports,<br/>hook status, stage handoff,<br/>guardrails"]:::conductor
-    appContext --> Conductor
 
     %% ── Deployment modes ──
     subgraph localMode["User / Local Mode"]
         direction TB
-        ArkExec["ark server daemon start<br/>(boots Server + Conductor + ArkD)"]:::local
+        ArkExec["ark server daemon start<br/>(boots Conductor + ArkD<br/>in one process)"]:::local
         SQLite["SQLite (~/.ark/ark.db)<br/>WAL mode"]:::local
         YAMLFiles["YAML files (~/.ark/)<br/>three-tier resolution"]:::local
     end
 
     subgraph controlPlane["Control Plane / Hosted Mode"]
         direction TB
-        MultiTenant["Multi-Tenant + Multi-User<br/>hierarchical config propagation"]:::hosted
+        MultiTenant["Multi-Tenant + Multi-User<br/>tenant-scoped DI children"]:::hosted
         PostgresRDS["Postgres / RDS<br/>(DATABASE_URL)"]:::hosted
         RedisSSE["Redis SSE Bus<br/>(REDIS_URL)"]:::hosted
         HelmChart["Helm Chart<br/>(.infra/helm/)"]:::hosted
@@ -103,18 +98,19 @@ graph TB
         UserComp["User<br/>(personal)"]:::hierarchy
         BuiltIn --> TenantComp --> UserComp
     end
-    hierarchy -. "skills, agents,<br/>flows, recipes,<br/>runtimes, MCPs" .-> Stores
+    hierarchy -. "skills, agents,<br/>flows, runtimes,<br/>models, MCPs" .-> Stores
 
     %% ── Compute target ──
-    subgraph compute["Compute Target (Local / EC2 / K8s / E2B)"]
+    subgraph compute["Compute Target (Local / EC2 / K8s / Firecracker)"]
         direction TB
-        ArkD["arkd (:19300)<br/>per-compute agent manager<br/>file ops, exec, metrics"]:::arkd
-        subgraph agentRuntime["Agent Runtimes (in tmux sessions)"]
+        ArkD["arkd (:19300)<br/>per-compute agent manager<br/>file ops, exec, metrics,<br/>channel bus"]:::arkd
+        subgraph agentRuntime["Agent Runtimes (in tmux or in-process)"]
             direction LR
-            ClaudeCode["Claude Code"]:::agent
-            Goose["Goose"]:::agent
-            Codex["Codex"]:::agent
-            Gemini["Gemini"]:::agent
+            ClaudeCode["claude-code"]:::agent
+            ClaudeAgent["claude-agent<br/>(Agent SDK)"]:::agent
+            Codex["codex"]:::agent
+            Gemini["gemini"]:::agent
+            Goose["goose"]:::agent
         end
         Channels["Channels (MCP)<br/>per-session, ephemeral ports"]:::arkd
         MCPPooling["MCP Pooling<br/>(shared across sessions)"]:::arkd
@@ -122,50 +118,46 @@ graph TB
         ArkD --> Channels
         ArkD --> MCPPooling
     end
-    Conductor <-- "channel relay,<br/>hook status,<br/>dispatch" --> ArkD
+    Conductor <-- "ArkClient WS<br/>(worker register,<br/>hooks channel sub)" --> ArkD
 
     %% ── Executors (how agents launch) ──
     subgraph executors["Executors (how agents launch)"]
         direction TB
         EX_Claude["claude-code<br/>(stdio + hooks)"]:::provider
+        EX_ClaudeAgent["claude-agent<br/>(in-process SDK)"]:::provider
         EX_CLI["cli-agent<br/>(codex, gemini)"]:::provider
         EX_Goose["goose<br/>(recipe dispatch)"]:::provider
         EX_Sub["subprocess<br/>(arbitrary cmd)"]:::provider
         EX_Plugin["plugin executors<br/>(~/.ark/plugins/)"]:::provider
     end
 
-    %% ── Compute Providers (where agents run) ──
-    subgraph computeProviders["Compute Providers (11 total)"]
+    %% ── Two-axis compute model ──
+    subgraph computeAxes["Compute × Isolation (two-axis)"]
         direction TB
-        subgraph cpLocal["Local (4)"]
-            CP_Worktree["local<br/>(worktrees)"]:::provider
-            CP_Docker["docker"]:::provider
-            CP_DevC["devcontainer"]:::provider
-            CP_FC_Local["firecracker"]:::provider
+        subgraph cpKinds["Compute kinds (5)"]
+            CK_Local["local"]:::provider
+            CK_FC["firecracker"]:::provider
+            CK_EC2["ec2"]:::provider
+            CK_K8s["k8s"]:::provider
+            CK_Kata["k8s-kata"]:::provider
         end
-        subgraph cpEC2["EC2 Remote (4)"]
-            CP_EC2["ec2<br/>(fresh clone)"]:::provider
-            CP_EC2Docker["ec2-docker"]:::provider
-            CP_EC2DevC["ec2-devcontainer"]:::provider
-            CP_EC2FC["ec2-firecracker"]:::provider
-        end
-        subgraph cpManaged["Managed (3)"]
-            CP_K8s["k8s<br/>(pod)"]:::provider
-            CP_K8sKata["k8s-kata<br/>(Kata/Firecracker)"]:::provider
-            CP_E2B["e2b<br/>(sandbox)"]:::provider
+        subgraph isoKinds["Isolation kinds (4)"]
+            IK_Direct["direct"]:::provider
+            IK_Docker["docker"]:::provider
+            IK_Compose["compose"]:::provider
+            IK_DevC["devcontainer"]:::provider
         end
     end
 
     executors -. "launch agent<br/>on target" .-> ArkD
-    computeProviders -. "provision +<br/>manage target" .-> compute
+    computeAxes -. "(compute, isolation)<br/>composed at dispatch" .-> compute
 
-    %% ── Message flow annotation ──
-    LLMRouter -. "ANTHROPIC_BASE_URL /<br/>OPENAI_BASE_URL injection" .-> agentRuntime
+    %% ── Router URL injection ──
+    LLMRouter -. "ANTHROPIC_BASE_URL /<br/>OPENAI_BASE_URL injection<br/>(via local arkd)" .-> agentRuntime
 
     %% ── Styles ──
     classDef domain fill:#fef3c7,stroke:#d97706,color:#92400e
     classDef server fill:#ddd6fe,stroke:#7c3aed,color:#4c1d95,stroke-width:3px
-    classDef conductor fill:#dbeafe,stroke:#2563eb,color:#1e40af,stroke-width:2px
     classDef surface fill:#e0e7ff,stroke:#4f46e5,color:#312e81
     classDef local fill:#f3e8ff,stroke:#7c3aed,color:#5b21b6
     classDef hosted fill:#fce7f3,stroke:#db2777,color:#9d174d
@@ -177,13 +169,12 @@ graph TB
 ```
 
 **Key relationships:**
-- **Ark Server (:19400)** is the API gateway -- all surfaces (Web, CLI, Desktop) connect via WebSocket JSON-RPC 2.0. It owns `AppContext`.
-- **Conductor (:19100)** is agent-facing -- receives hook status, channel reports, and orchestrates stage handoffs. Agents never talk to Ark Server directly.
-- **ArkD (:19300)** runs on every compute target as a stateless proxy -- manages agent lifecycle (tmux), relays channels to conductor, serves file ops and metrics.
-- **Executors** define HOW agents launch (4 built-in: claude-code, cli-agent, goose, subprocess). **Compute Providers** define WHERE they run (11 total across local/EC2/K8s/E2B).
-- **Components** (skills, agents, flows, recipes, runtimes) follow three-tier resolution: built-in -> tenant -> user.
-- **LLM Router (:8430)** injects base URLs into agent environments so all LLM traffic routes transparently.
-- **TUI was retired and removed in v0.16.0** (2026-04-15) -- product surfaces are Web UI + CLI + Desktop app.
+
+- **Ark Conductor (`:19400`)** is the single control-plane process. It owns `AppContext` and exposes both the WebSocket JSON-RPC entrypoint (Web/CLI/Desktop) and external HTTP routes (`/hooks/status`, `/hooks/github/merge`, `/v1/chat/completions`, `/v1/models`, `/mcp`, `/.well-known/oauth-protected-resource`, `/health`, and `/terminal/:sessionId` WS). The old separate "Ark Server" / "Conductor" split (ports 19400 + 19100) was merged into this one daemon; the legacy `19100` listener is gone.
+- **ArkD (`:19300`)** runs on every compute target as a stateless proxy -- manages agent lifecycle (tmux or in-process), serves file ops, exec, metrics, and is the channel bus for agent-side hook/report traffic. ArkD dials the conductor at `:19400` over a persistent ArkClient WebSocket (worker register + heartbeat); the conductor subscribes to arkd's `hooks` channel to drain `channel-report` / `channel-relay` envelopes, which avoids requiring a reverse tunnel into the compute target.
+- **Executors** define HOW agents launch (5 built-in: `claude-code`, `claude-agent`, `cli-agent`, `goose`, `subprocess`). **Compute and Isolation** define WHERE they run as a two-axis composition: 5 compute kinds × 4 isolation kinds.
+- **Components** (skills, agents, flows, runtimes, models, workspaces) follow three-tier resolution: built-in -> tenant -> user.
+- **LLM Router (`:8430`)** is reachable directly or through the conductor proxy at `:19400/v1/*`. Executors inject `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` pointing at the local arkd, which forwards to the conductor, which forwards to the router.
 
 ### 1.2 Message Flow
 
@@ -191,86 +182,96 @@ graph TB
 User (Web/CLI/Desktop)
   │ WebSocket JSON-RPC
   ▼
-Ark Server (:19400)
-  │ AppContext
-  ▼
-Conductor (:19100) ──────── delivers task/steer ──────▶ Channel (ephemeral port)
-  ▲                                                          │
-  │ POST /api/channel/:id                                    ▼
-  │ POST /hooks/status                                  Agent (Claude/Goose/etc.)
-  │                                                          │
-  └──────── arkd (:19300) ◀──── report/progress ─────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Ark Conductor (:19400)  -- owns AppContext                  │
+│   • WS JSON-RPC for surfaces (session/*, compute/*, ...)     │
+│   • HTTP /hooks/status, /hooks/github/merge                  │
+│   • HTTP /v1/* (router proxy), /mcp, /health                 │
+└─────────────────────────────────────────────────────────────┘
+  ▲                                                       │
+  │ ArkClient WS (worker/register, heartbeat,             │ HTTP /channel/deliver
+  │ subscribes to /channel/hooks/subscribe)               │ (forward tunnel)
+  │                                                       ▼
+  └────── arkd (:19300) ─────────────────────────────▶ Channel (ephemeral port)
+                ▲                                          │
+                │ /channel/<sid>: agent->conductor         ▼
+                │ envelopes (channel-report, channel-relay)  Agent (claude-code,
+                └─────────────────────────────────────────── claude-agent, codex, ...)
 ```
+
+Reports from the agent flow `agent -> ark-channel (in-proc MCP) -> arkd /channel/<sid> -> publish on hooks channel -> conductor's arkd-events-consumer`. Steering from the human flows `conductor -> arkd /channel/deliver -> channel listener (port 19200+hash) -> ark-channel -> agent`.
 
 ### 1.3 Port Map
 
-| Port | Component | Direction | Protocol |
-|------|-----------|-----------|----------|
-| 19100 | Conductor | Agents -> Control plane | HTTP REST |
-| 19300 | ArkD | Agents -> Proxy -> Conductor | HTTP RPC |
-| 19400 | Ark Server | Surfaces -> API | WebSocket JSON-RPC 2.0 |
-| 8430 | LLM Router | Agents -> LLM providers | OpenAI-compatible HTTP |
-| 19500+ | Channels | Conductor -> Agent (per-session) | HTTP POST |
+| Port         | Component                 | Direction                               | Protocol                                                |
+| ------------ | ------------------------- | --------------------------------------- | ------------------------------------------------------- |
+| 19400        | Conductor (merged daemon) | Surfaces -> API; arkd -> conductor      | WebSocket JSON-RPC + HTTP (`/hooks/*`, `/v1/*`, `/mcp`) |
+| 19300        | ArkD                      | Conductor / agents -> per-compute proxy | HTTP RPC + WS channels                                  |
+| 19200 + hash | Channels                  | Conductor -> agent (per-session)        | HTTP POST                                               |
+| 8430         | LLM Router                | Agents (via arkd) -> LLM providers      | OpenAI-compatible HTTP                                  |
+| 8420         | Web UI / API (`make dev`) | Browser -> backend                      | HTTP + Vite HMR (`:5173`)                               |
+
+The channel base port and range come from `packages/core/config/profiles.ts`: `channels: { basePort: 19200, range: 10000 }`. Tests use `allocatePort()` to randomise to avoid collisions.
 
 ---
 
 ## 2. Deployment Modes
 
-Ark is deployed in two modes with the same binary and the same code paths. The `AppContext` constructor inspects config and swaps the database adapter, store implementations, and auth middleware accordingly.
+Ark is deployed in two modes with the same binary and the same code paths. `AppContext` builds a polymorphic `AppMode` capability bundle from `config.database.url`; downstream code never branches on `mode.kind` directly -- it asks `app.mode.<capability>`.
 
 ### 2.1 Local single-user mode (default)
 
-| Aspect | Value |
-|---|---|
-| Runtime | Bun (from source or `ark` symlink) |
-| Database | SQLite at `~/.ark/ark.db` (WAL mode, 5s busy timeout) |
-| Stores | File-backed three-tier (builtin > global `~/.ark/` > project `.ark/`) |
-| Auth | None (single user, tenant = `"default"`) |
-| Conductor | Started by the server daemon (`ark server daemon start`); CLI talks to DB directly and skips the conductor |
-| ArkD | Started on-demand per compute operation |
-| Channels | Unix sockets + localhost HTTP |
-| SSE bus | In-memory |
-| Cost tracking | Session-level, local DB |
-| Config | `~/.ark/config.yaml` |
+| Aspect        | Value                                                                                                                                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime       | Bun (from source or `ark` symlink)                                                                                                                                                                |
+| Database      | SQLite at `~/.ark/ark.db` (WAL mode, 5s busy timeout)                                                                                                                                             |
+| Stores        | File-backed three-tier (builtin > global `~/.ark/` > project `.ark/`)                                                                                                                             |
+| Auth          | None (single user, tenant = `"default"`)                                                                                                                                                          |
+| Conductor     | Started in-process by `ark server daemon start` on port `19400` (one process owns AppContext + WS + HTTP). Short-lived CLI commands skip the daemon and talk to the DB directly via `AppContext`. |
+| ArkD          | Started on-demand per compute operation                                                                                                                                                           |
+| Channels      | Unix sockets + localhost HTTP                                                                                                                                                                     |
+| SSE bus       | In-memory                                                                                                                                                                                         |
+| Cost tracking | Session-level, local DB                                                                                                                                                                           |
+| Config        | `~/.ark/config.yaml`                                                                                                                                                                              |
 
 ### 2.2 Hosted / control plane multi-tenant mode
 
-| Aspect | Value |
-|---|---|
-| Runtime | Bun (containerized) |
-| Database | PostgreSQL via `DATABASE_URL` |
-| Stores | `DbResourceStore` on `resource_definitions` table (tenant-scoped rows) |
-| Auth | API keys REQUIRED (`auth.enabled: true`), format `ark_<tenantId>_<secret>` |
-| Conductor | Always running |
-| ArkD | Runs on every compute target in the worker pool |
-| SSE bus | Redis via `REDIS_URL` (multi-instance safe) |
-| Cost tracking | Tenant + user + session, `usage_records` table |
-| Scheduler | `WorkerRegistry` + `SessionScheduler` (`hosted.ts`) |
-| Deployment | `docker-compose up -d` or `helm install .infra/helm/ark/` |
-| Config | Env vars + per-tenant DB rows |
+| Aspect        | Value                                                                                                 |
+| ------------- | ----------------------------------------------------------------------------------------------------- |
+| Runtime       | Bun (containerized)                                                                                   |
+| Database      | PostgreSQL via `DATABASE_URL`                                                                         |
+| Stores        | `DbResourceStore` on `resource_definitions` table (tenant-scoped rows)                                |
+| Auth          | API keys REQUIRED (`auth.enabled: true`), format `ark_<tenantId>_<secret>`                            |
+| Conductor     | Always running as the merged daemon (`:19400`); listens for WS JSON-RPC + HTTP hooks/MCP/router proxy |
+| ArkD          | Runs on every compute target in the worker pool                                                       |
+| SSE bus       | Redis via `REDIS_URL` (multi-instance safe)                                                           |
+| Cost tracking | Tenant + user + session, `usage_records` table                                                        |
+| Scheduler     | `WorkerRegistry` + `SessionScheduler` (`hosted/`)                                                     |
+| Deployment    | `docker-compose up -d` or `helm install .infra/helm/ark/`                                             |
+| Config        | Env vars + per-tenant DB rows                                                                         |
 
 ### 2.3 Comparison at a glance
 
-| Aspect | Local | Control plane |
-|---|---|---|
-| DB | SQLite | Postgres |
-| Stores | Files | DB (tenant-scoped) |
-| Auth | None | API keys + roles |
-| Users | 1 (you) | Many |
-| Tenants | 1 (`default`) | Many |
-| SSE | In-memory | Redis |
-| Compute | Local/Docker/EC2 | Full pool, scheduled |
-| Cost tracking | Session-level | Tenant + user + session |
-| Scheduler | None | WorkerRegistry + SessionScheduler |
-| Config location | `~/.ark/config.yaml` | env vars + per-tenant DB rows |
+| Aspect          | Local                | Control plane                     |
+| --------------- | -------------------- | --------------------------------- |
+| DB              | SQLite               | Postgres                          |
+| Stores          | Files                | DB (tenant-scoped)                |
+| Auth            | None                 | API keys + roles                  |
+| Users           | 1 (you)              | Many                              |
+| Tenants         | 1 (`default`)        | Many                              |
+| SSE             | In-memory            | Redis                             |
+| Compute         | Local + Docker / EC2 | Full pool, scheduled              |
+| Cost tracking   | Session-level        | Tenant + user + session           |
+| Scheduler       | None                 | WorkerRegistry + SessionScheduler |
+| Config location | `~/.ark/config.yaml` | env vars + per-tenant DB rows     |
 
 ### 2.4 Same code, two modes
 
 The same codebase handles both modes through two mechanisms:
 
-1. **DB adapter swap.** `AppContext` constructor reads `config.databaseUrl`. If it starts with `postgres://`, it instantiates `PostgresAdapter`, otherwise `BunSqliteAdapter`. Both implement `DatabaseAdapter`. All repositories and stores depend only on `DatabaseAdapter`.
+1. **`AppMode` capability swap.** `AppContext` builds one `AppMode` at boot from `config.database.url`. The mode bundle owns the `database`, `migrations`, `secrets`, and `tenantScope` capabilities; handlers and services depend on those capabilities, never on a `hosted` boolean.
 
-2. **Tenant scoping via `forTenant(id)`.** `AppContext.forTenant(tenantId)` returns a scoped view of the context. It uses `Object.defineProperty` overrides to wrap each repository and store with `setTenant(tenantId)` so every SQL call is automatically filtered. In local mode this is a no-op (tenant is always `"default"`); in hosted mode every request from the auth middleware is scoped to the caller's tenant.
+2. **Tenant scoping via `forTenant(id)`.** `AppContext.forTenant(tenantId)` delegates to `app.mode.tenantScope.forTenant()`. In local mode this is a no-op (single tenant); in hosted mode it builds a child Awilix container scope that re-binds tenant-scoped repositories and stores. Re-entrant calls with the same tenant short-circuit.
 
 ```ts
 // packages/core/app.ts
@@ -290,80 +291,115 @@ The root of the dependency graph. An Awilix DI container that owns every singlet
 
 ```ts
 class AppContext {
+  // Repositories (SQL CRUD)
   sessions: SessionRepository;
   computes: ComputeRepository;
   computeTemplates: ComputeTemplateRepository;
   events: EventRepository;
   messages: MessageRepository;
   todos: TodoRepository;
-  sessionService: SessionService;
+  artifacts: ArtifactRepository;
+  flowStates: FlowStateRepository;
+  ledger: LedgerRepository;
+
+  // Services
+  sessionService: SessionService; // lifecycle facade
   computeService: ComputeService;
-  historyService: HistoryService;
+  sessionHooks: SessionHooks; // hook + report state machine
+  sessionLifecycle: SessionLifecycle;
+  sessionAttach: SessionAttachService;
+  dispatchService: DispatchService;
+  stageAdvance: StageAdvanceService;
+
+  // Resource stores (three-tier YAML resolution)
   flows: FlowStore;
   skills: SkillStore;
   agents: AgentStore;
-  recipes: RecipeStore;
   runtimes: RuntimeStore;
-  knowledge: KnowledgeStore;
-  transcriptParsers: TranscriptParserRegistry;
-  pricing: PricingRegistry;
-  usage: UsageRecorder;
-  pools: ComputePoolManager;
-  tenantPolicies: TenantPolicyManager;
+  models: ModelStore;
+  workspaces: WorkspaceStore;
+
+  // Persistence + blobs
+  snapshotStore: SnapshotStore;
+  blobStore: BlobStore;
+
+  // Multi-tenancy / auth
+  tenants: TenantManager;
+  teams: TeamManager;
+  users: UserManager;
   apiKeys: ApiKeyManager;
-  // ... + conductor, eventBus, sseBus, providerRegistry, executorRegistry
+  tenantClaudeAuth: TenantClaudeAuthManager;
+
+  // Cost + transcripts
+  pricing: PricingRegistry;
+  usageRecorder: UsageRecorder;
+  transcriptParsers: TranscriptParserRegistry;
+
+  // Mode + tenant scoping
+  mode: AppMode; // database / migrations / secrets / tenantScope
+  forTenant(tenantId: string): AppContext;
+  // ... + eventBus, pluginRegistry, statusPollers, compute/isolation registries
   boot(): Promise<void>;
   shutdown(): Promise<void>;
-  forTenant(tenantId: string): AppContext;
-  static forTest(): AppContext;
+  static forTestAsync(): Promise<AppContext>;
 }
 ```
 
-CLI creates it with `skipConductor: true`. The server daemon and hosted mode start the conductor. Tests use `AppContext.forTest()` which creates a temp dir and isolated DB.
+CLI commands construct it with `skipConductor: true` to skip the in-process arkd / router / status-poller launchers when only short-lived DB reads are needed. The merged conductor daemon and hosted entrypoints set `skipConductor: false` so the same AppContext also boots arkd, the router, and the conductor pollers.
 
 ### 3.2 DatabaseAdapter abstraction (`packages/core/database/`)
 
 Interface that lets the same repositories work on SQLite or Postgres.
 
-| File | Purpose |
-|---|---|
+| File          | Purpose                                                    |
+| ------------- | ---------------------------------------------------------- |
 | `database.ts` | `DatabaseAdapter` interface + `SqlStatement` + `SqlResult` |
-| `database-sqlite.ts` | `BunSqliteAdapter` wrapping `bun:sqlite` |
-| `database-postgres.ts` | `PostgresAdapter` wrapping `pg` pool |
+| `sqlite.ts`   | `BunSqliteAdapter` wrapping `bun:sqlite`                   |
+| `postgres.ts` | `PostgresAdapter` wrapping `pg` pool                       |
 
-All repositories and stores depend only on `DatabaseAdapter`, never on `bun:sqlite` or `pg` directly. Schema init is per-adapter (`initSchema()` runs dialect-appropriate SQL).
+All repositories and stores depend only on `DatabaseAdapter`, never on `bun:sqlite` or `pg` directly. A drizzle client is built alongside the adapter (`buildSqliteDrizzle` / `buildPostgresDrizzle`) so new code can opt into the typed query builder; the legacy hand-rolled SQL repositories continue to work in parallel.
 
 ### 3.3 Repositories (`packages/core/repositories/`)
 
 SQL CRUD behind typed classes. Column whitelists prevent injection. All repositories expose `setTenant(id)` so `forTenant()` can scope them.
 
-| Repository | Table | Notes |
-|---|---|---|
-| `SessionRepository` | `sessions` | Also tracks `user_id`, `tenant_id` |
-| `ComputeRepository` | `computes` | Tenant-scoped |
-| `ComputeTemplateRepository` | `compute_templates` | Named presets |
-| `EventRepository` | `events` | Session event log |
-| `MessageRepository` | `messages` | Inbox + agent messages |
-| `TodoRepository` | `todos` | User checklist items |
-
-Access via `app.sessions`, `app.computes`, `app.events`, `app.messages`, `app.todos`, `app.computeTemplates`.
+| Repository                   | Table                |
+| ---------------------------- | -------------------- |
+| `SessionRepository`          | `sessions`           |
+| `ComputeRepository`          | `compute`            |
+| `ComputeTemplateRepository`  | `compute_templates`  |
+| `EventRepository`            | `events`             |
+| `MessageRepository`          | `messages`           |
+| `TodoRepository`             | `todos`              |
+| `ArtifactRepository`         | `session_artifacts`  |
+| `FlowStateRepository`        | `flow_state`         |
+| `LedgerRepository`           | `ledger_entries`     |
+| `MembershipRepository`       | `memberships`        |
+| `TenantRepository`           | `tenants`            |
+| `TeamRepository`             | `teams`              |
+| `UserRepository`             | `users`              |
+| `TenantClaudeAuthRepository` | `tenant_claude_auth` |
 
 ### 3.4 Services (`packages/core/services/`)
 
-Business logic. Split into a simple lifecycle facade and an orchestration module.
+Business logic. The legacy monolithic `session-orchestration.ts` was split into focused service modules:
 
-| Service | Responsibility |
-|---|---|
-| `SessionService` (`services/session.ts`) | Lifecycle facade: `start`, `stop`, `resume`, `complete`, `pause`, `delete`. Delegates complex ops via dynamic import |
-| `ComputeService` | Compute provisioning, start/stop, cleanup |
-| `HistoryService` | Claude Code project history, transcript import |
-| `session-orchestration.ts` | Every other operation -- dispatch, advance, fork, clone, spawn, fan-out, handoff, worktree ops, hook status, report handling |
+| Service module                                                                                                                                  | Responsibility                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `services/session/{create,attach,cleanup,fork-clone,review,suspend,terminate}.ts`                                                               | Session lifecycle                                                                |
+| `services/dispatch/{dispatch-core,dispatch-fanout,dispatch-foreach,dispatch-hosted,target-lifecycle,target-resolver,launch,post-launch,...}.ts` | Dispatch + fan-out + per-target lifecycle                                        |
+| `services/session-hooks/`                                                                                                                       | Hook + report state machine (replaces the old `applyHookStatus` / `applyReport`) |
+| `services/stage-advance/`                                                                                                                       | Flow stage advancement, transcript parsing, completion                           |
+| `services/session-dispatch-listeners.ts`                                                                                                        | Dispatch event pump                                                              |
+| `services/compute*.ts`                                                                                                                          | Compute provisioning, lifecycle, secrets reconciliation                          |
 
-**Critical rule:** every exported function in `session-orchestration.ts` takes `app: AppContext` as its first argument. No `getApp()` calls, no module-level state. This was enforced during the DI migration.
+The lifecycle facade (`SessionService` / `services/session.ts`) delegates the hot paths to `DispatchService`, `SessionLifecycle`, `SessionHooks`, and `StageAdvance` resolved from the DI container.
+
+**Critical rule:** every exported function in `services/` takes `app: AppContext` as its first argument. No `getApp()` calls, no module-level state. Enforced during the DI migration.
 
 ```ts
 // correct
-await dispatch(app, sessionId);
+await app.dispatchService.dispatch(sessionId);
 await fanOut(app, parentId, opts);
 
 // banned
@@ -372,33 +408,26 @@ await dispatch(sessionId); // would require getApp() inside
 
 ### 3.5 Stores (`packages/core/stores/`)
 
-Resource stores for declarative YAML definitions. Two implementations:
+Resource stores for declarative YAML definitions.
 
-| Store | Resource | File path (local) |
-|---|---|---|
-| `FlowStore` | Flow YAML | `flows/definitions/*.yaml` |
-| `SkillStore` | Skill markdown | `skills/*.md` |
-| `AgentStore` | Agent YAML | `agents/*.yaml` |
-| `RecipeStore` | Recipe YAML | `recipes/*.yaml` |
-| `RuntimeStore` | Runtime YAML | `runtimes/*.yaml` |
+| Store            | Resource                  | File path (local mode)                                          |
+| ---------------- | ------------------------- | --------------------------------------------------------------- |
+| `FlowStore`      | Flow YAML                 | `flows/definitions/*.yaml` (built-in) + `<arkDir>/flows/*.yaml` |
+| `SkillStore`     | Skill YAML                | `skills/*.yaml` (built-in) + `<arkDir>/skills/*.yaml`           |
+| `AgentStore`     | Agent YAML                | `agents/*.yaml` + `<arkDir>/agents/*.yaml`                      |
+| `RuntimeStore`   | Runtime YAML              | `runtimes/*.yaml` + `<arkDir>/runtimes/*.yaml`                  |
+| `ModelStore`     | Model catalog YAML        | bundled + `<arkDir>/models/` + `<projectRoot>/.ark/models/`     |
+| `WorkspaceStore` | Multi-repo workspace defs | DB-backed (`workspaces` + `workspace_repos` tables)             |
 
-**Local mode:** file-backed three-tier resolution `builtin > ~/.ark/<kind>/ > .ark/<kind>/`.
+**Local mode:** file-backed three-tier resolution `builtin > ~/.ark/<kind>/ > .ark/<kind>/` for the YAML stores. `WorkspaceStore` is always DB-backed (it represents structured multi-repo definitions, not a flat YAML file).
 
-**Hosted mode:** `DbResourceStore` reads from the `resource_definitions` table (columns: `name`, `kind`, `tenant_id`, `content`, `version`). Same `list()` / `get()` / `save()` / `delete()` interface. Export/import CLI commands move YAML between file-backed and DB-backed stores for portability.
+**Hosted mode:** the YAML stores are replaced by `DbResourceStore` reading from the `resource_definitions` table (columns: `name`, `kind`, `tenant_id`, `content`, `version`). Same `list() / get() / save() / delete()` interface.
 
-Access via `app.flows`, `app.skills`, `app.agents`, `app.recipes`, `app.runtimes`.
+Skills are now YAML (e.g. `skills/code-review.yaml`), not markdown.
 
-### 3.6 KnowledgeStore (`packages/core/knowledge/store.ts`)
+Access via `app.flows`, `app.skills`, `app.agents`, `app.runtimes`, `app.models`, `app.workspaces`.
 
-Unified knowledge graph. Nodes and edges in SQLite/Postgres. Tenant-scoped.
-
-- **Node types:** `file`, `symbol`, `session`, `memory`, `learning`, `skill`, `recipe`, `agent`
-- **Edge types:** `depends_on`, `imports`, `modified_by`, `calls`, `contains`, etc.
-- **Tables:** `knowledge` (nodes), `knowledge_edges` (edges)
-
-Access via `app.knowledge`. Fed by the codegraph indexer (`indexer.ts`) and by direct writes from agents via MCP tools.
-
-### 3.7 PricingRegistry + UsageRecorder
+### 3.6 PricingRegistry + UsageRecorder
 
 Universal cost tracking.
 
@@ -408,47 +437,47 @@ Universal cost tracking.
   - `subscription`: `cost_usd = 0`, tokens still recorded for rate limit tracking (e.g. Claude Max)
   - `free`: `cost_usd = 0`
 
-Session-orchestration calls `usage.record()` after parsing transcripts at session completion.
+Stage-advance / completion calls `usageRecorder.record()` after parsing transcripts at session completion.
 
-### 3.8 TranscriptParserRegistry
+### 3.7 TranscriptParserRegistry
 
-Polymorphic parser per runtime. Registered at boot via `app.transcriptParsers.register(name, parser)`. Session-orchestration looks up the parser by the session's runtime and calls `parse(sessionId, workdir)` to extract token counts and messages. See [Section 10](#10-transcript-parsers).
+Polymorphic parser per runtime. Parsers self-register at boot via the DI container. Stage-advance looks up the parser by the runtime's `billing.transcript_parser` field, locates the transcript file via `findForSession({ workdir, startTime })`, then calls `parse(transcriptPath)`. See [Section 10](#10-transcript-parsers) for the interface.
 
-### 3.9 ComputePoolManager
+### 3.8 ComputePoolManager
 
-Tenant-scoped compute pools. A tenant can define named pools (e.g. `"gpu-pool"`, `"staging"`) that restrict which providers and regions sessions can land on. Enforced by the scheduler.
+Tenant-scoped compute pools. A tenant can define named pools that restrict which compute kinds and regions sessions can land on. Pool registration is driven by the compute / isolation registries on `AppContext`; enforcement runs in the scheduler (hosted mode).
 
-### 3.10 TenantPolicyManager (`packages/core/tenant-policy.ts`)
+### 3.9 TenantPolicyManager (`packages/core/auth/tenant-policy.ts`)
 
 Per-tenant policy store. Fields:
 
 ```ts
-interface TenantPolicy {
+interface TenantComputePolicy {
   tenantId: string;
   allowedProviders: string[];
   defaultProvider: string;
   maxConcurrentSessions: number;
   dailyCostCapUsd: number;
-  routerRequired: boolean;       // force LLM router usage
-  autoIndexRequired: boolean;    // force auto-index on dispatch
+  routerRequired: boolean;
+  autoIndexRequired: boolean;
   routerPolicy: "quality" | "balanced" | "cost";
   tensorzeroEnabled: boolean;
   pools: string[];
 }
 ```
 
-Enforced at session start and dispatch time. Blocks requests that violate the policy.
+DI-registered as `tenantPolicyManager` (resolved from the container). Enforced at session start and dispatch time by `services/dispatch/guards.ts`. Blocks requests that violate the policy.
 
-### 3.11 ApiKeyManager (`packages/core/api-keys.ts`)
+### 3.10 ApiKeyManager (`packages/core/auth/api-keys.ts`)
 
-Only used in hosted mode. Manages API keys in the `api_keys` table.
+Used in hosted mode. Manages API keys in the `api_keys` table.
 
 - Format: `ark_<tenantId>_<secret>`
 - Methods: `create`, `validate`, `revoke`, `rotate`, `list`
-- Roles: `admin`, `member`, `viewer`
+- Roles: `admin`, `member`, `viewer`, `worker`
 - Secret stored as SHA-256 hash
 
-`auth.ts` middleware extracts the API key from the `Authorization` header, validates it, and builds a `TenantContext` that is passed to handlers.
+`auth/context.ts` resolves a `TenantContext` from a bearer token; the conductor's WS / HTTP handlers extract the token, materialize the context, and only then call `app.forTenant(ctx.tenantId)` for downstream operations.
 
 ---
 
@@ -458,119 +487,101 @@ Only used in hosted mode. Manages API keys in the `api_keys` table.
 
 ### 4.1 What it is
 
-A stateless HTTP server that runs on every compute target on port 19300. Single binary (`packages/arkd/server.ts`, ~800 lines) that exposes agent lifecycle, file ops, exec, metrics, channel relay, and codegraph indexing over HTTP.
+A stateless HTTP server that runs on every compute target on port 19300. Single binary (`packages/arkd/server/`) that exposes agent lifecycle, file ops, exec, metrics, and the agent-side channel bus over HTTP and WebSockets.
 
 ### 4.2 Why it exists
 
 Without arkd, the conductor would need to SSH into every compute target for every operation -- slow, auth-fragile, and N different code paths (local shell vs docker exec vs EC2 SSH vs K8s exec). Instead:
 
 - Every compute target runs one arkd instance.
-- Conductor speaks HTTP to arkd, always.
+- Conductor speaks HTTP and WebSocket to arkd, always.
 - Local, docker, EC2, K8s, firecracker -- all look identical to the control plane.
 
 ### 4.3 What it runs
 
-| Endpoint | Purpose |
-|---|---|
-| `POST /agent/launch` | Launch an agent via tmux (runs the executor command) |
-| `POST /agent/kill` | Kill the tmux session |
-| `GET /agent/status` | Running/idle/done |
-| `POST /agent/send` | Send keys to tmux pane |
-| `POST /files/read` | Read a file on the remote target |
-| `POST /files/write` | Write a file |
-| `POST /files/list` | List a directory |
-| `POST /exec` | Run a command with sandbox |
-| `GET /metrics` | CPU, memory, disk, uptime |
-| `POST /port/probe` | Check if a port is bound |
-| `POST /channel/report` | Channel relay (forwards to conductor) |
-| `POST /docker/list` | List docker containers on the host |
-| `POST /docker/exec` | Exec into a container |
-| `POST /codegraph/index` | Run codegraph build locally, return parsed nodes/edges |
+Routes live under `packages/arkd/server/routes/`. Top-level groups:
+
+| Route file            | Purpose                                                                                                                           |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `agent.ts`            | Launch / kill / status / send / capture for a session's agent (tmux or in-process)                                                |
+| `attach.ts`           | Pane attach helpers (used by the conductor's terminal WS bridge)                                                                  |
+| `channel.ts`          | `/channel/<sid>` agent->conductor envelopes (`channel-report`, `channel-relay`); `/channel/deliver` conductor->agent forward path |
+| `channels.ts`         | Generic publish/subscribe primitive (the `hooks` channel is multiplexed here)                                                     |
+| `exec.ts`             | Run a command with sandbox                                                                                                        |
+| `file.ts`             | `read` / `write` / `list` / file ops                                                                                              |
+| `metrics-snapshot.ts` | CPU, memory, disk, uptime                                                                                                         |
+| `process.ts`          | Process lifecycle helpers                                                                                                         |
+| `misc.ts`             | Health, version, port probe                                                                                                       |
+
+The conductor talks to arkd over a persistent ArkClient WebSocket (worker register + heartbeat) AND issues per-operation HTTP calls. The `/codegraph/index` endpoint that the previous architecture doc described has been removed along with the rest of the knowledge graph subsystem.
 
 ### 4.4 How conductor talks to it
 
-Conductor (`http://<conductor>:19100`) issues HTTP calls to arkd at `http://<compute-ip>:19300`. The provider layer (`packages/compute/*`) knows how to find the arkd IP for each target:
+Conductor (`http://<conductor>:19400`) issues HTTP and WS calls to arkd at `http://<compute-ip>:19300`. The compute layer knows how to find the arkd URL for each target via `Compute.getArkdUrl()`:
 
 - `local` -- `http://localhost:19300`
-- `docker` -- `http://<container-ip>:19300`
-- `ec2*` -- `http://<ec2-public-ip>:19300`
-- `k8s*` -- `http://<pod-ip>:19300`
+- `ec2` (with `direct` / `docker` / `compose` / `devcontainer` isolation) -- `http://<ec2-public-ip>:19300` (via SSM)
+- `k8s` / `k8s-kata` -- `http://<pod-ip>:19300` (via kubectl port-forward)
 - `firecracker` -- `http://<vm-ip>:19300`
 
 ### 4.5 Where it runs
 
-| Compute target | How arkd is deployed |
-|---|---|
-| Local machine | `ark arkd` starts it as a user process |
-| Docker container | Baked into the image, starts via CMD on boot |
-| Devcontainer | Same as Docker |
-| EC2 | Installed by cloud-init, runs as systemd service |
-| K8s pod | Sidecar container in the agent pod |
-| Firecracker VM | Baked into the rootfs, starts on boot |
+| Compute target                                 | How arkd is deployed                             |
+| ---------------------------------------------- | ------------------------------------------------ |
+| Local machine                                  | `ark arkd` starts it as a user process           |
+| Docker / compose / devcontainer (local or EC2) | Baked into the image, starts via CMD on boot     |
+| EC2 (direct)                                   | Installed by cloud-init, runs as systemd service |
+| K8s pod                                        | Sidecar container in the agent pod               |
+| Firecracker VM                                 | Baked into the rootfs, starts on boot            |
 
 ### 4.6 Auth
 
-When `ARK_ARKD_TOKEN` is set, arkd requires bearer token auth on every request. Conductor fetches the token from the compute record before making calls. In local mode, the token is typically unset.
+When `ARK_ARKD_TOKEN` is set, arkd requires bearer token auth on every request. The conductor fetches the token from the compute record before making calls. In local mode, the token is typically unset.
 
-### 4.7 `/codegraph/index` endpoint
+### 4.7 Channel relay role
 
-When a session dispatches to remote compute, the conductor must index the remote checkout (not the local one). Instead of copying the tree back, the flow is:
+See [Section 7](#7-channels----agent-communication). ArkD is the hop between the in-process `ark-channel` MCP server (stdio, running inside the agent) and the conductor.
 
-1. Conductor posts `{ workdir }` to `POST /codegraph/index` on the remote arkd.
-2. ArkD runs `codegraph build` locally in the remote worktree.
-3. ArkD parses `.codegraph/graph.db` and returns nodes + edges as JSON.
-4. Conductor writes them into the Ark knowledge store.
-
-Local mode honors `knowledge.auto_index` config. **Remote mode ALWAYS indexes via arkd** regardless of config -- this is the only way agents on remote targets get knowledge context.
-
-### 4.8 Channel relay role
-
-See [Section 7](#7-channels----agent-communication). ArkD is the hop between the in-process `ark-channel` MCP server (stdio, running inside the agent) and the conductor. Every session's agent reports flow `agent -> ark-channel -> arkd -> conductor`. Reverse path: `conductor -> arkd -> ark-channel -> agent`.
+- **Outbound (agent -> conductor).** Agent reports flow `agent -> ark-channel -> arkd /channel/<sid> -> publishOnChannel("hooks")`. The conductor subscribes to the `hooks` channel via `/channel/hooks/subscribe` over the forward tunnel; its `arkd-events-consumer` drains envelopes and dispatches by `kind`. ArkD does NOT POST channel reports directly to the conductor anymore -- the publish/subscribe path replaces a previous SSH `-R` reverse tunnel that broke under SSM.
+- **Inbound (conductor -> agent).** Steering messages flow `conductor -> arkd /channel/deliver -> channel listener (port 19200+hash) -> ark-channel -> agent` using the forward tunnel.
 
 ---
 
-## 5. Conductor (Control Plane HTTP Server)
+## 5. Conductor -- Merged Daemon
 
-The HTTP surface of the control plane. Lives in `packages/core/conductor.ts` (with helpers under `packages/core/conductor/`).
+The merged Ark control-plane daemon. One process owns `AppContext`, the WebSocket JSON-RPC entrypoint, and the agent-facing HTTP routes. Lives in `packages/conductor/`.
 
-- **Port:** `19100` (hardcoded -- referenced in `conductor.ts`, `channel.ts`, tests, and `constants.ts`)
-- **Started by:** the server daemon (`ark server daemon start`, for local mode) and hosted mode entry (`hosted.ts`)
-- **NOT started by:** the CLI -- CLI sessions talk directly to the DB through `AppContext`
+- **Port:** `19400`. Configurable via `ARK_CONDUCTOR_PORT` (`packages/core/constants.ts`). The legacy `19100` HTTP listener is gone.
+- **Started by:** `ark server daemon start` (local mode) and `hosted/server.ts` (hosted mode). There is no separate "conductor" process anymore.
+- **NOT started by:** short-lived CLI commands. They construct `AppContext` with `skipConductor: true` and talk to the DB directly.
 
 ### 5.1 Routes
 
-| Route | Purpose |
-|---|---|
-| `POST /hooks/status` | Claude Code hook status events (busy/idle/error/done) |
-| `POST /channel/report` | Agent report from `ark-channel` (via arkd) |
-| `POST /channel/message` | Human-to-agent message (outbound) |
-| `POST /workers/register` | Worker registration (hosted mode) |
-| `POST /workers/heartbeat` | Worker health |
-| `GET /tenants/:id/policy` | Read tenant policy |
-| `POST /tenants/:id/policy` | Write tenant policy |
-| `GET /healthz` | Liveness |
-| `GET /metrics` | Prometheus metrics |
+WebSocket JSON-RPC (everything modeled as `<prefix>/<verb>`, gated by role):
+
+| Prefix                                                | Examples                                                                    |
+| ----------------------------------------------------- | --------------------------------------------------------------------------- |
+| `session/*`                                           | `session/start`, `session/attach`, `session/dispatch`, `session/list`, ...  |
+| `compute/*`                                           | `compute/list`, `compute/create`, `compute/start`, ...                      |
+| `worker/*`                                            | `worker/register`, `worker/heartbeat`, `worker/deregister` (arkd-only role) |
+| `admin/*`                                             | `admin/apikey/create`, `admin/policy/set`, ... (admin role)                 |
+| `secrets/*`, `tenant/*`, `tools/*`, `webhooks/*`, ... | See `packages/conductor/handlers/*.ts`                                      |
+
+External HTTP routes (preserved for callers that don't speak the WS RPC):
+
+| Route                                         | Purpose                                                                                |
+| --------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `POST /hooks/status`                          | Claude Code hook status events (busy/idle/error/done) -- `packages/conductor/index.ts` |
+| `POST /hooks/github/merge`                    | GitHub PR merge webhook                                                                |
+| `POST /v1/chat/completions`, `GET /v1/models` | OpenAI-compatible LLM router proxy passthrough (mounted via `mounts/llm-proxy.ts`)     |
+| `GET /.well-known/oauth-protected-resource`   | RFC 9728 OAuth metadata for MCP SDK clients                                            |
+| `ANY /mcp`                                    | MCP Streamable-HTTP transport (tenant-scoped after credential resolution)              |
+| `WS /terminal/:sessionId`                     | Tenant-gated tmux pane attach                                                          |
+| `GET /health`                                 | Liveness                                                                               |
 
 ### 5.2 Delegation pattern
 
-`startConductor(app, port)` receives the `AppContext` explicitly -- no `getApp()` calls. Handlers delegate to `session-orchestration.ts` functions:
-
-```ts
-// packages/core/conductor.ts
-app.post("/hooks/status", async (req) => {
-  const body = await req.json();
-  await applyHookStatus(app, body.sessionId, body.status);
-});
-
-app.post("/channel/report", async (req) => {
-  const body = await req.json();
-  await applyReport(app, body.sessionId, body.report);
-});
-```
-
-### 5.3 Test notes
-
-Conductor tests use offset ports (19199, 19200) to avoid collisions. Integration tests spin up a throwaway conductor, hit it over HTTP, and assert DB state.
+Conductor handlers receive the `AppContext` explicitly -- no `getApp()` calls. They resolve a `TenantContext` from the caller's credentials, scope the app via `app.forTenant(ctx.tenantId)`, and delegate to services (`app.dispatchService`, `app.sessionHooks`, `app.stageAdvance`, ...). Handler files live in `packages/conductor/handlers/` (per-prefix: `session.ts`, `compute.ts`, `worker.ts`, `admin.ts`, ...).
 
 ---
 
@@ -580,7 +591,7 @@ Conductor tests use offset ports (19199, 19200) to avoid collisions. Integration
 
 ### 6.1 Problem
 
-Each Ark session can have multiple agents. Each agent loads multiple MCP servers (knowledge graph, filesystem, context7, playwright, github, etc.). Without pooling:
+Each Ark session can have multiple agents. Each agent loads multiple MCP servers (filesystem, context7, playwright, github, etc.). Without pooling:
 
 ```
 5 sessions x 6 MCP servers = 30 MCP processes
@@ -608,6 +619,7 @@ agent-3 stdio <-> mcp-proxy <-> unix socket <-^
 ```
 
 Responsibilities:
+
 - Multiplex JSON-RPC requests from N clients to one MCP process
 - Track request IDs and route responses back to the right client
 - Health monitoring + auto-restart on MCP process crash
@@ -620,17 +632,17 @@ Under `mcp_pool:` in `~/.ark/config.yaml`:
 ```yaml
 mcp_pool:
   enabled: true
-  autoStart: true          # start pool at boot
-  poolAll: true            # pool every MCP server found in configs
-  excludeMcps:             # names to keep as per-session processes
-    - ark-channel          # channels are always per-session
+  autoStart: true # start pool at boot
+  poolAll: true # pool every MCP server found in configs
+  excludeMcps: # names to keep as per-session processes
+    - ark-channel # channels are always per-session
     - flaky-mcp
 ```
 
 ### 6.5 CLI entry
 
 ```bash
-ark mcp-proxy /tmp/ark-mcp-knowledge.sock
+ark mcp-proxy /tmp/ark-mcp-<name>.sock
 ```
 
 This is the client side. It speaks MCP stdio on stdin/stdout and opens a Unix socket connection to the pooled process. The session's `.mcp.json` references this command instead of spawning the MCP server directly.
@@ -643,13 +655,14 @@ This is the client side. It speaks MCP stdio on stdin/stdout and opens a Unix so
 
 ### 7.1 What channels are
 
-Bidirectional communication between the agent and the rest of the system. Based on the **official Claude Code `claude/channel` protocol**. Implemented in `packages/core/conductor/channel.ts` and the `ark-channel` MCP server.
+Bidirectional communication between the agent and the rest of the system. Based on the **official Claude Code `claude/channel` protocol**. Implemented in the `ark-channel` MCP server (in-process, stdio) on the agent side and in `packages/core/services/channel/` on the conductor side.
 
 ### 7.2 Protocol
 
 The `ark-channel` MCP server declares the `claude/channel` capability. Communication is bidirectional:
 
 **Inbound (control plane -> agent):**
+
 - Transport: `notifications/claude/channel` JSON-RPC notifications
 - Agent sees them as `<channel source="ark" ...>` tags in context
 - Used for human steering, sub-agent handoff messages, verify gate failures
@@ -657,29 +670,32 @@ The `ark-channel` MCP server declares the `claude/channel` capability. Communica
 **Outbound (agent -> control plane):**
 Two MCP tools on `ark-channel`:
 
-| Tool | Purpose |
-|---|---|
-| `report` | Agent reports progress, completion, error, or a question |
+| Tool            | Purpose                                                         |
+| --------------- | --------------------------------------------------------------- |
+| `report`        | Agent reports progress, completion, error, or a question        |
 | `send_to_agent` | Agent messages other agents (for handoff, fan-out coordination) |
 
 ### 7.3 Data flow
 
 ```
-Agent (Claude Code process)
+Agent (claude-code / claude-agent / codex / ...)
   |
   | stdio MCP
   v
 ark-channel MCP server (in-process, stdio)
   |
-  | HTTP POST
+  | HTTP POST /channel/<sid>
   v
 arkd (:19300 on the compute target)
   |
-  | HTTP POST /channel/report
+  | publishOnChannel("hooks")  --> envelope queued
   v
-Conductor (:19100)
+Conductor (:19400) subscribes to /channel/hooks/subscribe
   |
-  | session-orchestration.applyReport(app, ...)
+  | arkd-events-consumer dispatches by `kind` (channel-report, channel-relay, hook-event, ...)
+  v
+SessionHooks / DispatchService / StageAdvance
+  |
   v
 Database + SSE bus (Web/Desktop get live updates)
 ```
@@ -692,11 +708,11 @@ Human sends message in Web/Desktop
   v
 Conductor
   |
-  | HTTP POST to compute arkd
+  | HTTP POST /channel/deliver to compute arkd (forward tunnel always works)
   v
 arkd (:19300)
   |
-  | HTTP POST to channel port
+  | HTTP POST to channel listener port (19200 + hash)
   v
 ark-channel HTTP listener
   |
@@ -713,11 +729,11 @@ Channel ports are derived deterministically from the session ID:
 channel_port = 19200 + (parseInt(sessionId.replace("s-",""), 16) % 10000)
 ```
 
-This avoids port allocator races and makes ports reproducible across restarts. The allocation logic lives in `packages/core/channel.ts` and is duplicated in the tests and hooks config writer.
+This avoids port allocator races and makes ports reproducible across restarts. The allocation logic lives in `packages/core/channel.ts` and the base + range come from `packages/core/config/profiles.ts` (`channels.basePort`, `channels.range`). Tests randomise via `allocatePort()`.
 
 ### 7.5 Why not direct conductor <-> agent?
 
-Because agents run on potentially remote compute (EC2, K8s, firecracker). Going through arkd gives one HTTP endpoint per compute target (port 19300), regardless of how many sessions are on it. The control plane only needs to know the compute IP; arkd handles the per-session fan-out.
+Because agents run on potentially remote compute (EC2, K8s, firecracker) reached over SSM forward tunnels. Going through arkd gives one HTTP endpoint per compute target (port 19300), and the publish/subscribe `hooks` channel means the conductor never needs an inbound path into the compute target -- it pulls envelopes over the same forward tunnel it uses for everything else.
 
 ---
 
@@ -740,51 +756,53 @@ interface Executor {
 
 ### 8.2 Built-in executors
 
-| Name | Purpose |
-|---|---|
-| `claude-code` | Launches Claude Code in tmux. Writes `.claude/settings.local.json` with HTTP hooks. Sets up MCP channel server and hooks config |
-| `subprocess` | Spawns any command as a child process. Good for linters, test runners, custom scripts |
-| `cli-agent` | Runs any CLI tool (codex, gemini, etc.) in tmux with worktree isolation. Uses the runtime's `command` array |
+Defined in `packages/core/executors/index.ts` (`builtinExecutors`):
+
+| Name           | Purpose                                                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `claude-code`  | Launches Claude Code in tmux. Writes `.claude/settings.local.json` with HTTP hooks; sets up MCP `ark-channel` server and hooks config |
+| `claude-agent` | In-process Claude Agent SDK runtime; hooks stream via arkd's channel bus instead of file-based handlers                               |
+| `cli-agent`    | Runs any CLI tool (codex, gemini) in tmux with worktree isolation. Uses the runtime's `command` array                                 |
+| `goose`        | Launches Goose with a Goose recipe                                                                                                    |
+| `subprocess`   | Spawns any command as a child process. Good for linters, test runners, custom scripts                                                 |
 
 ### 8.3 Registration
 
-Executors are registered at boot in `app.ts` via `registerExecutor(name, impl)`. The registry is in `packages/core/executor.ts`. An agent's `runtime` field points to a runtime definition, and that runtime's `type` selects the executor.
+Executors are loaded at boot from `builtinExecutors` plus any user-provided plugin executors at `<arkDir>/plugins/executors/*.js`. An agent's `runtime` field points to a runtime YAML, and that runtime's `type` (or executor reference) selects the executor.
 
 ```yaml
 # runtimes/codex.yaml
 name: codex
-type: cli-agent            # -> selects the cli-agent executor
+type: cli-agent # -> selects the cli-agent executor
 command: ["codex", "--auto"]
 ```
 
 ### 8.4 Router env injection
 
-`packages/core/router/router-env.ts` builds environment variables for router URL injection. When the LLM router is enabled, executors inject:
+`packages/core/executors/router-env.ts` builds environment variables for router URL injection. When the LLM router is enabled, executors inject:
 
 ```
-ANTHROPIC_BASE_URL=http://router:8430/v1
-OPENAI_BASE_URL=http://router:8430/v1
+ANTHROPIC_BASE_URL=http://localhost:19300
+OPENAI_BASE_URL=http://localhost:19300/v1
 ```
 
-This redirects the agent's LLM calls through the Ark router without changing the agent code or config. Used by all three runtimes (claude, codex, gemini).
+Variables point at the local arkd, which forwards to the conductor, which forwards to the router. This works for both local and remote compute targets without baking provider hostnames into the agent's env.
 
 ---
 
-## 9. Compute Providers
+## 9. Compute and Isolation
 
-11 providers total (+ 3 ec2 sub-variants = 14 compute targets). Brief summary here; full details in `docs/providers.md`. All providers implement the `ComputeProvider` interface, and all (except `local`) talk to a remote arkd via HTTP.
+Dispatch is built on a **two-axis** model: `ComputeKind × IsolationKind`. The legacy single `provider` column was dropped in migration `015_drop_legacy_provider_columns`; the source of truth is now the `compute_kind` + `isolation_kind` pair on the `compute` row.
 
-### 9.0 Dispatch layering (Compute × Isolation)
-
-Dispatch is a five-layer composition. The two middle axes — **Compute** (where) and **Isolation** (how the agent process is sandboxed) — are independent and combine into a `ComputeTarget` at dispatch time.
+### 9.1 Dispatch layering
 
 ```
 1. Agent              YAML spec: prompt, tools, model, runtime: <name>
                       e.g. agents/implementer.yaml
 
 2. Agent Runtime      How the agent transcript is driven and parsed.
-                      claude-code | agent-sdk | codex | gemini | goose
-                      Each runtime has wildly different launch semantics
+                      claude-code | claude-agent | claude-max | codex | gemini | goose
+                      Each runtime has different launch semantics
                       (CLI args, env vars, hook formats, session-resume).
                       Code: packages/core/executors/<type>.ts
                       YAML: runtimes/<name>.yaml (referenced by agent.runtime)
@@ -792,141 +810,131 @@ Dispatch is a five-layer composition. The two middle axes — **Compute** (where
 3. ComputeTarget      Composition: { compute, isolation }. Thin dispatch
                       seam, not a real abstraction. Built from the
                       (compute_kind, isolation_kind) pair on the compute row.
-                      Code: packages/compute/core/compute-target.ts
+                      Code: packages/core/compute/compute-target.ts
 
 4a. Compute           Where the workspace lives. Provision / start / stop /
                       destroy / getArkdUrl / ensureReachable / resolveWorkdir /
                       prepareWorkspace / flushPlacement.
-                      Kinds: local | ec2 | k8s | k8s-kata | firecracker
-                      Code: packages/compute/core/{local,ec2,k8s,k8s-kata,firecracker/compute}.ts
+                      Kinds: local | firecracker | ec2 | k8s | k8s-kata
+                      Code: packages/core/compute/{local,k8s,k8s-kata}.ts,
+                            packages/core/compute/ec2/compute.ts,
+                            packages/core/compute/firecracker/compute.ts
 
 4b. Isolation         How the agent process is sandboxed inside that compute.
                       prepare / launchAgent / shutdown.
-                      Kinds: direct | docker | compose | devcontainer |
-                             firecracker-in-container
-                      Code: packages/compute/isolation/{direct,docker,docker-compose,devcontainer}.ts
+                      Kinds: direct | docker | compose | devcontainer
+                      Code: packages/core/compute/isolation/{direct,docker,
+                            compose,docker-compose,devcontainer,
+                            devcontainer-resolve}.ts
 
 5. arkd               HTTP daemon (:19300) on every compute target.
-                      The conductor talks to arkd over HTTP to drive every
+                      The conductor talks to arkd over HTTP + WS to drive every
                       step on the compute side. Not really a layer -- it's
                       the destination/transport.
                       Code: packages/arkd/
 ```
 
-**Why "agent runtime" (layer 2) ≠ "isolation" (layer 4b).** Layer 2 names belong to the agent transcript driver — `claude-code`, `codex`, etc. — and are referenced from agent YAML as `runtime: <name>`. Layer 4b names the sandbox the agent process runs *inside*: a docker container, a devcontainer, the host directly. Both used to be called "runtime"; the layer-4b concept was renamed `Isolation` so the two no longer collide.
+**Why "agent runtime" (layer 2) ≠ "isolation" (layer 4b).** Layer 2 names belong to the agent transcript driver -- `claude-code`, `claude-agent`, `codex`, etc. -- and are referenced from agent YAML as `runtime: <name>`. Layer 4b names the sandbox the agent process runs _inside_: a docker container, a devcontainer, the host directly. Both used to be called "runtime"; the layer-4b concept was renamed `Isolation` so the two no longer collide (migration `012_isolation_kind_rename`).
 
-**Two-axis dispatch.** The `compute` table stores both:
-- legacy `provider` column (`local`, `docker`, `ec2-docker`, ...) — kept for back-compat indexes and unmigrated callers
-- canonical `compute_kind` + `isolation_kind` columns — the source of truth post-2026-05
+The `packages/compute` and `packages/workspace` packages were folded under `packages/core/compute/` and `packages/core/stores/workspace/`; there is no separate top-level compute/workspace package anymore.
 
-`packages/compute/adapters/provider-map.ts` is the single mapping between the legacy name and the (compute, isolation) pair. New writes go through both.
+### 9.2 Compute kinds
 
-### 9.0.1 Per-dispatch lifecycle (`runTargetLifecycle`)
+| ComputeKind   | How it provisions                             | Isolation supported                           |
+| ------------- | --------------------------------------------- | --------------------------------------------- |
+| `local`       | Host directory (worktree)                     | `direct`, `docker`, `compose`, `devcontainer` |
+| `firecracker` | Local Firecracker microVM                     | the VM is the isolation; uses `direct` inside |
+| `ec2`         | AWS EC2 instance reached over SSM             | `direct`, `docker`, `compose`, `devcontainer` |
+| `k8s`         | K8s pod with arkd sidecar                     | `direct`, `docker` (DinD)                     |
+| `k8s-kata`    | K8s with Kata Containers runtime (VM-per-pod) | `direct`                                      |
+
+Cross-product is declared per-compute via `ComputeCapabilities.isolationModes` (`packages/core/compute/types.ts`). Source of truth for "what can run where" is the `Compute` impl, not a static matrix.
+
+### 9.3 Isolation kinds
+
+| IsolationKind  | How the agent process is sandboxed                               |
+| -------------- | ---------------------------------------------------------------- |
+| `direct`       | Process spawned directly on the host (or VM) by arkd             |
+| `docker`       | Process inside a docker container managed by arkd                |
+| `compose`      | Multi-container compose project; agent runs in the named service |
+| `devcontainer` | VS Code devcontainer spec resolved + built via `devcontainer up` |
+
+### 9.4 Per-dispatch lifecycle (`runTargetLifecycle`)
 
 Six structured `provisioning_step` events fire in order; each step is optional and skipped when the impl omits the method. Code: `packages/core/services/dispatch/target-lifecycle.ts`.
 
-| # | Step | Owner | What |
-|---|---|---|---|
-| 1 | `compute-start` | Compute | If status=stopped, Compute.start. 1 retry / 2s backoff |
-| 2 | `ensure-reachable` | Compute | SSM/kubectl port-forward + arkd /health. Idempotent, no retry |
-| 3 | `flush-secrets` | Compute | Replay deferred typed-secret placement. 1 retry / 1s |
-| 4 | `prepare-workspace` | Compute | mkdir + git clone via arkd. 2 retries / 1s |
-| 5 | `isolation-prepare` | Isolation | Bring up compose / build devcontainer / boot microVM. 1 retry |
-| 6 | `launch-agent` | Isolation | arkd-side process spawn. No retry (tmux dedupe) |
+| #   | Step                | Owner     | What                                                              |
+| --- | ------------------- | --------- | ----------------------------------------------------------------- |
+| 1   | `compute-start`     | Compute   | If status=stopped, `Compute.start`. 1 retry / 2s backoff          |
+| 2   | `ensure-reachable`  | Compute   | SSM / kubectl port-forward + arkd `/health`. Idempotent, no retry |
+| 3   | `flush-secrets`     | Compute   | Replay deferred typed-secret placement. 1 retry / 1s              |
+| 4   | `prepare-workspace` | Compute   | `mkdir` + `git clone` via arkd. 2 retries / 1s                    |
+| 5   | `isolation-prepare` | Isolation | Bring up compose / build devcontainer / boot microVM. 1 retry     |
+| 6   | `launch-agent`      | Isolation | arkd-side process spawn. No retry (tmux dedupe)                   |
 
 Failures throw `ProvisionStepError(step, cause)` so the dispatch failure message names the failing phase. Each event carries `{ compute, computeKind }` plus step-specific context.
-
-### 9.1 Local worktree only
-
-| Provider | Notes |
-|---|---|
-| `local` | Runs in a git worktree on the host. No isolation. ArkD on `localhost:19300`. Fastest |
-
-### 9.2 Local isolated
-
-| Provider | Notes |
-|---|---|
-| `docker` | Local Docker container. Image pre-baked with arkd. Resource limits via Docker |
-| `devcontainer` | VS Code devcontainer spec. Same as docker but honors `.devcontainer/devcontainer.json` |
-| `firecracker` | Local Firecracker micro-VM. Hardware isolation. Kernel + rootfs managed by Ark |
-
-### 9.3 Remote (EC2 + arkd)
-
-| Provider | Notes |
-|---|---|
-| `ec2` | Base EC2 instance. ArkD installed via cloud-init |
-| `ec2-docker` | EC2 + Docker-in-Docker for extra sandboxing |
-| `ec2-devcontainer` | EC2 + devcontainer runtime |
-| `ec2-firecracker` | EC2 host running Firecracker micro-VMs -- strongest remote isolation |
-
-### 9.4 Managed / cluster
-
-| Provider | Notes |
-|---|---|
-| `e2b` | E2B managed sandbox service. Session-scoped, fast cold start |
-| `k8s` | Kubernetes pod with arkd sidecar. Vanilla runtime |
-| `k8s-kata` | Kubernetes with Kata Containers runtime (VM isolation per pod) |
 
 ---
 
 ## 10. Transcript Parsers
 
-Polymorphic, DI-based. Each runtime has its own parser that knows where its transcripts live on disk and how to extract token counts and messages.
+Polymorphic, DI-based. Each runtime has its own parser that knows where its transcripts live on disk and how to extract token counts.
 
 ### 10.1 Interface
 
 ```ts
 // packages/core/runtimes/transcript-parser.ts
 interface TranscriptParser {
-  runtime: string;
-  parse(sessionId: string, workdir: string): Promise<ParsedTranscript>;
+  readonly kind: string; // matches runtime.billing.transcript_parser
+  parse(transcriptPath: string): ParseResult; // extract tokens from a path. Never throws.
+  findForSession(opts: FindOpts): string | null; // locate the transcript file for a session
 }
 
-interface ParsedTranscript {
-  messages: ParsedMessage[];
-  usage: { input: number; output: number; cacheRead: number; cacheWrite: number };
+interface ParseResult {
+  usage: TokenUsage;
   model?: string;
+  transcript_path?: string;
+}
+
+interface FindOpts {
+  workdir: string; // cwd the tool ran in -- disambiguates concurrent sessions
+  startTime?: Date; // only consider transcripts created at or after this time
 }
 ```
+
+Session identification is the parser's `findForSession` responsibility (matches by exact workdir + start time, not "latest by mtime"); parsing operates on a path. This avoids the parallel-dispatch races that the old `parse(sessionId, workdir)` shape could trip over.
 
 ### 10.2 Implementations
 
-| Runtime | Implementation | Transcript location | Identification |
-|---|---|---|---|
-| `claude` | `packages/core/runtimes/claude/parser.ts` | `~/.claude/projects/<slug>/<session>.jsonl` | Exact path from session ID |
-| `codex` | `packages/core/runtimes/codex/parser.ts` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | Cwd-matched |
-| `gemini` | `packages/core/runtimes/gemini/parser.ts` | `~/.gemini/tmp/<slug>/chats/session-*.jsonl` | projectHash-matched |
+| Runtime        | Implementation                                  | Transcript location                               | Identification       |
+| -------------- | ----------------------------------------------- | ------------------------------------------------- | -------------------- |
+| `claude`       | `packages/core/runtimes/claude/parser.ts`       | `~/.claude/projects/<slug>/<session>.jsonl`       | Workdir-derived slug |
+| `claude-agent` | `packages/core/runtimes/claude-agent/parser.ts` | Captured by the in-process SDK + arkd channel bus | Session ID           |
+| `codex`        | `packages/core/runtimes/codex/parser.ts`        | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`    | Cwd-matched          |
+| `gemini`       | `packages/core/runtimes/gemini/parser.ts`       | `~/.gemini/tmp/<slug>/chats/session-*.jsonl`      | projectHash-matched  |
 
 ### 10.3 Registry
 
-`TranscriptParserRegistry` is exposed via `app.transcriptParsers`:
+`TranscriptParserRegistry` is exposed via `app.transcriptParsers`. Parsers are registered at boot inside the Awilix container (DI seed, not direct calls in `app.ts`); `register(parser)` keys them by `parser.kind`.
 
 ```ts
-app.transcriptParsers.register("claude", new ClaudeTranscriptParser());
-app.transcriptParsers.register("codex", new CodexTranscriptParser());
-app.transcriptParsers.register("gemini", new GeminiTranscriptParser());
-
-const parser = app.transcriptParsers.get(runtimeName);
-const parsed = await parser.parse(sessionId, workdir);
+const parser = app.transcriptParsers.get(runtime.billing.transcript_parser);
+const transcriptPath = parser?.findForSession({ workdir: session.workdir, startTime: session.created_at });
+const parsed = transcriptPath ? parser!.parse(transcriptPath) : null;
 ```
 
-### 10.4 Session identification
+### 10.4 Usage recording
 
-**Session identification uses workdir/cwd matching, not "latest by mtime."** This is deliberate -- the latest-by-mtime heuristic fails in parallel dispatches where two sessions start at the same time in different worktrees. Each parser knows how its runtime encodes the project/workdir into the transcript path and matches exactly.
-
-### 10.5 Usage recording
-
-Session-orchestration calls the parser at session completion and feeds tokens into `UsageRecorder`:
+Stage-advance feeds parsed tokens into `UsageRecorder`:
 
 ```ts
-const parsed = await app.transcriptParsers.get(session.runtime).parse(sessionId, workdir);
-await app.usage.record({
+await app.usageRecorder.record({
   sessionId,
   tenantId,
   userId,
   model: parsed.model,
   tokens: parsed.usage,
-  costMode: runtime.costMode, // api | subscription | free
+  costMode: runtime.billing.cost_mode, // api | subscription | free
 });
 ```
 
@@ -938,17 +946,18 @@ await app.usage.record({
 
 OpenAI-compatible HTTP proxy. Routes requests across multiple LLM providers with fallback and cost tracking.
 
-- **Endpoint:** `POST /v1/chat/completions` (OpenAI-compatible)
+- **Endpoint:** `POST /v1/chat/completions`, `GET /v1/models` (OpenAI-compatible)
 - **Default port:** 8430
+- **Reachable via:** direct calls to `:8430`, OR through the conductor's mounted proxy at `:19400/v1/*` (`packages/conductor/mounts/llm-proxy.ts`). Surfaces and remote agents (via arkd) typically hit the conductor mount so routing is consistent.
 - **Start:** `ark router start [--port 8430] [--policy balanced]`
 
 **Routing policies:**
 
-| Policy | Behavior |
-|---|---|
-| `quality` | Prefer the best model regardless of cost |
-| `balanced` | Optimize cost/quality tradeoff |
-| `cost` | Minimize cost |
+| Policy     | Behavior                                 |
+| ---------- | ---------------------------------------- |
+| `quality`  | Prefer the best model regardless of cost |
+| `balanced` | Optimize cost/quality tradeoff           |
+| `cost`     | Minimize cost                            |
 
 **Features:**
 
@@ -962,145 +971,95 @@ OpenAI-compatible HTTP proxy. Routes requests across multiple LLM providers with
 
 Optional Rust-based gateway (Apache 2.0) that replaces the Bun router for production. Higher throughput and lower latency.
 
-**Lifecycle manager:**
+**Lifecycle manager start order:**
 
-- Start modes (in order): sidecar detect -> native binary -> Docker fallback
-- Config generated from configured API keys into `tensorzero.toml`
-- Auto-starts on boot when `router.autoStart && tensorZero.enabled`
+1. Sidecar mode -- detect existing instance (control plane / docker-compose)
+2. Native binary -- vendored binary at `bin/tensorzero-gateway` next to ark
+3. Docker fallback -- Docker container (only if native binary not found)
+
+Config generated from configured API keys into `tensorzero.toml` under `app.config.dirs.ark` (the older `$HOME` / `/tmp` fallback was removed; callers must supply an ark-controlled `configDir`). Auto-starts on boot when `router.autoStart && tensorZero.enabled`.
 
 **Default port:** 3000
 
 ### 11.3 Router URL injection
 
-When the router (Bun or TensorZero) is enabled, executors inject base URLs into agent env:
+When the router (Bun or TensorZero) is enabled, executors inject base URLs into agent env via `executors/router-env.ts`:
 
 ```
-ANTHROPIC_BASE_URL=http://router:8430/v1
-OPENAI_BASE_URL=http://router:8430/v1
+ANTHROPIC_BASE_URL=http://localhost:19300
+OPENAI_BASE_URL=http://localhost:19300/v1
 ```
 
-Router receives the request, applies policy, fans out to real providers, and calls `onUsage` with the token counts. `UsageRecorder` writes a `usage_records` row with the tenant and session ID.
+The agent calls the local arkd; arkd forwards to the conductor's `/v1/*` mount; the conductor proxies to the router; the router fans out to real providers and calls `onUsage` with the token counts. `UsageRecorder` writes a `usage_records` row with the tenant and session ID.
 
 ### 11.4 Cost modes
 
 The router writes costs with the runtime's `cost_mode`:
 
-| Mode | Behavior |
-|---|---|
-| `api` | Look up per-token rate in `PricingRegistry` (300+ models via LiteLLM JSON) |
-| `subscription` | `cost_usd = 0`, but tokens still recorded for rate limit tracking |
-| `free` | `cost_usd = 0` |
+| Mode           | Behavior                                                                   |
+| -------------- | -------------------------------------------------------------------------- |
+| `api`          | Look up per-token rate in `PricingRegistry` (300+ models via LiteLLM JSON) |
+| `subscription` | `cost_usd = 0`, but tokens still recorded for rate limit tracking          |
+| `free`         | `cost_usd = 0`                                                             |
 
 ---
 
-## 12. Knowledge Graph + ops-codegraph
+## 12. Multi-Tenancy Details
 
-### 12.1 Unified store
-
-One knowledge store holds everything:
-
-- Codebase structure (files, symbols, imports)
-- Session history (sessions as nodes, edges to files they touched)
-- Memories (explicit `knowledge/remember` writes)
-- Learnings (retrospective notes)
-- Skills, recipes, agents (registered resources)
-
-All rows are tenant-scoped. Tables: `knowledge` (nodes), `knowledge_edges` (edges).
-
-### 12.2 Indexer: ops-codegraph
-
-Ark uses **`@optave/codegraph`** (ops-codegraph) for codebase parsing. **NOT Axon. NOT a Python implementation.** Key facts:
-
-- Native Rust engine via Bun FFI
-- 33 languages via tree-sitter WASM
-- npm dependency, installed globally: `npm install -g @optave/codegraph`
-- Reads source tree, writes `.codegraph/graph.db` (SQLite)
-- Ark's `indexer.ts` reads that DB and upserts into Ark's knowledge store with tenant scoping
-
-### 12.3 Auto-index on dispatch
-
-| Mode | Behavior |
-|---|---|
-| Local | Honors `knowledge.auto_index: true` in `~/.ark/config.yaml` |
-| Remote (via arkd) | **ALWAYS indexes** regardless of config, via `POST http://<compute-ip>:19300/codegraph/index` |
-
-The remote path is unconditional because agents on remote targets have no other way to get knowledge context.
-
-### 12.4 Context injection at dispatch
-
-At session dispatch, `knowledge/context.ts` builds a relevant knowledge context for the agent and injects it into the system prompt.
-
-- Token-budgeted to **~2000 tokens max**
-- Relevance computed from ticket/summary + recent session history
-- Includes file paths, symbol summaries, co-change hints, recent memories
-
-### 12.5 Agent MCP tools
-
-Six MCP tools exposed to agents via `packages/core/knowledge/mcp.ts`:
-
-| Tool | Purpose |
-|---|---|
-| `knowledge/search` | Full-text search across nodes |
-| `knowledge/context` | Build a relevant context slice |
-| `knowledge/impact` | What depends on this file/symbol |
-| `knowledge/history` | Sessions that touched this node |
-| `knowledge/remember` | Write a memory node |
-| `knowledge/recall` | Read memories by tag or query |
-
----
-
-## 13. Multi-Tenancy Details
-
-### 13.1 Tenant scoping on every entity
+### 12.1 Tenant scoping on every entity
 
 Every tenant-relevant table has a `tenant_id` column:
 
 ```
-sessions, compute, events, messages, todos, groups, schedules,
-compute_pools, compute_templates, usage_records,
-resource_definitions, knowledge, knowledge_edges, api_keys
+sessions, compute, compute_templates, events, messages, todos,
+groups, schedules, usage_records, resource_definitions,
+api_keys, tenants, users, teams, memberships,
+session_artifacts, flow_state, ledger_entries, stage_operations,
+tenant_policies, tenant_claude_auth, workspaces, workspace_repos
 ```
 
 Sessions additionally have a `user_id` column that tracks which user inside the tenant owns the session.
 
-### 13.2 `AppContext.forTenant(id)`
+### 12.2 `AppContext.forTenant(id)`
 
-Creates a tenant-scoped view of the context. Implementation uses `Object.defineProperty` to override each repository and store with one that has `setTenant(tenantId)` applied.
+Creates a tenant-scoped view of the context. Delegates to `app.mode.tenantScope.forTenant(this, id)`:
+
+- Local mode -- single-tenant; returns self (no isolation to enforce).
+- Hosted mode -- builds a child Awilix container scope. Re-entrant calls with the same tenant short-circuit. Tenant-scoped repositories and stores are re-bound inside the child scope.
 
 ```ts
 const scoped = app.forTenant("acme-corp");
-await scoped.sessions.list();    // WHERE tenant_id = 'acme-corp'
-await scoped.flows.list();       // DB-backed flows filtered to acme-corp
-await scoped.knowledge.search(); // tenant-scoped knowledge search
+await scoped.sessions.list(); // WHERE tenant_id = 'acme-corp'
+await scoped.flows.list(); // DB-backed flows filtered to acme-corp
 ```
 
-### 13.3 TenantPolicyManager
+### 12.3 TenantPolicyManager
 
-Enforced at session start and dispatch. Fields include:
+Enforced at session start and dispatch time by the dispatch guards. Fields include:
 
-| Field | Purpose |
-|---|---|
-| `allowedProviders` | Whitelist of compute providers |
-| `defaultProvider` | Fallback if request doesn't specify |
-| `maxConcurrentSessions` | Hard cap |
-| `dailyCostCapUsd` | Enforced via `UsageRecorder` totals |
-| `routerRequired` | Force LLM router usage (reject direct provider calls) |
-| `autoIndexRequired` | Force auto-index on dispatch |
-| `routerPolicy` | Override agent's router policy |
-| `tensorzeroEnabled` | Force TensorZero backend |
-| `pools` | Restrict to specific compute pools |
+| Field                   | Purpose                                                |
+| ----------------------- | ------------------------------------------------------ |
+| `allowedProviders`      | Whitelist of compute kinds (or legacy provider labels) |
+| `defaultProvider`       | Fallback if request doesn't specify                    |
+| `maxConcurrentSessions` | Hard cap                                               |
+| `dailyCostCapUsd`       | Enforced via `UsageRecorder` totals                    |
+| `routerRequired`        | Force LLM router usage (reject direct provider calls)  |
+| `autoIndexRequired`     | Force auto-index on dispatch                           |
+| `routerPolicy`          | Override agent's router policy                         |
+| `tensorzeroEnabled`     | Force TensorZero backend                               |
+| `pools`                 | Restrict to specific compute pools                     |
 
-### 13.4 DbResourceStore for hosted mode
+### 12.4 DbResourceStore for hosted mode
 
-In hosted mode, file-backed stores are replaced with `DbResourceStore` on the `resource_definitions` table.
+In hosted mode, file-backed YAML stores are replaced with `DbResourceStore` on the `resource_definitions` table.
 
 ```sql
 CREATE TABLE resource_definitions (
   id         TEXT PRIMARY KEY,
   tenant_id  TEXT NOT NULL,
-  kind       TEXT NOT NULL,  -- flow | skill | agent | recipe | runtime
+  kind       TEXT NOT NULL,  -- agent | flow | skill | runtime (model + workspace use dedicated stores)
   name       TEXT NOT NULL,
-  content    TEXT NOT NULL,  -- YAML or markdown
+  content    TEXT NOT NULL,  -- YAML
   version    INTEGER NOT NULL,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
@@ -1110,100 +1069,119 @@ CREATE TABLE resource_definitions (
 
 Same `list() / get() / save() / delete()` interface as file-backed stores. Each tenant has their own copy of any resource they've customized.
 
-### 13.5 Export/import for portability
+### 12.5 Export/import for portability
 
 `ark resource export` and `ark resource import` move YAML between file-backed (local) and DB-backed (hosted) stores. Users can author resources locally and push them to a hosted tenant, or pull a hosted tenant's resources into a local workspace.
 
 ---
 
-## 14. Event Bus + SSE Bus
+## 13. Event Bus + SSE Bus
 
-### 14.1 In-memory event bus
+### 13.1 In-memory event bus
 
 Pub/sub for in-process listeners. Used by:
 
-- Session-orchestration to emit lifecycle events (`dispatched`, `stage_advanced`, `completed`, etc.)
+- Session services to emit lifecycle events (`dispatched`, `stage_advanced`, `completed`, etc.)
 - Metrics polling to emit sample events
-- Server daemon to fan out events over SSE/WebSocket to UI clients
+- Conductor to fan out events over SSE/WebSocket to UI clients
 
 All listeners are in-process; the event bus does not cross process boundaries.
 
-### 14.2 SSE bus
+### 13.2 SSE bus
 
-Server-Sent Events bus for UI live updates (Web, Desktop).
+Server-Sent Events bus for UI live updates (Web, Desktop). The canonical SSE endpoint is `GET /api/events/stream` (consumed by the web frontend at `packages/web/src/hooks/useSessions.ts`).
 
-| Mode | Implementation | File |
-|---|---|---|
-| Local / single instance | In-memory | `packages/core/sse-bus.ts` |
-| Hosted / multi-instance | Redis-backed | `packages/core/sse-redis.ts` |
+| Mode                    | Implementation | File                                |
+| ----------------------- | -------------- | ----------------------------------- |
+| Local / single instance | In-memory      | `packages/core/hosted/sse-bus.ts`   |
+| Hosted / multi-instance | Redis-backed   | `packages/core/hosted/sse-redis.ts` |
 
-The Redis backend uses Redis pub/sub so that events produced on one control plane instance reach SSE clients connected to a different instance. Enabled when `REDIS_URL` is set.
+The Redis backend uses Redis pub/sub so that events produced on one control plane instance reach SSE clients connected to a different instance. Enabled when `REDIS_URL` is set (`hosted/server.ts` constructs the `RedisSSEBus`).
 
-Clients subscribe to `/sse?tenant=<id>` (hosted) or `/sse` (local) and get a stream of JSON events for the tenant's sessions.
-
----
-
-## 15. Ports Reference
-
-| Service | Default port | Configurable | Notes |
-|---|---|---|---|
-| Conductor | `19100` | No (hardcoded) | References in `conductor.ts`, `channel.ts`, `constants.ts`, tests |
-| ArkD | `19300` | Yes (`ARK_ARKD_PORT`) | Universal agent daemon |
-| Channel | `19200 + hash` | Deterministic per session | `19200 + (parseInt(sessionId.replace("s-",""), 16) % 10000)` |
-| LLM Router | `8430` | Yes | OpenAI-compatible proxy |
-| TensorZero | `3000` | Yes | Rust gateway |
-| Web UI | `8420` | Yes | Vite dev server / production |
-| Test conductor | `19199` | Offset | Avoids collision with real conductor |
+Clients subscribe to `/api/events/stream` and get a stream of JSON events for the tenant's sessions.
 
 ---
 
-## 16. Data Locations
+## 14. Ports Reference
 
-| Path | Purpose |
-|---|---|
-| `~/.ark/ark.db` | SQLite database (WAL mode, 5s busy timeout). Includes knowledge graph tables, `resource_definitions`, `usage_records`, `api_keys` |
-| `~/.ark/config.yaml` | User config (router, knowledge, tensorzero, compute templates, budgets, hotkeys, auth) |
-| `~/.ark/tracks/<sessionId>/` | Launcher scripts, channel configs |
-| `~/.ark/worktrees/<sessionId>/` | Git worktrees for isolated sessions |
-| `~/.ark/skills/` | Global skill definitions (user tier for SkillStore) |
-| `~/.ark/recipes/` | Global recipe definitions (user tier for RecipeStore) |
-| `~/.ark/flows/` | Global flow definitions (user tier for FlowStore) |
-| `~/.ark/agents/` | Global agent definitions (user tier for AgentStore) |
-| `~/.ark/runtimes/` | Global runtime definitions (user tier for RuntimeStore) |
-| `~/.ark/logs/` | Structured JSONL logs |
-| `~/.claude/projects/` | Claude Code session transcripts (JSONL). Read by history + search + parser |
-| `~/.codex/sessions/` | Codex CLI transcripts |
-| `~/.gemini/tmp/` | Gemini CLI transcripts |
-| `.claude/settings.local.json` | Per-session hook config (written at dispatch, cleaned on stop) |
-| `.mcp.json` | Per-session MCP server config (includes `ark-channel`) |
-| `.codegraph/graph.db` | ops-codegraph output, consumed by `indexer.ts` |
-| `.ark/` | Project-tier resource overrides (flows, skills, agents, recipes, runtimes) |
-| `.infra/` | Dockerfile, docker-compose, Helm chart |
+| Service                   | Default port                     | Configurable via     | Notes                                                                                                                      |
+| ------------------------- | -------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Conductor (merged daemon) | `19400`                          | `ARK_CONDUCTOR_PORT` | WebSocket JSON-RPC + HTTP `/hooks/*`, `/v1/*`, `/mcp`, `/terminal/:id`, `/.well-known/oauth-protected-resource`, `/health` |
+| ArkD                      | `19300`                          | `ARK_ARKD_PORT`      | Universal agent daemon, one per compute target                                                                             |
+| Channel                   | `19200 + hash`                   | derived              | `19200 + (parseInt(sessionId.replace("s-",""), 16) % 10000)`                                                               |
+| LLM Router                | `8430`                           | config               | OpenAI-compatible proxy (also reachable via conductor `:19400/v1/*`)                                                       |
+| TensorZero                | `3000`                           | config               | Optional Rust gateway                                                                                                      |
+| Web (`make dev`)          | `8420` (API) + `5173` (Vite HMR) | config               | `:8420` is the API surface; `:5173` is Vite HMR                                                                            |
+| Test profile              | random                           | `allocatePort()`     | All ports randomized to avoid collisions                                                                                   |
 
-In hosted mode, the `resource_definitions`, `sessions`, `knowledge`, `usage_records`, and `api_keys` tables live in Postgres instead of SQLite.
+---
+
+## 15. Data Locations
+
+| Path                            | Purpose                                                                                                                                                                                                                          |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `~/.ark/ark.db`                 | SQLite database (WAL mode, 5s busy timeout). Tables include `sessions`, `compute`, `resource_definitions`, `usage_records`, `api_keys`, `workspaces`, `workspace_repos`, `flow_state`, `ledger_entries`, `stage_operations`, ... |
+| `~/.ark/config.yaml`            | User config (router, tensorzero, compute templates, budgets, hotkeys, auth)                                                                                                                                                      |
+| `~/.ark/tracks/<sessionId>/`    | Launcher scripts, channel configs, per-session arkd handles                                                                                                                                                                      |
+| `~/.ark/worktrees/<sessionId>/` | Git worktrees for isolated sessions                                                                                                                                                                                              |
+| `~/.ark/snapshots/`             | `SnapshotStoreFs` output for `session/pause` + `session/resume`                                                                                                                                                                  |
+| `~/.ark/skills/`                | Global skill definitions (user tier for `SkillStore`)                                                                                                                                                                            |
+| `~/.ark/flows/`                 | Global flow definitions (user tier for `FlowStore`)                                                                                                                                                                              |
+| `~/.ark/agents/`                | Global agent definitions (user tier for `AgentStore`)                                                                                                                                                                            |
+| `~/.ark/runtimes/`              | Global runtime definitions (user tier for `RuntimeStore`)                                                                                                                                                                        |
+| `~/.ark/models/`                | Global model catalog overrides (user tier for `ModelStore`)                                                                                                                                                                      |
+| `~/.ark/logs/`                  | Structured JSONL logs                                                                                                                                                                                                            |
+| `~/.claude/projects/`           | Claude Code session transcripts (JSONL). Read by history + search + parser                                                                                                                                                       |
+| `~/.codex/sessions/`            | Codex CLI transcripts                                                                                                                                                                                                            |
+| `~/.gemini/tmp/`                | Gemini CLI transcripts                                                                                                                                                                                                           |
+| `.claude/settings.local.json`   | Per-session hook config (written at dispatch, cleaned on stop)                                                                                                                                                                   |
+| `.mcp.json`                     | Per-session MCP server config (includes `ark-channel`)                                                                                                                                                                           |
+| `.ark/`                         | Project-tier resource overrides (flows, skills, agents, runtimes, models)                                                                                                                                                        |
+| `.infra/`                       | Dockerfile, docker-compose, Helm chart                                                                                                                                                                                           |
+
+In hosted mode, the `resource_definitions`, `sessions`, `usage_records`, `api_keys`, and other tenant-scoped tables live in Postgres instead of SQLite. The per-process `~/.ark/` filesystem is not materialised in hosted pods.
+
+---
+
+## 16. Schema and Migrations
+
+Schema lives under `packages/core/repositories/schema.ts` (SQLite) and `schema-postgres.ts` (Postgres). Drizzle schema for newer-typed query paths is at `packages/core/drizzle/schema/{sqlite,postgres}.ts`.
+
+Migrations live in `packages/core/migrations/NNN_<name>{,_sqlite,_postgres}.ts`. Migrations 001-009 are frozen; 010+ are generated/maintained against the dialect-specific files. The current set (as of 2026-05-08) includes:
+
+- `010_stage_operations` -- per-stage operation log
+- `011_session_orchestrator` -- orchestrator state columns
+- `012_isolation_kind_rename` -- rename `runtime` -> `isolation` on the compute axis
+- `013_eval_session_type` -- evaluation session type
+- `014_workspaces` -- multi-repo workspace + `workspace_repos`
+- `015_drop_legacy_provider_columns` -- drop the legacy `provider` column on `compute`
+
+`make drift` verifies the dialect schemas are in sync. The runner records every applied version in `ark_schema_migrations`; legacy installs that pre-date the migration log get `001_initial` recorded as already-applied so its body doesn't re-run.
 
 ---
 
 ## 17. Key Architectural Decisions
 
-- **Awilix DI over module-level `getApp()`.** Every service and orchestration function takes `app: AppContext` as its first argument. Eliminated 225 `getApp()` calls and made test isolation trivial (`AppContext.forTest()`).
+- **Awilix DI over module-level `getApp()`.** Every service and orchestration function takes `app: AppContext` as its first argument. Eliminated `getApp()` calls and made test isolation trivial (`AppContext.forTestAsync()`).
 
-- **`DatabaseAdapter` abstraction.** SQLite for local, Postgres for hosted, same repositories. No ORM. Raw SQL with column whitelists. Same code paths run in both modes.
+- **`AppMode` capability swap, not `if hosted` branches.** SQLite vs Postgres, file-backed vs DB-backed, single-tenant vs multi-tenant -- all live behind capability methods on `app.mode`. Handlers and services never branch on `mode.kind`.
 
-- **Polymorphism over switch statements.** `TranscriptParserRegistry`, `ExecutorRegistry`, `ComputeProviderRegistry`, `DbResourceStore` vs `FileResourceStore` -- everything swappable via registration, not `if runtime === "claude"` branches.
+- **Conductor merged into the server daemon.** One process owns AppContext, the WebSocket JSON-RPC entrypoint for surfaces, and the HTTP routes that agents hit (`/hooks/status`, `/hooks/github/merge`, `/v1/*`, `/mcp`). Short-lived CLI commands bypass the daemon and talk to the DB through `AppContext` directly to avoid daemon-boot races. The legacy `:19100` listener is gone.
 
-- **ArkD as universal HTTP daemon.** Instead of per-provider SSH/exec logic, one HTTP daemon runs on every compute target. Conductor speaks HTTP. Local, docker, EC2, K8s, firecracker all look the same.
+- **Two-axis Compute × Isolation.** `(compute_kind, isolation_kind)` is the canonical dispatch axis (5 × 4 with declared per-compute `isolationModes`). Single seam for dispatch; isolation modes vary independently of where the compute lives. The legacy `provider` column was dropped in migration 015.
+
+- **`DatabaseAdapter` abstraction.** SQLite for local, Postgres for hosted, same repositories. No ORM (drizzle is opt-in). Raw SQL with column whitelists. Same code paths run in both modes.
+
+- **Polymorphism over switch statements.** `TranscriptParserRegistry`, `ExecutorRegistry`, compute / isolation registries, `DbResourceStore` vs `FileResourceStore` -- everything swappable via registration, not `if runtime === "claude"` branches.
+
+- **ArkD as universal HTTP daemon.** Instead of per-compute SSH/exec logic, one HTTP daemon runs on every compute target. Conductor speaks HTTP and a persistent ArkClient WebSocket. Local, docker, EC2, K8s, firecracker all look the same.
+
+- **Channels through arkd's `hooks` channel, pull-only.** Agent reports are published on a generic `hooks` channel inside arkd; the conductor subscribes to `/channel/hooks/subscribe` over the forward tunnel and drains envelopes. Avoids requiring an inbound path from conductor to arkd (no SSH `-R` reverse tunnel under SSM / K8s).
 
 - **MCP socket pooling over per-session processes.** Shared MCP processes via Unix sockets give ~85-90% memory reduction at the cost of one small proxy binary.
 
-- **Workdir/cwd-based session identification.** Transcript parsers match by exact workdir, not "latest by mtime." Parallel dispatches don't clobber each other's identification.
+- **Workdir/cwd-based session identification.** Transcript parsers' `findForSession` matches by exact workdir + start time, not "latest by mtime." Parallel dispatches don't clobber each other's identification.
 
-- **Tenant-scoped from day one.** Every entity has `tenant_id`. `forTenant(id)` is a cheap view that re-uses the same repositories and stores. No separate "tenant-aware" code path.
-
-- **Conductor separate from CLI.** CLI talks to the DB directly via `AppContext`; only the server daemon and hosted mode run the conductor. Keeps short-lived CLI commands from racing HTTP server boot.
-
-- **Channels through arkd, not direct.** Agent `->` arkd `->` conductor gives one HTTP endpoint per compute target. Scales to N sessions on one host without N open conductor connections.
-
-- **ops-codegraph, not Axon.** Rust + tree-sitter, 33 languages, Bun FFI. Replaces the earlier Python-based indexing experiments. Auto-indexed remote by going through arkd.
+- **Tenant-scoped from day one.** Every entity has `tenant_id`. `forTenant(id)` is a child Awilix scope (in hosted mode) that re-uses the same repositories and stores. No separate "tenant-aware" code path.
 
 - **Cost modes (`api`, `subscription`, `free`).** Subscription runtimes (Claude Max) still record tokens for rate limit tracking but bill zero. Universal cost tracking without special-casing subscription billing.
