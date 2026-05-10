@@ -182,11 +182,12 @@ export async function handleAuthGoogleCallback(app: AppContext, req: Request): P
     return respondAuthFailure(cfg.session.cookieDomain, "login_failed");
   }
 
-  // Success: set session cookie, clear state cookie, redirect.
-  // TODO: support a return-to URL (e.g. ?next=/dashboard) so users land
-  // where they were trying to go before being bounced to login. For now
-  // we just go to /.
-  const headers = new Headers({ Location: "/" });
+  // Success: set session cookie, clear state cookie, redirect to dashboard.
+  // The dashboard URL is configurable so local dev (Vite on :5173) and prod
+  // (dashboard SPA colocated with daemon at /) both work without code edits.
+  // TODO: support a `?next=` return-to URL on top of this so deep-links
+  // survive the login bounce.
+  const headers = new Headers({ Location: cfg.session.dashboardUrl });
   headers.append(
     "Set-Cookie",
     setSessionCookie({

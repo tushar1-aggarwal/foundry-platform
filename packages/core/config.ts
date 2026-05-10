@@ -292,7 +292,11 @@ export function loadConfig(overrides: LoadConfigOptions = {}): ArkConfig {
         cookieDomain: null,
         cookieSecure: profile === "control-plane",
         refreshThresholdSec: 300,
-        allowedOrigins: profile === "local" ? ["http://localhost:8420"] : [],
+        allowedOrigins: profile === "local" ? ["http://localhost:8420", "http://localhost:5173"] : [],
+        // Local dev dashboard runs on Vite (:5173). Production colocates SPA
+        // with daemon under one host, so `/` is right. Override via
+        // ARK_AUTH_DASHBOARD_URL.
+        dashboardUrl: profile === "local" ? "http://localhost:5173/" : "/",
       },
     },
     features: { autoRebase: profile === "control-plane" },
@@ -356,6 +360,7 @@ function assemble(defaults: ProfileDefaults, overrides: LoadConfigOptions, profi
       cookieSecure: merged.auth.session?.cookieSecure ?? defaults.auth.session.cookieSecure,
       refreshThresholdSec: merged.auth.session?.refreshThresholdSec ?? defaults.auth.session.refreshThresholdSec,
       allowedOrigins: merged.auth.session?.allowedOrigins ?? defaults.auth.session.allowedOrigins,
+      dashboardUrl: merged.auth.session?.dashboardUrl ?? defaults.auth.session.dashboardUrl,
     },
   };
   const features: FeaturesConfig = {

@@ -224,6 +224,18 @@ export interface AuthSessionConfig {
    *   deployment must configure) / [] (test)
    */
   allowedOrigins: string[];
+  /**
+   * Where the OAuth callback redirects the browser after a successful
+   * Google login. In production deployments the dashboard SPA is served
+   * by the same host as the daemon, so the default `/` lands the user
+   * on the dashboard. In local development the dashboard runs on a
+   * separate Vite host (`http://localhost:5173`), so set this to
+   * `http://localhost:5173/` to land the user on the dashboard instead
+   * of the daemon's bare friendly-landing page.
+   * @envvar ARK_AUTH_DASHBOARD_URL
+   * @default "/"
+   */
+  dashboardUrl: string;
 }
 
 /** Blob storage -- uploads, exports, anything that can't live on one replica's disk. */

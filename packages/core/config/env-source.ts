@@ -195,6 +195,9 @@ export function readEnv(env: NodeJS.ProcessEnv = process.env): EnvOverrides {
   if (allowedOrigins !== undefined) {
     out.auth.session = { ...out.auth.session, allowedOrigins };
   }
+  if (env.ARK_AUTH_DASHBOARD_URL !== undefined && env.ARK_AUTH_DASHBOARD_URL !== "") {
+    out.auth.session = { ...out.auth.session, dashboardUrl: env.ARK_AUTH_DASHBOARD_URL };
+  }
 
   // Features
   const autoRebase = parseBool(env.ARK_AUTO_REBASE);

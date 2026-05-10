@@ -80,7 +80,11 @@ export async function localDefaults(): Promise<ProfileDefaults> {
         cookieDomain: null,
         cookieSecure: false,
         refreshThresholdSec: 300,
-        allowedOrigins: ["http://localhost:8420"],
+        allowedOrigins: ["http://localhost:8420", "http://localhost:5173"],
+        // Local dev: dashboard is on Vite (:5173); daemon is on :19400. After
+        // OAuth callback redirect to the dashboard, not the daemon's bare
+        // friendly-landing page. Override with ARK_AUTH_DASHBOARD_URL.
+        dashboardUrl: "http://localhost:5173/",
       },
     },
     features: { autoRebase: false },
@@ -113,6 +117,11 @@ export async function controlPlaneDefaults(): Promise<ProfileDefaults> {
         // Otherwise cookie-auth state-changing requests are all rejected.
         // Bearer auth still works.
         allowedOrigins: [],
+        // Production: dashboard SPA is colocated with the daemon on the same
+        // host, so `/` lands on the dashboard. Override with
+        // ARK_AUTH_DASHBOARD_URL when the dashboard lives on a different
+        // host.
+        dashboardUrl: "/",
       },
     },
     features: { autoRebase: true },
@@ -148,6 +157,7 @@ export async function testDefaults(): Promise<ProfileDefaults> {
         cookieSecure: false,
         refreshThresholdSec: 300,
         allowedOrigins: [],
+        dashboardUrl: "/",
       },
     },
     features: { autoRebase: false },
