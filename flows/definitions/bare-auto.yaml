@@ -1,0 +1,9 @@
+name: bare-auto
+description: "Single agent session, fire-and-forget -- session completes when the agent reports completed"
+# Auto-gated counterpart to `bare`. Use this for bot dispatches where the
+# agent self-reports completion and the human doesn't need to step in.
+# `bare` keeps gate:manual for interactive multi-turn use.
+stages:
+  - name: work
+    agent: worker
+    gate: auto
