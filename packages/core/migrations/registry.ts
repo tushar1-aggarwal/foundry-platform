@@ -39,6 +39,9 @@ import * as m016 from "./016_pty_cols.js";
 // sessions_auth table, api_keys.user_id (self-service), scoping_overrides
 // table for the org-override resolver, default tenant + default-team seed.
 import * as m017 from "./017_auth_phase1.js";
+// Migration 018: scoping_overrides backfill for installs that applied 017
+// before its scoping_overrides addition (#549). No-op on fresh installs.
+import * as m018 from "./018_scoping_overrides.js";
 
 export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m001.VERSION, name: m001.NAME, up: m001.up },
@@ -62,4 +65,5 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m015.VERSION, name: m015.NAME, up: m015.up },
   { version: m016.VERSION, name: m016.NAME, up: m016.up },
   { version: m017.VERSION, name: m017.NAME, up: m017.up },
+  { version: m018.VERSION, name: m018.NAME, up: m018.up },
 ];
