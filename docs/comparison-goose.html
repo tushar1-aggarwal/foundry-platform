@@ -58,7 +58,7 @@
       <p class="subtitle">How Ark differs from Block's Goose AI agent framework.</p>
 
       <h2>TL;DR</h2>
-      <p>Ark is an <strong>orchestration platform</strong>. Goose is a <strong>standalone agent runner</strong>. Ark manages many sessions across many compute targets in parallel, with DAG-based SDLC flows, a unified knowledge graph, universal cost tracking, a multi-tenant control plane, and a pluggable runtime layer that can drive Claude Code, Codex, Gemini CLI, or any subprocess. Goose runs a single coding agent at a time on your local machine using recipe-based configuration. Both are useful; they solve different problems at different scales.</p>
+      <p>Ark is an <strong>orchestration platform</strong>. Goose is a <strong>standalone agent runner</strong>. Ark manages many sessions across many compute targets in parallel, with DAG-based SDLC flows, universal cost tracking, a multi-tenant control plane, and a pluggable runtime layer that can drive Claude Code, Codex, Gemini CLI, or any subprocess. Goose runs a single coding agent at a time on your local machine using recipe-based configuration. Both are useful; they solve different problems at different scales.</p>
 
       <div class="callout info">
         <p>Goose is open source from Block (the company behind Square and Cash App). It is a good tool for individual developers. Ark is aimed at teams and platforms that need to orchestrate many agents across many compute targets with shared cost, knowledge, and policy state.</p>
@@ -111,7 +111,7 @@
       <p>Every compute target runs ArkD, a stateless HTTP server on port 19300. That means Ark does not need SSH or provider-specific transport to talk to remote compute. The conductor talks HTTP to ArkD; ArkD launches, observes, and reports back. Goose has no equivalent -- there is no remote compute to manage.</p>
 
       <h3>DI-based AppContext</h3>
-      <p>Ark is built around an Awilix dependency injection container. <code>AppContext</code> is the root: services, repositories, stores, and the knowledge graph all resolve from it. This enables two things:</p>
+      <p>Ark is built around an Awilix dependency injection container. <code>AppContext</code> is the root: services, repositories, and stores all resolve from it. This enables two things:</p>
       <ul>
         <li><strong>Tenant scoping.</strong> <code>app.forTenant(tenantId)</code> creates a scoped view of the same codebase for a different tenant. No globals, no leaks.</li>
         <li><strong>Testability.</strong> Every orchestration function takes <code>app: AppContext</code> as its first argument. Test isolation is a per-function concern, not a global state problem.</li>
@@ -160,7 +160,6 @@
         <li>You are a team or an enterprise hosting agents for many users.</li>
         <li>You need multi-tenant isolation, API keys, per-tenant policies, and cost caps.</li>
         <li>You want universal cost tracking across Claude, Codex, Gemini, and subscription plans.</li>
-        <li>You want a knowledge graph that spans code + sessions + memories.</li>
         <li>You want a Web dashboard and a Desktop app for the same control plane.</li>
         <li>You prefer a Bun runtime with no Python dependency.</li>
       </ul>

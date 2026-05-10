@@ -63,8 +63,8 @@
       <table>
         <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
         <tbody>
-          <tr><td><code>ARK_CONDUCTOR_PORT</code></td><td><code>19100</code></td><td>Conductor HTTP server port</td></tr>
-          <tr><td><code>ARK_CONDUCTOR_URL</code></td><td><code>http://localhost:19100</code></td><td>Conductor URL (fallback if arkd unavailable)</td></tr>
+          <tr><td><code>ARK_CONDUCTOR_PORT</code></td><td><code>19400</code></td><td>Conductor HTTP server port</td></tr>
+          <tr><td><code>ARK_CONDUCTOR_URL</code></td><td><code>http://localhost:19400</code></td><td>Conductor URL (fallback if arkd unavailable)</td></tr>
           <tr><td><code>ARK_ARKD_URL</code></td><td><code>http://localhost:19300</code></td><td>ArkD URL -- channel reports go here first</td></tr>
           <tr><td><code>ARK_ARKD_PORT</code></td><td><code>19300</code></td><td>ArkD daemon listen port</td></tr>
           <tr><td><code>ARK_ARKD_TOKEN</code></td><td>-</td><td>Bearer token for ArkD auth (when set, all requests must include it)</td></tr>
@@ -182,7 +182,7 @@
       <table>
         <thead><tr><th>Service</th><th>Port</th><th>Notes</th></tr></thead>
         <tbody>
-          <tr><td>Conductor</td><td><code>19100</code></td><td>Hardcoded. HTTP server for hook status and channel relay.</td></tr>
+          <tr><td>Conductor</td><td><code>19400</code></td><td>Default. HTTP server for hook status and channel relay.</td></tr>
           <tr><td>Channel</td><td><code>19200 + offset</code></td><td>Deterministic per-session: <code>19200 + (parseInt(sessionId, 16) % 10000)</code></td></tr>
           <tr><td>ArkD</td><td><code>19300</code></td><td>Default. Universal agent daemon on every compute target.</td></tr>
           <tr><td>LLM Router</td><td><code>8430</code></td><td>Default. OpenAI-compatible proxy.</td></tr>
@@ -192,7 +192,7 @@
         </tbody>
       </table>
       <div class="callout warn">
-        <strong>Port collisions:</strong> Tests share ports 19100, 19200, and 19300. This is why tests must always run sequentially via <code>make test</code> -- never in parallel.
+        <strong>Port collisions:</strong> Tests share ports 19200, 19300, and 19400. This is why tests must always run sequentially via <code>make test</code> -- never in parallel.
       </div>
 
       <h2>Three-Tier Resource Resolution</h2>

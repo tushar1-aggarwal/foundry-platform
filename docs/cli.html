@@ -687,7 +687,7 @@
           <tr><th>Option</th><th>Default</th><th>Description</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>-p, --port</code></td><td><code>19100</code></td><td>Port for the conductor HTTP server</td></tr>
+          <tr><td><code>-p, --port</code></td><td><code>19400</code></td><td>Port for the conductor HTTP server</td></tr>
         </tbody>
       </table>
 
@@ -723,13 +723,13 @@
         <li>Process execution with sandbox</li>
         <li>System metrics (CPU / memory / disk / uptime)</li>
         <li>Port probing</li>
-        <li>Channel relay (agent report -&gt; arkd -&gt; conductor at :19100)</li>
+        <li>Channel relay (agent report -&gt; arkd -&gt; conductor at :19400)</li>
         <li>Docker container ops (list / exec)</li>
         <li>Codegraph indexing at <code>POST /codegraph/index</code> -- runs <code>codegraph build</code> locally, parses <code>.codegraph/graph.db</code>, returns nodes/edges to the conductor</li>
         <li>Optional bearer-token auth via the <code>ARK_ARKD_TOKEN</code> env var</li>
       </ul>
       <pre><code><span class="prompt">$</span> ark arkd
-<span class="prompt">$</span> ark arkd --port 19400 --conductor-url http://remote:19100</code></pre>
+<span class="prompt">$</span> ark arkd --port 19300 --conductor-url http://remote:19400</code></pre>
 
       <table>
         <thead>
@@ -738,7 +738,7 @@
         <tbody>
           <tr><td><code>-p, --port</code></td><td><code>19300</code></td><td>ArkD listen port (env: <code>ARK_ARKD_PORT</code>)</td></tr>
           <tr><td><code>--hostname</code></td><td><code>0.0.0.0</code></td><td>Bind address</td></tr>
-          <tr><td><code>--conductor-url</code></td><td><code>http://localhost:19100</code></td><td>Conductor URL for channel relay</td></tr>
+          <tr><td><code>--conductor-url</code></td><td><code>http://localhost:19400</code></td><td>Conductor URL for channel relay</td></tr>
         </tbody>
       </table>
       <p>Override the URL other components see with <code>ARK_ARKD_URL</code> (default <code>http://localhost:19300</code>). Local providers target <code>http://localhost:19300</code>, remote providers target <code>http://&lt;compute-ip&gt;:19300</code>. Docker/devcontainer images bake arkd in so it starts on container boot; EC2 installs it via cloud-init as a systemd service; K8s runs it as a sidecar container in the agent pod.</p>
@@ -748,14 +748,14 @@
       <p>Bridge a Claude Code MCP client over stdio to a pooled MCP server reachable at a Unix domain socket. When MCP socket pooling is enabled (<code>mcp_pool.enabled: true</code> in <code>~/.ark/config.yaml</code>), each pooled server runs as a single long-lived process and exposes a socket at <code>/tmp/ark-mcp-&lt;name&gt;.sock</code>. Session <code>.mcp.json</code> entries reference the pool via:</p>
       <pre><code>{
   "mcpServers": {
-    "knowledge-graph": {
+    "linear": {
       "command": "ark",
-      "args": ["mcp-proxy", "/tmp/ark-mcp-knowledge-graph.sock"]
+      "args": ["mcp-proxy", "/tmp/ark-mcp-linear.sock"]
     }
   }
 }</code></pre>
       <p>This is normally wired up automatically by Ark's MCP pool manager -- you only call it by hand when testing a custom <code>.mcp.json</code>. Pooling cuts memory roughly 85-90% versus the default one-process-per-session-per-MCP model.</p>
-      <pre><code><span class="prompt">$</span> ark mcp-proxy /tmp/ark-mcp-knowledge-graph.sock</code></pre>
+      <pre><code><span class="prompt">$</span> ark mcp-proxy /tmp/ark-mcp-linear.sock</code></pre>
 
       <!-- ── ark worktree ────────────────────────────────────────────────── -->
       <h2>ark worktree</h2>
@@ -912,22 +912,7 @@
         </tbody>
       </table>
 
-      <!-- ── ark server ──────────────────────────────────────────────────── -->
-      <h2>ark server</h2>
-      <p>Start the JSON-RPC server for programmatic access to Ark.</p>
-      <pre><code><span class="prompt">$</span> ark server start --stdio       <span class="yaml-comment"># JSONL on stdin/stdout</span>
-<span class="prompt">$</span> ark server start --ws --port 19400  <span class="yaml-comment"># WebSocket transport</span></code></pre>
-
-      <table>
-        <thead>
-          <tr><th>Option</th><th>Default</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>--stdio</code></td><td>--</td><td>Use stdio transport (JSONL)</td></tr>
-          <tr><td><code>--ws</code></td><td>--</td><td>Use WebSocket transport</td></tr>
-          <tr><td><code>-p, --port</code></td><td><code>19400</code></td><td>WebSocket port</td></tr>
-        </tbody>
-      </table>
+      <!-- ark server has been retired; the JSON-RPC surface is now part of `ark conductor`. -->
 
       <!-- ── ark openapi ─────────────────────────────────────────────────── -->
       <h2>ark openapi</h2>

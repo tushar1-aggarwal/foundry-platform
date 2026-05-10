@@ -119,7 +119,7 @@
       <p>Check that the channel relay chain is intact:</p>
       <ol>
         <li>ArkD is running: <code>curl http://localhost:19300/health</code></li>
-        <li>Conductor is running: <code>curl http://localhost:19100/health</code> (only if using the server daemon, web UI, or desktop app)</li>
+        <li>Conductor is running: <code>curl http://localhost:19400/health</code> (only if using the server daemon, web UI, or desktop app)</li>
         <li>Channel port is reachable. The port is derived from the session ID.</li>
       </ol>
 
@@ -196,8 +196,8 @@
       <p>Ark uses Claude Code hooks for agent status detection. If status is not updating:</p>
       <ol>
         <li>Check that <code>.claude/settings.local.json</code> exists in the session's working directory</li>
-        <li>Verify the conductor is running and reachable at <code>http://localhost:19100</code></li>
-        <li>Check the hook endpoint: <code>curl http://localhost:19100/hooks/status</code></li>
+        <li>Verify the conductor is running and reachable at <code>http://localhost:19400</code></li>
+        <li>Check the hook endpoint: <code>curl http://localhost:19400/hooks/status</code></li>
       </ol>
 
       <h3>Hooks config not cleaned up</h3>

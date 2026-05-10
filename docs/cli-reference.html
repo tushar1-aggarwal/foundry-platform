@@ -143,16 +143,12 @@
 <td>Search across all Claude conversations</td>
 </tr>
 <tr>
-<td><a href="#ark-memory"><code>ark memory</code></a></td>
-<td>Manage cross-session memory (backed by knowledge graph)</td>
-</tr>
-<tr>
 <td><a href="#ark-profile"><code>ark profile</code></a></td>
 <td>Manage profiles</td>
 </tr>
 <tr>
 <td><a href="#ark-conductor"><code>ark conductor</code></a></td>
-<td>Conductor operations</td>
+<td>Conductor operations and arkd lifecycle</td>
 </tr>
 <tr>
 <td><a href="#ark-router"><code>ark router</code></a></td>
@@ -177,22 +173,6 @@
 <tr>
 <td><a href="#ark-user"><code>ark user</code></a></td>
 <td>Manage user identities</td>
-</tr>
-<tr>
-<td><a href="#ark-knowledge"><code>ark knowledge</code></a></td>
-<td>Knowledge graph - search, index, remember, export</td>
-</tr>
-<tr>
-<td><a href="#ark-code-intel"><code>ark code-intel</code></a></td>
-<td>Unified code-intelligence store (search, index, repos, runs)</td>
-</tr>
-<tr>
-<td><a href="#ark-workspace"><code>ark workspace</code></a></td>
-<td>Manage workspaces (tenant -&gt; workspace -&gt; repo)</td>
-</tr>
-<tr>
-<td><a href="#ark-eval"><code>ark eval</code></a></td>
-<td>Agent performance evaluation</td>
 </tr>
 <tr>
 <td><a href="#ark-dashboard"><code>ark dashboard</code></a></td>
@@ -265,10 +245,6 @@
 <tr>
 <td><a href="#ark-mcp-proxy"><code>ark mcp-proxy</code></a></td>
 <td>Bridge stdin/stdout to a pooled MCP socket (internal)</td>
-</tr>
-<tr>
-<td><a href="#ark-repo-map"><code>ark repo-map</code></a></td>
-<td>Generate repository structure map</td>
 </tr>
 <tr>
 <td><a href="#ark-init"><code>ark init</code></a></td>
@@ -356,11 +332,6 @@
 <td><code>-a, --attach</code></td>
 <td></td>
 <td>Attach to the session&#39;s tmux pane after starting</td>
-</tr>
-<tr>
-<td><code>--claude-session &lt;id&gt;</code></td>
-<td></td>
-<td>Create from an existing Claude Code session (use &#39;ark claude list&#39; to find IDs)</td>
 </tr>
 <tr>
 <td><code>--max-budget &lt;usd&gt;</code></td>
@@ -1236,19 +1207,14 @@
 </tr>
 </thead>
 <tbody><tr>
-<td><code>--compute &lt;kind&gt;</code></td>
+<td><code>--kind &lt;kind&gt;</code></td>
 <td></td>
 <td>Compute kind (local, firecracker, ec2, k8s, k8s-kata)</td>
 </tr>
 <tr>
 <td><code>--isolation &lt;kind&gt;</code></td>
 <td></td>
-<td>Isolation kind (direct, docker, compose, devcontainer, firecracker-in-container)</td>
-</tr>
-<tr>
-<td><code>--provider &lt;type&gt;</code></td>
-<td></td>
-<td>[deprecated] Provider type (local, docker, ec2, k8s, k8s-kata). Use --compute + --isolation.</td>
+<td>Isolation kind (direct, docker, compose, devcontainer)</td>
 </tr>
 <tr>
 <td><code>--template</code></td>
@@ -1261,9 +1227,14 @@
 <td>Skip interactive prompts (fail if required fields are missing)</td>
 </tr>
 <tr>
+<td><code>--from-template &lt;name&gt;</code></td>
+<td></td>
+<td>Use a compute template as defaults</td>
+</tr>
+<tr>
 <td><code>--image &lt;image&gt;</code></td>
 <td></td>
-<td>Docker image (default: ubuntu:22.04)</td>
+<td>Container image (docker isolation default: ubuntu:22.04; k8s pod image)</td>
 </tr>
 <tr>
 <td><code>--devcontainer</code></td>
@@ -1308,12 +1279,12 @@
 <tr>
 <td><code>--context &lt;name&gt;</code></td>
 <td></td>
-<td>Kubeconfig context (cluster) -- required</td>
+<td>Kubeconfig context (cluster) -- required for k8s</td>
 </tr>
 <tr>
 <td><code>--namespace &lt;ns&gt;</code></td>
 <td></td>
-<td>K8s namespace -- required</td>
+<td>K8s namespace -- required for k8s</td>
 </tr>
 <tr>
 <td><code>--kubeconfig &lt;path&gt;</code></td>
@@ -1339,11 +1310,6 @@
 <td><code>--memory &lt;amt&gt;</code></td>
 <td></td>
 <td>Memory request/limit (e.g. 4Gi)</td>
-</tr>
-<tr>
-<td><code>--from-template &lt;name&gt;</code></td>
-<td></td>
-<td>Use a compute template as defaults</td>
 </tr>
 </tbody></table>
 <h3><code>ark compute provision</code></h3>
@@ -2659,11 +2625,6 @@
 <td></td>
 <td>Rebuild transcript search index before searching</td>
 </tr>
-<tr>
-<td><code>--hybrid</code></td>
-<td></td>
-<td>Use hybrid search (memory + knowledge + transcripts with LLM re-ranking)</td>
-</tr>
 </tbody></table>
 <h2><code>ark index</code></h2>
 <p>Build or rebuild the transcript search index</p>
@@ -2704,149 +2665,6 @@
 <td><code>--days &lt;n&gt;</code></td>
 <td><code>&quot;90&quot;</code></td>
 <td>Recent days to search</td>
-</tr>
-</tbody></table>
-<h2><code>ark memory</code></h2>
-<p>Manage cross-session memory (backed by knowledge graph)</p>
-<p><strong>Synopsis:</strong> <code>ark memory</code></p>
-<h3><code>ark memory list</code></h3>
-<p>List stored memories</p>
-<p><strong>Synopsis:</strong> <code>ark memory list [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-s, --scope &lt;scope&gt;</code></td>
-<td></td>
-<td>Filter by scope</td>
-</tr>
-</tbody></table>
-<h3><code>ark memory recall</code></h3>
-<p>Recall memories relevant to a query</p>
-<p><strong>Synopsis:</strong> <code>ark memory recall [options] &lt;query&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>query</code></td>
-<td>yes</td>
-<td>Search query</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-s, --scope &lt;scope&gt;</code></td>
-<td></td>
-<td>Filter by scope</td>
-</tr>
-<tr>
-<td><code>-n, --limit &lt;n&gt;</code></td>
-<td><code>&quot;10&quot;</code></td>
-<td>Max results</td>
-</tr>
-</tbody></table>
-<h3><code>ark memory forget</code></h3>
-<p>Forget a specific memory</p>
-<p><strong>Synopsis:</strong> <code>ark memory forget &lt;id&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>id</code></td>
-<td>yes</td>
-<td>Memory ID</td>
-</tr>
-</tbody></table>
-<h3><code>ark memory add</code></h3>
-<p>Store a new memory</p>
-<p><strong>Synopsis:</strong> <code>ark memory add [options] &lt;content&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>content</code></td>
-<td>yes</td>
-<td>Memory content</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-t, --tags &lt;tags&gt;</code></td>
-<td></td>
-<td>Comma-separated tags</td>
-</tr>
-<tr>
-<td><code>-s, --scope &lt;scope&gt;</code></td>
-<td></td>
-<td>Scope (default: global)</td>
-</tr>
-<tr>
-<td><code>-i, --importance &lt;n&gt;</code></td>
-<td></td>
-<td>Importance 0-1 (default: 0.5)</td>
-</tr>
-</tbody></table>
-<h3><code>ark memory clear</code></h3>
-<p>Clear all memories in a scope</p>
-<p><strong>Synopsis:</strong> <code>ark memory clear [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-s, --scope &lt;scope&gt;</code></td>
-<td></td>
-<td>Scope to clear (omit for ALL)</td>
-</tr>
-<tr>
-<td><code>--force</code></td>
-<td></td>
-<td>Skip confirmation</td>
 </tr>
 </tbody></table>
 <h2><code>ark profile</code></h2>
@@ -2897,7 +2715,7 @@
 </tr>
 </tbody></table>
 <h2><code>ark conductor</code></h2>
-<p>Conductor operations and arkd lifecycle management</p>
+<p>Conductor operations and arkd lifecycle</p>
 <p><strong>Synopsis:</strong> <code>ark conductor</code></p>
 <h3><code>ark conductor start</code></h3>
 <p>Start the arkd agent daemon</p>
@@ -4011,747 +3829,6 @@
 <td>User id or email</td>
 </tr>
 </tbody></table>
-<h2><code>ark knowledge</code></h2>
-<p>Knowledge graph - search, index, remember, export</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge</code></p>
-<h3><code>ark knowledge search</code></h3>
-<p>Search across all knowledge (files, memories, sessions, learnings)</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge search [options] &lt;query&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>query</code></td>
-<td>yes</td>
-<td>Search query</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-t, --types &lt;types&gt;</code></td>
-<td></td>
-<td>Comma-separated node types to filter (file,symbol,session,memory,learning,skill)</td>
-</tr>
-<tr>
-<td><code>-n, --limit &lt;n&gt;</code></td>
-<td><code>&quot;20&quot;</code></td>
-<td>Max results</td>
-</tr>
-</tbody></table>
-<h3><code>ark knowledge index</code></h3>
-<p>Index/re-index codebase into the knowledge graph (runs on daemon)</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge index [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-r, --repo &lt;path&gt;</code></td>
-<td></td>
-<td>Repository path (default: cwd)</td>
-</tr>
-<tr>
-<td><code>--incremental</code></td>
-<td></td>
-<td>Only re-index changed files</td>
-</tr>
-</tbody></table>
-<h3><code>ark knowledge stats</code></h3>
-<p>Show node/edge counts by type</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge stats</code></p>
-<h3><code>ark knowledge remember</code></h3>
-<p>Store a new memory in the knowledge graph</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge remember [options] &lt;content&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>content</code></td>
-<td>yes</td>
-<td>Memory content</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-t, --tags &lt;tags&gt;</code></td>
-<td></td>
-<td>Comma-separated tags</td>
-</tr>
-<tr>
-<td><code>-i, --importance &lt;n&gt;</code></td>
-<td></td>
-<td>Importance 0-1 (default: 0.5)</td>
-</tr>
-</tbody></table>
-<h3><code>ark knowledge recall</code></h3>
-<p>Search memories and learnings</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge recall [options] &lt;query&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>query</code></td>
-<td>yes</td>
-<td>Search query</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-n, --limit &lt;n&gt;</code></td>
-<td><code>&quot;10&quot;</code></td>
-<td>Max results</td>
-</tr>
-</tbody></table>
-<h3><code>ark knowledge export</code></h3>
-<p>Export knowledge as markdown files (daemon-side filesystem)</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge export [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-d, --dir &lt;path&gt;</code></td>
-<td><code>&quot;./knowledge-export&quot;</code></td>
-<td>Output directory</td>
-</tr>
-<tr>
-<td><code>-t, --types &lt;types&gt;</code></td>
-<td></td>
-<td>Comma-separated types to export (default: memory,learning)</td>
-</tr>
-</tbody></table>
-<h3><code>ark knowledge import</code></h3>
-<p>Import knowledge from markdown files (daemon-side filesystem)</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge import [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-d, --dir &lt;path&gt;</code></td>
-<td><code>&quot;./knowledge-export&quot;</code></td>
-<td>Input directory</td>
-</tr>
-</tbody></table>
-<h3><code>ark knowledge ingest</code></h3>
-<p>Ingest a directory into the knowledge graph (indexes files and symbols)</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge ingest [options] &lt;path&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>path</code></td>
-<td>yes</td>
-<td>Directory to ingest</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--incremental</code></td>
-<td></td>
-<td>Only re-index changed files</td>
-</tr>
-</tbody></table>
-<h3><code>ark knowledge codebase</code></h3>
-<p>codebase-memory-mcp (vendored code intelligence engine)</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge codebase</code></p>
-<h4><code>ark knowledge codebase status</code></h4>
-<p>Show codebase-memory-mcp installation status and version</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge codebase status</code></p>
-<h4><code>ark knowledge codebase tools</code></h4>
-<p>List the 14 MCP tools exposed by codebase-memory-mcp</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge codebase tools</code></p>
-<h4><code>ark knowledge codebase reindex</code></h4>
-<p>Run <code>index_repository</code> against a path via the caller&#39;s vendored binary</p>
-<p><strong>Synopsis:</strong> <code>ark knowledge codebase reindex [path]</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>path</code></td>
-<td>no</td>
-<td>Repository path (default: cwd)</td>
-</tr>
-</tbody></table>
-<h2><code>ark code-intel</code></h2>
-<p>Unified code-intelligence store (search, index, repos, runs)</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel</code></p>
-<h3><code>ark code-intel db</code></h3>
-<p>Schema migrations + status</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel db</code></p>
-<h4><code>ark code-intel db migrate</code></h4>
-<p>Apply any pending code-intel migrations</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel db migrate [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--to &lt;version&gt;</code></td>
-<td></td>
-<td>Target version (default: latest)</td>
-</tr>
-</tbody></table>
-<h4><code>ark code-intel db status</code></h4>
-<p>Print current schema version + pending migrations</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel db status</code></p>
-<h4><code>ark code-intel db reset</code></h4>
-<p>Drop every code-intel table (DEV ONLY).</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel db reset [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--yes</code></td>
-<td></td>
-<td>Confirm destructive operation</td>
-</tr>
-</tbody></table>
-<h3><code>ark code-intel repo</code></h3>
-<p>Manage indexed repositories</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel repo</code></p>
-<h4><code>ark code-intel repo add</code></h4>
-<p>Register a repo for indexing</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel repo add [options] &lt;url-or-path&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>url-or-path</code></td>
-<td>yes</td>
-<td>Repo URL or local path</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-<tr>
-<td><code>--name &lt;name&gt;</code></td>
-<td></td>
-<td>Display name (default: derived)</td>
-</tr>
-<tr>
-<td><code>--default-branch &lt;branch&gt;</code></td>
-<td><code>&quot;main&quot;</code></td>
-<td>Default branch</td>
-</tr>
-</tbody></table>
-<h4><code>ark code-intel repo list</code></h4>
-<p>List repos for a tenant</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel repo list [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-</tbody></table>
-<h3><code>ark code-intel reindex</code></h3>
-<p>Run extractors against a repo</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel reindex [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-<tr>
-<td><code>--repo &lt;id-or-name&gt;</code></td>
-<td></td>
-<td>Repo id or name (default: only one if unambiguous)</td>
-</tr>
-<tr>
-<td><code>--extractors &lt;names&gt;</code></td>
-<td></td>
-<td>Comma-separated extractor names (default: all)</td>
-</tr>
-</tbody></table>
-<h3><code>ark code-intel search</code></h3>
-<p>FTS over chunks (file content + symbols)</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel search [options] &lt;query&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>query</code></td>
-<td>yes</td>
-<td>Search query</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-<tr>
-<td><code>-n, --limit &lt;n&gt;</code></td>
-<td><code>&quot;20&quot;</code></td>
-<td>Max results</td>
-</tr>
-</tbody></table>
-<h3><code>ark code-intel get-context</code></h3>
-<p>Assemble a context snapshot for a file or symbol</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel get-context [options] &lt;subject&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>subject</code></td>
-<td>yes</td>
-<td>File path, file id, or symbol name</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-<tr>
-<td><code>--repo &lt;id-or-name&gt;</code></td>
-<td></td>
-<td>Repo id or name (helps path lookup)</td>
-</tr>
-</tbody></table>
-<h3><code>ark code-intel doctor</code></h3>
-<p>Report VendorResolver + binary health (caller-local)</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel doctor</code></p>
-<h3><code>ark code-intel health</code></h3>
-<p>High-level store + deployment health</p>
-<p><strong>Synopsis:</strong> <code>ark code-intel health</code></p>
-<h2><code>ark workspace</code></h2>
-<p>Manage workspaces (tenant -&gt; workspace -&gt; repo)</p>
-<p><strong>Synopsis:</strong> <code>ark workspace</code></p>
-<h3><code>ark workspace create</code></h3>
-<p>Create a new workspace</p>
-<p><strong>Synopsis:</strong> <code>ark workspace create [options] &lt;slug&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>slug</code></td>
-<td>yes</td>
-<td>Workspace slug (unique per tenant)</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-<tr>
-<td><code>--name &lt;name&gt;</code></td>
-<td></td>
-<td>Display name (default: derived from slug)</td>
-</tr>
-<tr>
-<td><code>--description &lt;text&gt;</code></td>
-<td></td>
-<td>Free-form description</td>
-</tr>
-</tbody></table>
-<h3><code>ark workspace list</code></h3>
-<p>List workspaces for a tenant</p>
-<p><strong>Synopsis:</strong> <code>ark workspace list [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-<tr>
-<td><code>--format &lt;fmt&gt;</code></td>
-<td><code>&quot;text&quot;</code></td>
-<td>Output format: yaml</td>
-</tr>
-</tbody></table>
-<h3><code>ark workspace show</code></h3>
-<p>Show a workspace + attached repos</p>
-<p><strong>Synopsis:</strong> <code>ark workspace show [options] &lt;slug&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>slug</code></td>
-<td>yes</td>
-<td>Workspace slug</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-<tr>
-<td><code>--format &lt;fmt&gt;</code></td>
-<td><code>&quot;text&quot;</code></td>
-<td>Output format: yaml</td>
-</tr>
-</tbody></table>
-<h3><code>ark workspace use</code></h3>
-<p>Set the active workspace (persisted to the caller&#39;s ~/.ark/config.yaml)</p>
-<p><strong>Synopsis:</strong> <code>ark workspace use [options] &lt;slug&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>slug</code></td>
-<td>yes</td>
-<td>Workspace slug</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-</tbody></table>
-<h3><code>ark workspace add-repo</code></h3>
-<p>Attach a repo to a workspace (creates the repo if it&#39;s a new path/URL)</p>
-<p><strong>Synopsis:</strong> <code>ark workspace add-repo [options] &lt;workspace-slug&gt; &lt;repo-path-or-url&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>workspace-slug</code></td>
-<td>yes</td>
-<td>Workspace slug</td>
-</tr>
-<tr>
-<td><code>repo-path-or-url</code></td>
-<td>yes</td>
-<td>Repo path, URL, or existing repo id / name</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-</tbody></table>
-<h3><code>ark workspace remove-repo</code></h3>
-<p>Detach a repo from a workspace (repo itself is not deleted)</p>
-<p><strong>Synopsis:</strong> <code>ark workspace remove-repo [options] &lt;workspace-slug&gt; &lt;repo&gt;</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>workspace-slug</code></td>
-<td>yes</td>
-<td>Workspace slug</td>
-</tr>
-<tr>
-<td><code>repo</code></td>
-<td>yes</td>
-<td>Repo id, name, or URL</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--tenant &lt;slug&gt;</code></td>
-<td></td>
-<td>Tenant slug (default: caller&#39;s tenant)</td>
-</tr>
-</tbody></table>
-<h2><code>ark eval</code></h2>
-<p>Agent performance evaluation</p>
-<p><strong>Synopsis:</strong> <code>ark eval</code></p>
-<h3><code>ark eval stats</code></h3>
-<p>Show agent performance stats</p>
-<p><strong>Synopsis:</strong> <code>ark eval stats [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-a, --agent &lt;role&gt;</code></td>
-<td></td>
-<td>Agent role to filter by</td>
-</tr>
-</tbody></table>
-<h3><code>ark eval drift</code></h3>
-<p>Check for performance drift</p>
-<p><strong>Synopsis:</strong> <code>ark eval drift [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-a, --agent &lt;role&gt;</code></td>
-<td></td>
-<td>Agent role to check</td>
-</tr>
-<tr>
-<td><code>-d, --days &lt;n&gt;</code></td>
-<td><code>&quot;7&quot;</code></td>
-<td>Recent window in days</td>
-</tr>
-</tbody></table>
-<h3><code>ark eval list</code></h3>
-<p>List recent eval results</p>
-<p><strong>Synopsis:</strong> <code>ark eval list [options]</code></p>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>-a, --agent &lt;role&gt;</code></td>
-<td></td>
-<td>Agent role to filter by</td>
-</tr>
-<tr>
-<td><code>-n, --limit &lt;n&gt;</code></td>
-<td><code>&quot;20&quot;</code></td>
-<td>Max results</td>
-</tr>
-</tbody></table>
 <h2><code>ark dashboard</code></h2>
 <p>Show fleet status, costs, and recent activity</p>
 <p><strong>Synopsis:</strong> <code>ark dashboard [options]</code></p>
@@ -5208,49 +4285,6 @@
 <td><code>socket-path</code></td>
 <td>yes</td>
 <td></td>
-</tr>
-</tbody></table>
-<h2><code>ark repo-map</code></h2>
-<p>Generate repository structure map</p>
-<p><strong>Synopsis:</strong> <code>ark repo-map [options] [dir]</code></p>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Required</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>dir</code></td>
-<td>no</td>
-<td>Directory to scan</td>
-</tr>
-</tbody></table>
-<p><strong>Options:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--max-files &lt;n&gt;</code></td>
-<td><code>&quot;500&quot;</code></td>
-<td>Max files to include</td>
-</tr>
-<tr>
-<td><code>--max-depth &lt;n&gt;</code></td>
-<td><code>&quot;10&quot;</code></td>
-<td>Max directory depth</td>
-</tr>
-<tr>
-<td><code>--json</code></td>
-<td></td>
-<td>Output as JSON instead of text</td>
 </tr>
 </tbody></table>
 <h2><code>ark init</code></h2>

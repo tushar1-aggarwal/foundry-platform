@@ -72,9 +72,8 @@
         <li><strong>Process execution</strong> -- run commands via <code>exec</code>, optionally inside a sandbox.</li>
         <li><strong>System metrics</strong> -- CPU, memory, disk, uptime. Used by the dashboard and compute health checks.</li>
         <li><strong>Port probing</strong> -- check which ports are listening on the target.</li>
-        <li><strong>Channel relay</strong> -- accept channel reports from agents and forward them to the conductor at <code>http://&lt;conductor&gt;:19100</code>.</li>
+        <li><strong>Channel relay</strong> -- accept channel reports from agents and forward them to the conductor at <code>http://&lt;conductor&gt;:19400</code>.</li>
         <li><strong>Docker container ops</strong> -- list and exec into Docker containers on the target (used by docker-in-docker compute modes).</li>
-        <li><strong>Codegraph indexing</strong> -- POST <code>/codegraph/index</code> runs <code>codegraph build</code> locally on the target, reads <code>.codegraph/graph.db</code>, and returns nodes and edges to the conductor.</li>
         <li><strong>Bearer token auth</strong> -- when <code>ARK_ARKD_TOKEN</code> is set, all requests must include a matching <code>Authorization: Bearer &lt;token&gt;</code> header.</li>
       </ul>
 
@@ -93,42 +92,28 @@
       <ol>
         <li>The session agent posts reports to the <code>ark-channel</code> MCP server, which runs inside the agent process over stdio.</li>
         <li><code>ark-channel</code> forwards the report to arkd via HTTP on port 19300.</li>
-        <li>ArkD relays the report to the conductor at <code>http://&lt;conductor&gt;:19100</code>.</li>
+        <li>ArkD relays the report to the conductor at <code>http://&lt;conductor&gt;:19400</code>.</li>
       </ol>
       <p>This is why every compute target runs arkd. It gives the control plane a single HTTP endpoint per target (port 19300) regardless of how many sessions are active on it. Direct agent-to-conductor connections would not work through NAT, firewalls, or cross-cloud routing.</p>
       <div class="callout info">
         <p>Human steering (from the Web UI or Desktop app) flows in the reverse direction: conductor -&gt; arkd -&gt; ark-channel -&gt; agent MCP notification.</p>
       </div>
 
-      <h2>Codegraph endpoint</h2>
-      <p>The <code>/codegraph/index</code> endpoint powers the auto-index-on-dispatch flow for remote compute. When a session is dispatched to a remote target, the control plane calls this endpoint to build a knowledge graph on the remote machine before the agent starts working.</p>
-      <p><strong>Request body:</strong></p>
-      <pre><code><span class="yaml-key">repoPath</span>: <span class="yaml-value">string</span>
-<span class="yaml-key">incremental</span>: <span class="yaml-value">boolean (optional)</span></code></pre>
-      <p><strong>What it does:</strong></p>
-      <ol>
-        <li>Runs <code>codegraph build</code> in the repo path on the remote target.</li>
-        <li>Reads the resulting <code>.codegraph/graph.db</code> via <code>bun:sqlite</code>.</li>
-        <li>Returns <code>{ ok: true, nodes: [...], edges: [...], files: N, symbols: N }</code> to the conductor.</li>
-        <li>The conductor ingests the nodes and edges into the tenant-scoped <code>knowledge</code> and <code>knowledge_edges</code> tables.</li>
-      </ol>
-      <p>Remote indexing always runs this endpoint regardless of the <code>knowledge.auto_index</code> config flag. The control plane needs centralized knowledge for all workers so downstream agents can query a consistent graph. Local mode honors the config flag.</p>
-
       <h2>Starting ArkD</h2>
-      <pre><code><span class="comment"># default port 19300, default conductor http://localhost:19100</span>
+      <pre><code><span class="comment"># default port 19300, default conductor http://localhost:19400</span>
 $ ark arkd
 
 <span class="comment"># custom port</span>
 $ ark arkd --port 8080
 
 <span class="comment"># set conductor URL (useful when running in a container or remote host)</span>
-$ ark arkd --conductor-url http://conductor.local:19100</code></pre>
+$ ark arkd --conductor-url http://conductor.local:19400</code></pre>
       <p><strong>Environment variables:</strong></p>
       <ul>
         <li><code>ARK_ARKD_PORT</code> -- listen port (default <code>19300</code>)</li>
         <li><code>ARK_ARKD_URL</code> -- arkd base URL used by channel.ts and executors (default <code>http://localhost:19300</code>)</li>
         <li><code>ARK_ARKD_TOKEN</code> -- bearer token required on all incoming requests when set</li>
-        <li><code>ARK_CONDUCTOR_URL</code> -- conductor URL arkd relays to (default <code>http://localhost:19100</code>)</li>
+        <li><code>ARK_CONDUCTOR_URL</code> -- conductor URL arkd relays to (default <code>http://localhost:19400</code>)</li>
       </ul>
 
       <h2>HTTP API reference</h2>
@@ -158,7 +143,7 @@ $ ark arkd --conductor-url http://conductor.local:19100</code></pre>
           <tr><th>Service</th><th>Port</th><th>Notes</th></tr>
         </thead>
         <tbody>
-          <tr><td>Conductor</td><td><code>19100</code></td><td>Hardcoded. HTTP server for hook status and channel relay.</td></tr>
+          <tr><td>Conductor</td><td><code>19400</code></td><td>Default. HTTP server for hook status and channel relay.</td></tr>
           <tr><td>ArkD</td><td><code>19300</code></td><td>Default. Universal agent daemon on every compute target.</td></tr>
           <tr><td>Channel</td><td><code>19200 + (hash(sessionId) % 10000)</code></td><td>Deterministic per-session channel port.</td></tr>
           <tr><td>Router</td><td><code>8430</code></td><td>Default. LLM Router OpenAI-compatible proxy.</td></tr>

@@ -247,7 +247,7 @@
       <p>Set <code>DATABASE_URL</code> for PostgreSQL (hosted mode). Set <code>REDIS_URL</code> for multi-instance SSE. Both default to local (SQLite, in-memory bus).</p>
 
       <h3>Channels</h3>
-      <p>Each Ark session spawns an <code>ark-channel</code> MCP server over stdio. The channel opens an HTTP port for inbound traffic at <code>19200 + (hash(sessionId) % 10000)</code> -- deterministic per session, so restarts reuse the same port. Reports flow agent -&gt; ark-channel (stdio) -&gt; arkd (<code>:19300</code>) -&gt; conductor (<code>:19100</code>). Port 19100 is hardcoded; 19300 (arkd) is configurable via <code>ARK_ARKD_PORT</code> / <code>ARK_ARKD_URL</code>.</p>
+      <p>Each Ark session spawns an <code>ark-channel</code> MCP server over stdio. The channel opens an HTTP port for inbound traffic at <code>19200 + (hash(sessionId) % 10000)</code> -- deterministic per session, so restarts reuse the same port. Reports flow agent -&gt; ark-channel (stdio) -&gt; arkd (<code>:19300</code>) -&gt; conductor (<code>:19400</code>). The conductor port is configurable via <code>ARK_CONDUCTOR_PORT</code>; arkd is configurable via <code>ARK_ARKD_PORT</code> / <code>ARK_ARKD_URL</code>.</p>
 
       <!-- ── bridge.json ──────────────────────────────────────────────────── -->
       <h2>~/.ark/bridge.json</h2>
@@ -408,8 +408,8 @@
           <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>ARK_CONDUCTOR_PORT</code></td><td><code>19100</code></td><td>Conductor HTTP server port</td></tr>
-          <tr><td><code>ARK_CONDUCTOR_URL</code></td><td><code>http://localhost:19100</code></td><td>Conductor URL (fallback if arkd unavailable)</td></tr>
+          <tr><td><code>ARK_CONDUCTOR_PORT</code></td><td><code>19400</code></td><td>Conductor HTTP server port</td></tr>
+          <tr><td><code>ARK_CONDUCTOR_URL</code></td><td><code>http://localhost:19400</code></td><td>Conductor URL (fallback if arkd unavailable)</td></tr>
           <tr><td><code>ARK_ARKD_URL</code></td><td><code>http://localhost:19300</code></td><td>ArkD URL -- channel reports go here first</td></tr>
           <tr><td><code>ARK_ARKD_PORT</code></td><td><code>19300</code></td><td>ArkD daemon port</td></tr>
           <tr><td><code>ARK_ARKD_TOKEN</code></td><td>--</td><td>Optional bearer token for authenticating against ArkD</td></tr>
@@ -424,7 +424,7 @@
           <tr><td><code>ARK_TEST_DIR</code></td><td>--</td><td>Temp directory for test isolation (development only)</td></tr>
           <tr><td><code>DATABASE_URL</code></td><td>--</td><td>PostgreSQL connection URL (hosted mode)</td></tr>
           <tr><td><code>REDIS_URL</code></td><td>--</td><td>Redis URL for SSE bus (hosted mode)</td></tr>
-          <tr><td><code>ANTHROPIC_API_KEY</code></td><td>--</td><td>Anthropic API key (LLM router, knowledge graph)</td></tr>
+          <tr><td><code>ANTHROPIC_API_KEY</code></td><td>--</td><td>Anthropic API key (LLM router)</td></tr>
           <tr><td><code>OPENAI_API_KEY</code></td><td>--</td><td>OpenAI API key (LLM router)</td></tr>
           <tr><td><code>GOOGLE_API_KEY</code></td><td>--</td><td>Google API key (LLM router)</td></tr>
           <tr><td><code>E2B_API_KEY</code></td><td>--</td><td>E2B API key (E2B compute provider)</td></tr>

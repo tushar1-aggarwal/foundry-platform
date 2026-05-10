@@ -129,7 +129,7 @@
 
           <rect class="box-accent" x="640" y="190" width="220" height="82" rx="8"/>
           <text class="box-title" x="750" y="214" text-anchor="middle">Conductor</text>
-          <text class="box-sub" x="750" y="232" text-anchor="middle">HTTP :19100</text>
+          <text class="box-sub" x="750" y="232" text-anchor="middle">HTTP :19400</text>
           <text class="box-item" x="750" y="252" text-anchor="middle">hook status,</text>
           <text class="box-item" x="750" y="266" text-anchor="middle">channel relay</text>
 
@@ -215,7 +215,7 @@
 
           <rect class="node" x="210" y="120" width="130" height="70" rx="8"/>
           <text class="node-title" x="275" y="148" text-anchor="middle">Conductor</text>
-          <text class="node-sub" x="275" y="166" text-anchor="middle">HTTP :19100</text>
+          <text class="node-sub" x="275" y="166" text-anchor="middle">HTTP :19400</text>
           <text class="node-sub" x="275" y="180" text-anchor="middle">control plane</text>
 
           <rect class="node" x="390" y="120" width="130" height="70" rx="8"/>
@@ -289,7 +289,7 @@
       <p>When the router is enabled, executors inject <code>ANTHROPIC_BASE_URL</code> and <code>OPENAI_BASE_URL</code> into the agent's environment at dispatch via the <code>router-env.ts</code> helper. All LLM calls transparently flow Router -&gt; (TensorZero -&gt;) Provider.</p>
 
       <h2>Conductor</h2>
-      <p>The conductor is the central HTTP server on port <code>19100</code>. Responsibilities:</p>
+      <p>The conductor is the central HTTP server on port <code>19400</code>. Responsibilities:</p>
       <ul>
         <li>Receive hook status reports (busy, idle, error, done) from Claude Code agents.</li>
         <li>Relay channel reports between agents and humans.</li>
@@ -302,7 +302,7 @@
       <p>See <a href="arkd.html">ArkD Daemon</a> for the full endpoint reference and deployment details.</p>
 
       <h2>MCP socket pooling</h2>
-      <p><strong>Problem:</strong> Each Ark session runs multiple agents, and each agent has multiple MCP servers (knowledge graph, filesystem, context7, playwright, etc.). Without pooling, N sessions x M MCP servers = N*M processes. Five sessions x six MCP servers = 30 processes. Memory blows up fast.</p>
+      <p><strong>Problem:</strong> Each Ark session runs multiple agents, and each agent has multiple MCP servers (filesystem, context7, playwright, linear, etc.). Without pooling, N sessions x M MCP servers = N*M processes. Five sessions x six MCP servers = 30 processes. Memory blows up fast.</p>
       <p><strong>Solution:</strong> A <code>SocketProxy</code> wraps a single MCP process per server name and accepts multi-client connections over a unix domain socket at <code>/tmp/ark-mcp-&lt;name&gt;.sock</code>. Client sessions connect via:</p>
       <pre><code>{
   <span class="yaml-key">"command"</span>: <span class="yaml-value">"ark"</span>,
@@ -357,16 +357,6 @@
       <p>Config (<code>tensorzero.toml</code>) is generated from configured provider API keys at boot. When <code>router.auto_start</code> and <code>tensorZero.enabled</code> are both true, TensorZero auto-starts with the router. Flow: agent -&gt; Router -&gt; TensorZero -&gt; Provider.</p>
       <p>Executors inject <code>ANTHROPIC_BASE_URL</code> and <code>OPENAI_BASE_URL</code> into the agent's environment at dispatch so the agent binary is unaware anything has changed.</p>
 
-      <h2>Knowledge graph and ops-codegraph</h2>
-      <p>Ark's knowledge graph is a unified store of codebase structure, session history, memories, and learnings. The indexer is powered by <code>@optave/codegraph</code> -- a Rust engine with tree-sitter WASM bindings for 33 languages. No Python dependency.</p>
-      <p>The indexer runs <code>codegraph build</code> to produce <code>.codegraph/graph.db</code>, then ingests the nodes and edges into Ark's tenant-scoped <code>knowledge</code> and <code>knowledge_edges</code> tables. It also runs git co-change analysis.</p>
-      <p>Auto-index on dispatch:</p>
-      <ul>
-        <li><strong>Local compute</strong> -- honors <code>knowledge.auto_index</code> in <code>~/.ark/config.yaml</code>.</li>
-        <li><strong>Remote compute</strong> -- always indexes via the arkd <code>/codegraph/index</code> endpoint. The control plane needs centralized knowledge for all workers.</li>
-      </ul>
-      <p>Agents query the graph through six MCP tools: <code>knowledge/search</code>, <code>knowledge/context</code>, <code>knowledge/impact</code>, <code>knowledge/history</code>, <code>knowledge/remember</code>, <code>knowledge/recall</code>.</p>
-
       <h2>Event bus and SSE bus</h2>
       <ul>
         <li><strong>Event bus</strong> -- in-memory pub/sub for repositories and services to publish domain events.</li>
@@ -379,7 +369,7 @@
           <tr><th>Service</th><th>Port</th><th>Notes</th></tr>
         </thead>
         <tbody>
-          <tr><td>Conductor</td><td><code>19100</code></td><td>Hardcoded. HTTP server for hook status and channel relay.</td></tr>
+          <tr><td>Conductor</td><td><code>19400</code></td><td>Default. HTTP server for hook status and channel relay.</td></tr>
           <tr><td>ArkD</td><td><code>19300</code></td><td>Default. Universal agent daemon on every compute target.</td></tr>
           <tr><td>Channel</td><td><code>19200 + (hash(sessionId) % 10000)</code></td><td>Deterministic per-session channel port.</td></tr>
           <tr><td>Router</td><td><code>8430</code></td><td>Default. LLM Router OpenAI-compatible proxy.</td></tr>

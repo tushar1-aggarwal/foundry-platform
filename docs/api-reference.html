@@ -180,7 +180,7 @@
 
       <h2>Overview</h2>
       <p>Ark exposes a JSON-RPC 2.0 API for all operations. The same API powers the CLI, Web dashboard, Desktop app, and remote clients. The protocol version is <strong>0.8.0</strong>.</p>
-      <p>Source: <code>packages/server/</code> (handlers), <code>packages/protocol/</code> (client).</p>
+      <p>Source: <code>packages/conductor/</code> (handlers), <code>packages/protocol/</code> (client).</p>
 
       <h2>Transport Layers</h2>
       <table>
@@ -280,7 +280,7 @@
       <p>Roles: <code>admin</code> (full access), <code>member</code> (session management), <code>viewer</code> (read-only).</p>
 
       <h2>Parameter Validation</h2>
-      <p>All RPC handlers validate parameters at the boundary using <code>extract&lt;T&gt;()</code> from <code>packages/server/validate.ts</code>. Missing required parameters return <code>INVALID_PARAMS (-32602)</code>.</p>
+      <p>All RPC handlers validate parameters at the boundary using <code>extract&lt;T&gt;()</code> from <code>packages/conductor/validate.ts</code>. Missing required parameters return <code>INVALID_PARAMS (-32602)</code>.</p>
 
       <div class="doc-footer">
         <a href="runtimes-reference.html">&larr; Runtimes</a>

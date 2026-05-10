@@ -122,7 +122,7 @@ recipes/     <span class="comment">8 recipe templates (YAML)</span></code></pre>
         <li><code>services/session.ts</code> -- Lifecycle facade: start, stop, resume, complete, pause, delete.</li>
         <li><code>services/session-orchestration.ts</code> -- All orchestration (dispatch, advance, fork, fan-out).</li>
         <li><code>app.ts</code> -- <code>AppContext</code> wires everything together. Boot/shutdown lifecycle.</li>
-        <li><code>conductor.ts</code> -- HTTP server (:19100), hook status, channel relay.</li>
+        <li><code>conductor.ts</code> -- HTTP server (:19400), hook status, channel relay.</li>
       </ol>
 
       <h2>Key Entry Points</h2>
@@ -150,7 +150,7 @@ recipes/     <span class="comment">8 recipe templates (YAML)</span></code></pre>
 <span class="prompt">$</span> make test-watch</code></pre>
 
       <div class="callout warn">
-        <strong>Never run tests in parallel.</strong> Tests share ports (19100, 19200, 19300), globalThis state, and SQLite databases. Bun runs test files concurrently by default, which causes port collisions and phantom failures. The Makefile enforces <code>--concurrency 1</code>.
+        <strong>Never run tests in parallel.</strong> Tests share ports (19200, 19300, 19400), globalThis state, and SQLite databases. Bun runs test files concurrently by default, which causes port collisions and phantom failures. The Makefile enforces <code>--concurrency 1</code>.
       </div>
 
       <h3>Test Isolation Pattern</h3>

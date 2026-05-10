@@ -57,6 +57,10 @@
       <h1>How-To: Working with Memories</h1>
       <p class="subtitle">Store and recall knowledge across sessions.</p>
 
+      <div class="callout warn">
+        <strong>Removed.</strong> The memories subsystem and its <code>ark memory</code> / <code>ark knowledge</code> CLI surfaces have been removed alongside the knowledge graph. This page is kept for historical reference only.
+      </div>
+
       <h2>What are memories?</h2>
       <p>Memories are persistent notes that survive across sessions. Once written, a memory becomes part of the knowledge graph and can be referenced by any agent on any future dispatch in the same scope. They are how you teach Ark things you do not want to repeat in every prompt -- coding conventions, architectural decisions, project-specific gotchas, debugging shortcuts.</p>
       <p>Internally, a memory is a <code>memory:*</code> node in the <code>knowledge</code> table (tenant-scoped). Each memory has:</p>

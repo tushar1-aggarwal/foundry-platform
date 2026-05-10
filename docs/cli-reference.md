@@ -33,7 +33,6 @@ ark [options] <command>
 | [`ark search`](#ark-search) | Search across sessions, events, messages, and transcripts |
 | [`ark index`](#ark-index) | Build or rebuild the transcript search index |
 | [`ark search-all`](#ark-search-all) | Search across all Claude conversations |
-| [`ark memory`](#ark-memory) | Manage cross-session memory (backed by knowledge graph) |
 | [`ark profile`](#ark-profile) | Manage profiles |
 | [`ark conductor`](#ark-conductor) | Conductor operations and arkd lifecycle |
 | [`ark router`](#ark-router) | LLM routing proxy |
@@ -42,10 +41,6 @@ ark [options] <command>
 | [`ark tenant`](#ark-tenant) | Manage tenant settings |
 | [`ark team`](#ark-team) | Manage teams + memberships |
 | [`ark user`](#ark-user) | Manage user identities |
-| [`ark knowledge`](#ark-knowledge) | Knowledge graph - search, index, remember, export |
-| [`ark code-intel`](#ark-code-intel) | Unified code-intelligence store (search, index, repos, runs) |
-| [`ark workspace`](#ark-workspace) | Manage workspaces (tenant -> workspace -> repo) |
-| [`ark eval`](#ark-eval) | Agent performance evaluation |
 | [`ark dashboard`](#ark-dashboard) | Show fleet status, costs, and recent activity |
 | [`ark costs`](#ark-costs) | Show cost summary across sessions |
 | [`ark costs-sync`](#ark-costs-sync) | Backfill cost data from transcripts (on the daemon host) |
@@ -64,7 +59,6 @@ ark [options] <command>
 | [`ark web`](#ark-web) | Start web dashboard |
 | [`ark openapi`](#ark-openapi) | Generate OpenAPI spec |
 | [`ark mcp-proxy`](#ark-mcp-proxy) | Bridge stdin/stdout to a pooled MCP socket (internal) |
-| [`ark repo-map`](#ark-repo-map) | Generate repository structure map |
 | [`ark init`](#ark-init) | Initialize Ark for this repository |
 | [`ark db`](#ark-db) | Schema migrations + status |
 | [`ark secrets`](#ark-secrets) | Manage tenant-scoped secrets (env vars for sessions) |
@@ -100,7 +94,6 @@ Start a new session
 | `-c, --compute <name>` |  | Compute name |
 | `-g, --group <name>` |  | Group name |
 | `-a, --attach` |  | Attach to the session's tmux pane after starting |
-| `--claude-session <id>` |  | Create from an existing Claude Code session (use 'ark claude list' to find IDs) |
 | `--max-budget <usd>` |  | Cumulative cost cap for this session in USD. Halts for_each if exceeded. |
 | `--with-mcp <name>` | `[]` | Mount an additional MCP server into the session (repeatable). Resolves against shipped mcp-configs/<name>.json or an inline path. |
 | `--file <role=path>` | `{}` | Attach a named file input (repeatable). Path is resolved absolute and exposed to agents + flows as {inputs.files.<role>}. |
@@ -578,12 +571,12 @@ Create a new compute resource (concrete target or reusable template)
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--compute <kind>` |  | Compute kind (local, firecracker, ec2, k8s, k8s-kata) |
-| `--isolation <kind>` |  | Isolation kind (direct, docker, compose, devcontainer, firecracker-in-container) |
-| `--provider <type>` |  | [deprecated] Provider type (local, docker, ec2, k8s, k8s-kata). Use --compute + --isolation. |
+| `--kind <kind>` |  | Compute kind (local, firecracker, ec2, k8s, k8s-kata) |
+| `--isolation <kind>` |  | Isolation kind (direct, docker, compose, devcontainer) |
 | `--template` |  | Create a reusable template (blueprint) instead of a concrete compute target |
 | `--no-prompt` |  | Skip interactive prompts (fail if required fields are missing) |
-| `--image <image>` |  | Docker image (default: ubuntu:22.04) |
+| `--from-template <name>` |  | Use a compute template as defaults |
+| `--image <image>` |  | Container image (docker isolation default: ubuntu:22.04; k8s pod image) |
 | `--devcontainer` |  | Use devcontainer.json from project |
 | `--volume <mount>` | `[]` | Extra volume mount (repeatable) |
 | `--size <size>` | `"m"` | Instance size: xs (2vCPU/8GB), s (4/16), m (8/32), l (16/64), xl (32/128), xxl (48/192), xxxl (64/256) |
@@ -592,14 +585,13 @@ Create a new compute resource (concrete target or reusable template)
 | `--aws-profile <profile>` |  | AWS profile |
 | `--aws-subnet-id <id>` |  | AWS subnet ID |
 | `--aws-tag <key=value>` | `[]` | AWS tag (repeatable) |
-| `--context <name>` |  | Kubeconfig context (cluster) -- required |
-| `--namespace <ns>` |  | K8s namespace -- required |
+| `--context <name>` |  | Kubeconfig context (cluster) -- required for k8s |
+| `--namespace <ns>` |  | K8s namespace -- required for k8s |
 | `--kubeconfig <path>` |  | Path to kubeconfig (default: in-cluster or ~/.kube/config) |
 | `--service-account <sa>` |  | Pod service account name (for IRSA, etc.) |
 | `--runtime-class <class>` |  | K8s runtime class (e.g. kata-fc for Firecracker) |
 | `--cpu <amt>` |  | CPU request/limit (e.g. 2 or 500m) |
 | `--memory <amt>` |  | Memory request/limit (e.g. 4Gi) |
-| `--from-template <name>` |  | Use a compute template as defaults |
 
 ### `ark compute provision`
 
@@ -1362,7 +1354,6 @@ Search across sessions, events, messages, and transcripts
 | `-l, --limit <n>` | `"20"` | Max results |
 | `-t, --transcripts` |  | Also search Claude transcripts (slower) |
 | `--index` |  | Rebuild transcript search index before searching |
-| `--hybrid` |  | Use hybrid search (memory + knowledge + transcripts with LLM re-ranking) |
 
 ## `ark index`
 
@@ -1388,88 +1379,6 @@ Search across all Claude conversations
 |------|---------|-------------|
 | `-n, --limit <n>` | `"20"` | Max results |
 | `--days <n>` | `"90"` | Recent days to search |
-
-## `ark memory`
-
-Manage cross-session memory (backed by knowledge graph)
-
-**Synopsis:** `ark memory`
-
-### `ark memory list`
-
-List stored memories
-
-**Synopsis:** `ark memory list [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-s, --scope <scope>` |  | Filter by scope |
-
-### `ark memory recall`
-
-Recall memories relevant to a query
-
-**Synopsis:** `ark memory recall [options] <query>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `query` | yes | Search query |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-s, --scope <scope>` |  | Filter by scope |
-| `-n, --limit <n>` | `"10"` | Max results |
-
-### `ark memory forget`
-
-Forget a specific memory
-
-**Synopsis:** `ark memory forget <id>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `id` | yes | Memory ID |
-
-### `ark memory add`
-
-Store a new memory
-
-**Synopsis:** `ark memory add [options] <content>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `content` | yes | Memory content |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-t, --tags <tags>` |  | Comma-separated tags |
-| `-s, --scope <scope>` |  | Scope (default: global) |
-| `-i, --importance <n>` |  | Importance 0-1 (default: 0.5) |
-
-### `ark memory clear`
-
-Clear all memories in a scope
-
-**Synopsis:** `ark memory clear [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-s, --scope <scope>` |  | Scope to clear (omit for ALL) |
-| `--force` |  | Skip confirmation |
 
 ## `ark profile`
 
@@ -1510,7 +1419,7 @@ Delete a profile
 
 ## `ark conductor`
 
-Conductor operations and arkd lifecycle management
+Conductor operations and arkd lifecycle
 
 **Synopsis:** `ark conductor`
 
@@ -2184,462 +2093,6 @@ Delete a user (cascades memberships)
 |----------|----------|-------------|
 | `idOrEmail` | yes | User id or email |
 
-## `ark knowledge`
-
-Knowledge graph - search, index, remember, export
-
-**Synopsis:** `ark knowledge`
-
-### `ark knowledge search`
-
-Search across all knowledge (files, memories, sessions, learnings)
-
-**Synopsis:** `ark knowledge search [options] <query>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `query` | yes | Search query |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-t, --types <types>` |  | Comma-separated node types to filter (file,symbol,session,memory,learning,skill) |
-| `-n, --limit <n>` | `"20"` | Max results |
-
-### `ark knowledge index`
-
-Index/re-index codebase into the knowledge graph (runs on daemon)
-
-**Synopsis:** `ark knowledge index [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-r, --repo <path>` |  | Repository path (default: cwd) |
-| `--incremental` |  | Only re-index changed files |
-
-### `ark knowledge stats`
-
-Show node/edge counts by type
-
-**Synopsis:** `ark knowledge stats`
-
-### `ark knowledge remember`
-
-Store a new memory in the knowledge graph
-
-**Synopsis:** `ark knowledge remember [options] <content>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `content` | yes | Memory content |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-t, --tags <tags>` |  | Comma-separated tags |
-| `-i, --importance <n>` |  | Importance 0-1 (default: 0.5) |
-
-### `ark knowledge recall`
-
-Search memories and learnings
-
-**Synopsis:** `ark knowledge recall [options] <query>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `query` | yes | Search query |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-n, --limit <n>` | `"10"` | Max results |
-
-### `ark knowledge export`
-
-Export knowledge as markdown files (daemon-side filesystem)
-
-**Synopsis:** `ark knowledge export [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-d, --dir <path>` | `"./knowledge-export"` | Output directory |
-| `-t, --types <types>` |  | Comma-separated types to export (default: memory,learning) |
-
-### `ark knowledge import`
-
-Import knowledge from markdown files (daemon-side filesystem)
-
-**Synopsis:** `ark knowledge import [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-d, --dir <path>` | `"./knowledge-export"` | Input directory |
-
-### `ark knowledge ingest`
-
-Ingest a directory into the knowledge graph (indexes files and symbols)
-
-**Synopsis:** `ark knowledge ingest [options] <path>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `path` | yes | Directory to ingest |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--incremental` |  | Only re-index changed files |
-
-### `ark knowledge codebase`
-
-codebase-memory-mcp (vendored code intelligence engine)
-
-**Synopsis:** `ark knowledge codebase`
-
-#### `ark knowledge codebase status`
-
-Show codebase-memory-mcp installation status and version
-
-**Synopsis:** `ark knowledge codebase status`
-
-#### `ark knowledge codebase tools`
-
-List the 14 MCP tools exposed by codebase-memory-mcp
-
-**Synopsis:** `ark knowledge codebase tools`
-
-#### `ark knowledge codebase reindex`
-
-Run `index_repository` against a path via the caller's vendored binary
-
-**Synopsis:** `ark knowledge codebase reindex [path]`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `path` | no | Repository path (default: cwd) |
-
-## `ark code-intel`
-
-Unified code-intelligence store (search, index, repos, runs)
-
-**Synopsis:** `ark code-intel`
-
-### `ark code-intel db`
-
-Schema migrations + status
-
-**Synopsis:** `ark code-intel db`
-
-#### `ark code-intel db migrate`
-
-Apply any pending code-intel migrations
-
-**Synopsis:** `ark code-intel db migrate [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--to <version>` |  | Target version (default: latest) |
-
-#### `ark code-intel db status`
-
-Print current schema version + pending migrations
-
-**Synopsis:** `ark code-intel db status`
-
-#### `ark code-intel db reset`
-
-Drop every code-intel table (DEV ONLY).
-
-**Synopsis:** `ark code-intel db reset [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--yes` |  | Confirm destructive operation |
-
-### `ark code-intel repo`
-
-Manage indexed repositories
-
-**Synopsis:** `ark code-intel repo`
-
-#### `ark code-intel repo add`
-
-Register a repo for indexing
-
-**Synopsis:** `ark code-intel repo add [options] <url-or-path>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `url-or-path` | yes | Repo URL or local path |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-| `--name <name>` |  | Display name (default: derived) |
-| `--default-branch <branch>` | `"main"` | Default branch |
-
-#### `ark code-intel repo list`
-
-List repos for a tenant
-
-**Synopsis:** `ark code-intel repo list [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-
-### `ark code-intel reindex`
-
-Run extractors against a repo
-
-**Synopsis:** `ark code-intel reindex [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-| `--repo <id-or-name>` |  | Repo id or name (default: only one if unambiguous) |
-| `--extractors <names>` |  | Comma-separated extractor names (default: all) |
-
-### `ark code-intel search`
-
-FTS over chunks (file content + symbols)
-
-**Synopsis:** `ark code-intel search [options] <query>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `query` | yes | Search query |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-| `-n, --limit <n>` | `"20"` | Max results |
-
-### `ark code-intel get-context`
-
-Assemble a context snapshot for a file or symbol
-
-**Synopsis:** `ark code-intel get-context [options] <subject>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `subject` | yes | File path, file id, or symbol name |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-| `--repo <id-or-name>` |  | Repo id or name (helps path lookup) |
-
-### `ark code-intel doctor`
-
-Report VendorResolver + binary health (caller-local)
-
-**Synopsis:** `ark code-intel doctor`
-
-### `ark code-intel health`
-
-High-level store + deployment health
-
-**Synopsis:** `ark code-intel health`
-
-## `ark workspace`
-
-Manage workspaces (tenant -> workspace -> repo)
-
-**Synopsis:** `ark workspace`
-
-### `ark workspace create`
-
-Create a new workspace
-
-**Synopsis:** `ark workspace create [options] <slug>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `slug` | yes | Workspace slug (unique per tenant) |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-| `--name <name>` |  | Display name (default: derived from slug) |
-| `--description <text>` |  | Free-form description |
-
-### `ark workspace list`
-
-List workspaces for a tenant
-
-**Synopsis:** `ark workspace list [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-| `--format <fmt>` | `"text"` | Output format: yaml | text |
-
-### `ark workspace show`
-
-Show a workspace + attached repos
-
-**Synopsis:** `ark workspace show [options] <slug>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `slug` | yes | Workspace slug |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-| `--format <fmt>` | `"text"` | Output format: yaml | text |
-
-### `ark workspace use`
-
-Set the active workspace (persisted to the caller's ~/.ark/config.yaml)
-
-**Synopsis:** `ark workspace use [options] <slug>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `slug` | yes | Workspace slug |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-
-### `ark workspace add-repo`
-
-Attach a repo to a workspace (creates the repo if it's a new path/URL)
-
-**Synopsis:** `ark workspace add-repo [options] <workspace-slug> <repo-path-or-url>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `workspace-slug` | yes | Workspace slug |
-| `repo-path-or-url` | yes | Repo path, URL, or existing repo id / name |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-
-### `ark workspace remove-repo`
-
-Detach a repo from a workspace (repo itself is not deleted)
-
-**Synopsis:** `ark workspace remove-repo [options] <workspace-slug> <repo>`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `workspace-slug` | yes | Workspace slug |
-| `repo` | yes | Repo id, name, or URL |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant <slug>` |  | Tenant slug (default: caller's tenant) |
-
-## `ark eval`
-
-Agent performance evaluation
-
-**Synopsis:** `ark eval`
-
-### `ark eval stats`
-
-Show agent performance stats
-
-**Synopsis:** `ark eval stats [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-a, --agent <role>` |  | Agent role to filter by |
-
-### `ark eval drift`
-
-Check for performance drift
-
-**Synopsis:** `ark eval drift [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-a, --agent <role>` |  | Agent role to check |
-| `-d, --days <n>` | `"7"` | Recent window in days |
-
-### `ark eval list`
-
-List recent eval results
-
-**Synopsis:** `ark eval list [options]`
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-a, --agent <role>` |  | Agent role to filter by |
-| `-n, --limit <n>` | `"20"` | Max results |
-
 ## `ark dashboard`
 
 Show fleet status, costs, and recent activity
@@ -2916,26 +2369,6 @@ Bridge stdin/stdout to a pooled MCP socket (internal)
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `socket-path` | yes |  |
-
-## `ark repo-map`
-
-Generate repository structure map
-
-**Synopsis:** `ark repo-map [options] [dir]`
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `dir` | no | Directory to scan |
-
-**Options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--max-files <n>` | `"500"` | Max files to include |
-| `--max-depth <n>` | `"10"` | Max directory depth |
-| `--json` |  | Output as JSON instead of text |
 
 ## `ark init`
 

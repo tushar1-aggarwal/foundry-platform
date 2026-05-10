@@ -222,15 +222,6 @@
                       "arg"
                     ]
                   },
-                  "recipe": {
-                    "type": "string"
-                  },
-                  "sub_recipes": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
                   "_source": {
                     "type": "string",
                     "enum": [
@@ -450,18 +441,12 @@
                 "minLength": 1
               },
               "provider": {
-                "type": "string",
-                "enum": [
-                  "local",
-                  "docker",
-                  "ec2",
-                  "remote-arkd"
-                ]
+                "type": "string"
               },
               "compute": {
                 "type": "string"
               },
-              "runtime": {
+              "isolation": {
                 "type": "string"
               },
               "config": {
@@ -501,18 +486,12 @@
                   "type": "string"
                 },
                 "provider": {
-                  "type": "string",
-                  "enum": [
-                    "local",
-                    "docker",
-                    "ec2",
-                    "remote-arkd"
-                  ]
+                  "type": "string"
                 },
                 "compute_kind": {
                   "type": "string"
                 },
-                "runtime_kind": {
+                "isolation_kind": {
                   "type": "string"
                 },
                 "status": {
@@ -810,18 +789,12 @@
                     "type": "string"
                   },
                   "provider": {
-                    "type": "string",
-                    "enum": [
-                      "local",
-                      "docker",
-                      "ec2",
-                      "remote-arkd"
-                    ]
+                    "type": "string"
                   },
                   "compute_kind": {
                     "type": "string"
                   },
-                  "runtime_kind": {
+                  "isolation_kind": {
                     "type": "string"
                   },
                   "status": {
@@ -974,18 +947,12 @@
                   "type": "string"
                 },
                 "provider": {
-                  "type": "string",
-                  "enum": [
-                    "local",
-                    "docker",
-                    "ec2",
-                    "remote-arkd"
-                  ]
+                  "type": "string"
                 },
                 "compute_kind": {
                   "type": "string"
                 },
-                "runtime_kind": {
+                "isolation_kind": {
                   "type": "string"
                 },
                 "status": {
@@ -1171,6 +1138,12 @@
                   "provider": {
                     "type": "string"
                   },
+                  "compute": {
+                    "type": "string"
+                  },
+                  "isolation": {
+                    "type": "string"
+                  },
                   "config": {}
                 },
                 "required": [
@@ -1208,17 +1181,13 @@
             "profile": {},
             "mode": {
               "type": "string"
-            },
-            "hosted": {
-              "type": "boolean"
             }
           },
           "required": [
             "hotkeys",
             "theme",
             "profile",
-            "mode",
-            "hosted"
+            "mode"
           ],
           "additionalProperties": {}
         }
@@ -2336,191 +2305,6 @@
       }
     },
     {
-      "name": "history/list",
-      "description": "List imported session history.",
-      "tags": [
-        {
-          "name": "history"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "limit": {
-                "type": "number"
-              }
-            },
-            "additionalProperties": {}
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "items": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "sessionId": {
-                    "type": "string"
-                  },
-                  "project": {
-                    "type": "string"
-                  },
-                  "projectDir": {
-                    "type": "string"
-                  },
-                  "transcriptPath": {
-                    "type": "string"
-                  },
-                  "summary": {
-                    "type": "string"
-                  },
-                  "messageCount": {
-                    "type": "number"
-                  },
-                  "timestamp": {
-                    "type": "string"
-                  },
-                  "lastActivity": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "sessionId",
-                  "project",
-                  "projectDir",
-                  "transcriptPath",
-                  "summary",
-                  "messageCount",
-                  "timestamp",
-                  "lastActivity"
-                ],
-                "additionalProperties": {}
-              }
-            }
-          },
-          "required": [
-            "items"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "history/rebuild-fts",
-      "description": "Rebuild the FTS5 full-text search index.",
-      "tags": [
-        {
-          "name": "history"
-        }
-      ],
-      "params": [],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "ok"
-          ],
-          "additionalProperties": {}
-        }
-      }
-    },
-    {
-      "name": "history/refresh-and-index",
-      "description": "Refresh and index the session history.",
-      "tags": [
-        {
-          "name": "history"
-        }
-      ],
-      "params": [],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            },
-            "sessionCount": {
-              "type": "number"
-            },
-            "indexCount": {
-              "type": "number"
-            },
-            "items": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "sessionId": {
-                    "type": "string"
-                  },
-                  "project": {
-                    "type": "string"
-                  },
-                  "projectDir": {
-                    "type": "string"
-                  },
-                  "transcriptPath": {
-                    "type": "string"
-                  },
-                  "summary": {
-                    "type": "string"
-                  },
-                  "messageCount": {
-                    "type": "number"
-                  },
-                  "timestamp": {
-                    "type": "string"
-                  },
-                  "lastActivity": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "sessionId",
-                  "project",
-                  "projectDir",
-                  "transcriptPath",
-                  "summary",
-                  "messageCount",
-                  "timestamp",
-                  "lastActivity"
-                ],
-                "additionalProperties": {}
-              }
-            }
-          },
-          "required": [
-            "ok",
-            "sessionCount",
-            "indexCount",
-            "items"
-          ],
-          "additionalProperties": {}
-        }
-      }
-    },
-    {
       "name": "input/read",
       "description": "Fetch previously uploaded bytes by locator.",
       "tags": [
@@ -2635,904 +2419,6 @@
           },
           "required": [
             "locator"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "knowledge/export",
-      "description": "Export the knowledge graph to disk.",
-      "tags": [
-        {
-          "name": "knowledge"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "dir": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": {}
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "ok"
-          ],
-          "additionalProperties": {}
-        }
-      }
-    },
-    {
-      "name": "knowledge/import",
-      "description": "Import the knowledge graph from disk.",
-      "tags": [
-        {
-          "name": "knowledge"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "dir": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": {}
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "ok"
-          ],
-          "additionalProperties": {}
-        }
-      }
-    },
-    {
-      "name": "knowledge/index",
-      "description": "Index a codebase into the knowledge graph.",
-      "tags": [
-        {
-          "name": "knowledge"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "repo": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": {}
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            },
-            "error": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "ok"
-          ],
-          "additionalProperties": {}
-        }
-      }
-    },
-    {
-      "name": "knowledge/ingest",
-      "description": "Ingest files into the knowledge graph.",
-      "tags": [
-        {
-          "name": "knowledge"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "path": {
-                "type": "string",
-                "minLength": 1
-              },
-              "directory": {
-                "type": "boolean"
-              },
-              "scope": {
-                "type": "string"
-              },
-              "tags": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "recursive": {
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "path"
-            ],
-            "additionalProperties": {}
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            },
-            "files": {
-              "type": "number"
-            },
-            "chunks": {
-              "type": "number"
-            },
-            "error": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "ok"
-          ],
-          "additionalProperties": {}
-        }
-      }
-    },
-    {
-      "name": "knowledge/search",
-      "description": "Search the knowledge graph.",
-      "tags": [
-        {
-          "name": "knowledge"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "query": {
-                "type": "string"
-              },
-              "types": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "limit": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "query"
-            ],
-            "additionalProperties": {}
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "results": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "type": {
-                    "type": "string"
-                  },
-                  "label": {
-                    "type": "string"
-                  },
-                  "content": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "metadata": {
-                    "type": "object",
-                    "propertyNames": {
-                      "type": "string"
-                    },
-                    "additionalProperties": {}
-                  },
-                  "created_at": {
-                    "type": "string"
-                  },
-                  "updated_at": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "id",
-                  "type",
-                  "label",
-                  "metadata",
-                  "created_at",
-                  "updated_at"
-                ],
-                "additionalProperties": {}
-              }
-            }
-          },
-          "required": [
-            "results"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "knowledge/stats",
-      "description": "Return knowledge graph statistics.",
-      "tags": [
-        {
-          "name": "knowledge"
-        }
-      ],
-      "params": [],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "nodes": {
-              "type": "number"
-            },
-            "edges": {
-              "type": "number"
-            },
-            "by_node_type": {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {
-                "type": "number"
-              }
-            },
-            "by_edge_type": {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {
-                "type": "number"
-              }
-            }
-          },
-          "required": [
-            "nodes",
-            "edges",
-            "by_node_type",
-            "by_edge_type"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "learning/add",
-      "description": "Record a new learning.",
-      "tags": [
-        {
-          "name": "learning"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "title": {
-                "type": "string",
-                "minLength": 1
-              },
-              "description": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "title",
-              "description"
-            ],
-            "additionalProperties": false
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            },
-            "learning": {
-              "type": "object",
-              "properties": {
-                "title": {
-                  "type": "string"
-                },
-                "description": {
-                  "type": "string"
-                },
-                "recurrence": {
-                  "type": "number"
-                },
-                "lastSeen": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "title",
-                "description",
-                "recurrence",
-                "lastSeen"
-              ],
-              "additionalProperties": {}
-            },
-            "promoted": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "ok",
-            "learning",
-            "promoted"
-          ],
-          "additionalProperties": {}
-        }
-      }
-    },
-    {
-      "name": "learning/list",
-      "description": "List learned patterns observed across sessions.",
-      "tags": [
-        {
-          "name": "learning"
-        }
-      ],
-      "params": [],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "learnings": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "title": {
-                    "type": "string"
-                  },
-                  "description": {
-                    "type": "string"
-                  },
-                  "recurrence": {
-                    "type": "number"
-                  },
-                  "lastSeen": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "title",
-                  "description",
-                  "recurrence",
-                  "lastSeen"
-                ],
-                "additionalProperties": {}
-              }
-            }
-          },
-          "required": [
-            "learnings"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "mcp/attach-by-dir",
-      "description": "Attach an MCP server to sessions in a project directory.",
-      "tags": [
-        {
-          "name": "mcp"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "dir": {
-                "type": "string",
-                "minLength": 1
-              },
-              "name": {
-                "type": "string",
-                "minLength": 1
-              },
-              "config": {
-                "type": "object",
-                "propertyNames": {
-                  "type": "string"
-                },
-                "additionalProperties": {}
-              }
-            },
-            "required": [
-              "dir",
-              "name",
-              "config"
-            ],
-            "additionalProperties": false
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "ok"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "mcp/detach-by-dir",
-      "description": "Detach an MCP server from a project directory.",
-      "tags": [
-        {
-          "name": "mcp"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "dir": {
-                "type": "string",
-                "minLength": 1
-              },
-              "name": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "required": [
-              "dir",
-              "name"
-            ],
-            "additionalProperties": false
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "ok"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "memory/add",
-      "description": "Add a memory.",
-      "tags": [
-        {
-          "name": "memory"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "content": {
-                "type": "string"
-              },
-              "tags": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "scope": {
-                "type": "string"
-              },
-              "importance": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "content"
-            ],
-            "additionalProperties": {}
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "memory": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "content": {
-                  "type": "string"
-                },
-                "tags": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "scope": {
-                  "type": "string"
-                },
-                "importance": {
-                  "type": "number"
-                },
-                "createdAt": {
-                  "type": "string"
-                },
-                "accessedAt": {
-                  "type": "string"
-                },
-                "accessCount": {
-                  "type": "number"
-                }
-              },
-              "required": [
-                "id",
-                "content",
-                "tags",
-                "scope",
-                "importance",
-                "createdAt",
-                "accessedAt",
-                "accessCount"
-              ],
-              "additionalProperties": {}
-            }
-          },
-          "required": [
-            "memory"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "memory/forget",
-      "description": "Delete a specific memory.",
-      "tags": [
-        {
-          "name": "memory"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "required": [
-              "id"
-            ],
-            "additionalProperties": false
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "ok"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "memory/list",
-      "description": "List memories.",
-      "tags": [
-        {
-          "name": "memory"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "scope": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": {}
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "memories": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "content": {
-                    "type": "string"
-                  },
-                  "tags": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "scope": {
-                    "type": "string"
-                  },
-                  "importance": {
-                    "type": "number"
-                  },
-                  "createdAt": {
-                    "type": "string"
-                  },
-                  "accessedAt": {
-                    "type": "string"
-                  },
-                  "accessCount": {
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "id",
-                  "content",
-                  "tags",
-                  "scope",
-                  "importance",
-                  "createdAt",
-                  "accessedAt",
-                  "accessCount"
-                ],
-                "additionalProperties": {}
-              }
-            }
-          },
-          "required": [
-            "memories"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "memory/recall",
-      "description": "Recall memories matching a query.",
-      "tags": [
-        {
-          "name": "memory"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "query": {
-                "type": "string"
-              },
-              "scope": {
-                "type": "string"
-              },
-              "limit": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "query"
-            ],
-            "additionalProperties": false
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "results": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "content": {
-                    "type": "string"
-                  },
-                  "tags": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "scope": {
-                    "type": "string"
-                  },
-                  "importance": {
-                    "type": "number"
-                  },
-                  "createdAt": {
-                    "type": "string"
-                  },
-                  "accessedAt": {
-                    "type": "string"
-                  },
-                  "accessCount": {
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "id",
-                  "content",
-                  "tags",
-                  "scope",
-                  "importance",
-                  "createdAt",
-                  "accessedAt",
-                  "accessCount"
-                ],
-                "additionalProperties": {}
-              }
-            }
-          },
-          "required": [
-            "results"
           ],
           "additionalProperties": false
         }
@@ -3954,178 +2840,6 @@
           "required": [
             "profiles"
           ],
-          "additionalProperties": {}
-        }
-      }
-    },
-    {
-      "name": "recipe/delete",
-      "description": "Delete a recipe.",
-      "tags": [
-        {
-          "name": "recipe"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string",
-                "minLength": 1
-              },
-              "scope": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "name"
-            ],
-            "additionalProperties": false
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "ok": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "ok"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "recipe/list",
-      "description": "List all available recipes.",
-      "tags": [
-        {
-          "name": "recipe"
-        }
-      ],
-      "params": [],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "recipes": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "description": {
-                    "type": "string"
-                  },
-                  "repo": {
-                    "type": "string"
-                  },
-                  "flow": {
-                    "type": "string"
-                  },
-                  "agent": {
-                    "type": "string"
-                  },
-                  "compute": {
-                    "type": "string"
-                  },
-                  "group": {
-                    "type": "string"
-                  },
-                  "variables": {
-                    "type": "array",
-                    "items": {}
-                  },
-                  "parameters": {
-                    "type": "array",
-                    "items": {}
-                  },
-                  "defaults": {
-                    "type": "object",
-                    "propertyNames": {
-                      "type": "string"
-                    },
-                    "additionalProperties": {
-                      "type": "string"
-                    }
-                  },
-                  "sub_recipes": {
-                    "type": "array",
-                    "items": {}
-                  },
-                  "_source": {
-                    "type": "string",
-                    "enum": [
-                      "builtin",
-                      "project",
-                      "global"
-                    ]
-                  }
-                },
-                "required": [
-                  "name",
-                  "description",
-                  "flow",
-                  "variables"
-                ],
-                "additionalProperties": {}
-              }
-            }
-          },
-          "required": [
-            "recipes"
-          ],
-          "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "repo-map/get",
-      "description": "Return the structured repository map for a directory.",
-      "tags": [
-        {
-          "name": "repo-map"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "dir": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": {}
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
           "additionalProperties": {}
         }
       }
@@ -4696,180 +3410,6 @@
       }
     },
     {
-      "name": "search/global",
-      "description": "Global full-text search across all Claude project directories.",
-      "tags": [
-        {
-          "name": "search"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "query": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "query"
-            ],
-            "additionalProperties": false
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "projectPath": {
-                "type": "string"
-              },
-              "projectName": {
-                "type": "string"
-              },
-              "fileName": {
-                "type": "string"
-              },
-              "matchLine": {
-                "type": "string"
-              },
-              "lineNumber": {
-                "type": "number"
-              },
-              "modifiedAt": {}
-            },
-            "required": [
-              "projectPath",
-              "projectName",
-              "fileName",
-              "matchLine",
-              "lineNumber",
-              "modifiedAt"
-            ],
-            "additionalProperties": {}
-          }
-        }
-      }
-    },
-    {
-      "name": "search/sessions",
-      "description": "Full-text search across sessions.",
-      "tags": [
-        {
-          "name": "search"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "query": {
-                "type": "string"
-              },
-              "limit": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "query"
-            ],
-            "additionalProperties": false
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "sessions": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "sessionId": {
-                    "type": "string"
-                  },
-                  "source": {
-                    "type": "string",
-                    "enum": [
-                      "metadata",
-                      "event",
-                      "message",
-                      "transcript"
-                    ]
-                  },
-                  "match": {
-                    "type": "string"
-                  },
-                  "timestamp": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "sessionId",
-                  "source",
-                  "match"
-                ],
-                "additionalProperties": {}
-              }
-            },
-            "transcripts": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "sessionId": {
-                    "type": "string"
-                  },
-                  "source": {
-                    "type": "string",
-                    "enum": [
-                      "metadata",
-                      "event",
-                      "message",
-                      "transcript"
-                    ]
-                  },
-                  "match": {
-                    "type": "string"
-                  },
-                  "timestamp": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "sessionId",
-                  "source",
-                  "match"
-                ],
-                "additionalProperties": {}
-              }
-            }
-          },
-          "required": [
-            "sessions",
-            "transcripts"
-          ],
-          "additionalProperties": {}
-        }
-      }
-    },
-    {
       "name": "session/advance",
       "description": "Approve a pending gate and advance to the next flow stage.",
       "tags": [
@@ -5008,27 +3548,79 @@
         "name": "result",
         "schema": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "command": {
-              "type": "string"
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "interactive"
+                },
+                "command": {
+                  "type": "string"
+                },
+                "transportCommand": {
+                  "type": "string"
+                },
+                "displayHint": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode",
+                "command",
+                "transportCommand",
+                "displayHint"
+              ],
+              "additionalProperties": false
             },
-            "displayHint": {
-              "type": "string"
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "tail"
+                },
+                "transcriptPath": {
+                  "type": "string"
+                },
+                "stdioPath": {
+                  "type": "string"
+                },
+                "displayHint": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode",
+                "transcriptPath",
+                "stdioPath",
+                "displayHint",
+                "reason"
+              ],
+              "additionalProperties": false
             },
-            "attachable": {
-              "type": "boolean"
-            },
-            "reason": {
-              "type": "string"
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "none"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode",
+                "reason"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [
-            "command",
-            "displayHint",
-            "attachable"
-          ],
-          "additionalProperties": false
+          ]
         }
       }
     },
@@ -5394,74 +3986,6 @@
             "message"
           ],
           "additionalProperties": false
-        }
-      }
-    },
-    {
-      "name": "session/conversation",
-      "description": "Return conversation turns (role+content pairs) for a session.",
-      "tags": [
-        {
-          "name": "session"
-        }
-      ],
-      "params": [
-        {
-          "name": "params",
-          "required": true,
-          "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-              "sessionId": {
-                "type": "string",
-                "minLength": 1
-              },
-              "limit": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "sessionId"
-            ],
-            "additionalProperties": false
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "type": "object",
-          "properties": {
-            "turns": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "role": {
-                    "type": "string"
-                  },
-                  "content": {
-                    "type": "string"
-                  },
-                  "timestamp": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "role",
-                  "content",
-                  "timestamp"
-                ],
-                "additionalProperties": {}
-              }
-            }
-          },
-          "required": [
-            "turns"
-          ],
-          "additionalProperties": {}
         }
       }
     },
@@ -6136,6 +4660,57 @@
           "required": [
             "ok",
             "sessionId"
+          ],
+          "additionalProperties": {}
+        }
+      }
+    },
+    {
+      "name": "session/inject",
+      "tags": [
+        {
+          "name": "session"
+        }
+      ],
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sessionId",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok"
           ],
           "additionalProperties": {}
         }
@@ -9154,7 +7729,6 @@
                       "command",
                       "claude-skill",
                       "ark-skill",
-                      "ark-recipe",
                       "context"
                     ]
                   },

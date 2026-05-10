@@ -31,9 +31,8 @@
       <tbody>
         <tr><td><code>ARK_PROFILE</code></td><td><code>profile</code></td><td>heuristic</td></tr>
         <tr><td><code>ARK_DIR</code></td><td><code>dirs.ark</code></td><td><code>~/.ark</code></td></tr>
-        <tr><td><code>ARK_CONDUCTOR_PORT</code></td><td><code>ports.conductor</code></td><td>19100</td></tr>
+        <tr><td><code>ARK_CONDUCTOR_PORT</code></td><td><code>ports.conductor</code></td><td>19400</td></tr>
         <tr><td><code>ARK_ARKD_PORT</code></td><td><code>ports.arkd</code></td><td>19300</td></tr>
-        <tr><td><code>ARK_SERVER_PORT</code></td><td><code>ports.server</code></td><td>19400</td></tr>
         <tr><td><code>ARK_WEB_PORT</code></td><td><code>ports.web</code></td><td>8420</td></tr>
         <tr><td><code>ARK_CHANNEL_BASE_PORT</code></td><td><code>channels.basePort</code></td><td>19200</td></tr>
         <tr><td><code>ARK_LOG_LEVEL</code></td><td><code>observability.logLevel</code></td><td>info</td></tr>
@@ -45,7 +44,7 @@
     <h2 id="yaml">YAML format</h2>
 <pre><code><span class="c"># top-level defaults apply to every profile</span>
 <span class="k">ports</span>:
-  <span class="n">conductor</span>: 19100
+  <span class="n">conductor</span>: 19400
   <span class="n">arkd</span>: 19300
 <span class="k">channels</span>:
   <span class="n">basePort</span>: 19200
@@ -65,10 +64,9 @@
       <thead><tr><th>Port</th><th>Service</th></tr></thead>
       <tbody>
         <tr><td>8420</td><td>web dashboard / router</td></tr>
-        <tr><td>19100</td><td>conductor</td></tr>
-        <tr><td>19200–29199</td><td>per-session channels</td></tr>
+        <tr><td>19200--29199</td><td>per-session channels</td></tr>
         <tr><td>19300</td><td>arkd daemon</td></tr>
-        <tr><td>19400</td><td>server daemon WS</td></tr>
+        <tr><td>19400</td><td>conductor</td></tr>
       </tbody>
     </table>
 
