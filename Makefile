@@ -146,6 +146,36 @@ dev-control-plane-down: ## Stop the running hosted server (port from .env.contro
 	  pid=$$(lsof -nP -iTCP:$$ARK_WEB_PORT -sTCP:LISTEN -t 2>/dev/null | head -1); \
 	  if [ -n "$$pid" ]; then echo "Killing hosted server PID $$pid on :$$ARK_WEB_PORT"; kill $$pid; else echo "No hosted server listening on :$$ARK_WEB_PORT"; fi
 
+# Bootstrap the FIRST admin API key on a deployment with auth required.
+# `admin/apikey/create` is gated by requireAdmin -- without an existing
+# admin key (or a Google-logged-in admin), there's no way to mint one
+# (#550). This target sidesteps the gate by booting a one-shot daemon
+# in local mode (requireToken=false), minting the key, then exiting.
+# The minted key persists across daemon restarts.
+#
+# Usage: make bootstrap-key NAME=ops-bootstrap [TENANT=default] [ROLE=admin]
+# Save the printed plaintext immediately -- it cannot be retrieved later.
+bootstrap-key: ## Mint the first admin API key (auth-required deployments)
+	@test -n "$(NAME)" || { echo 'Usage: make bootstrap-key NAME=ops-bootstrap [TENANT=default] [ROLE=admin]'; exit 1; }
+	@tenant="$${TENANT:-default}"; \
+	  role="$${ROLE:-admin}"; \
+	  if curl -sf http://localhost:19400/health >/dev/null 2>&1; then \
+	    echo "A daemon is already running on :19400 -- stop it first ('ark conductor stop')."; \
+	    exit 1; \
+	  fi; \
+	  echo "Booting one-shot daemon in local mode to mint key..."; \
+	  unset ARK_AUTH_REQUIRE_TOKEN; \
+	  ./ark server daemon start --detach >/dev/null 2>&1 || true; \
+	  for i in 1 2 3 4 5 6 7 8 9 10; do \
+	    sleep 1; \
+	    if curl -sf http://localhost:19400/health >/dev/null 2>&1; then break; fi; \
+	  done; \
+	  ./ark auth create-key --name "$(NAME)" --tenant "$$tenant" --role "$$role"; \
+	  echo ""; \
+	  echo "Restart the daemon with ARK_AUTH_REQUIRE_TOKEN=true to enable auth."; \
+	  echo "Key is persisted in the database; it survives the restart."; \
+	  ./ark server daemon stop >/dev/null 2>&1 || true
+
 spike-temporal-bun: ## Run the Phase 0 Bun / Temporal worker compat spike
 	@./scripts/spike-temporal-bun.sh
 
