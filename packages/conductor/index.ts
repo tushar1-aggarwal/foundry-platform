@@ -9,7 +9,7 @@ import {
   type MaterializeOptions,
 } from "../core/auth/context.js";
 import { getSessionCookie, clearSessionCookie } from "../core/auth/cookies.js";
-import { verifyOriginForCookieAuth } from "../core/auth/origin.js";
+import { isStateChanging, isWebSocketUpgrade, verifyOriginForCookieAuth } from "../core/auth/origin.js";
 import type { AuthSessionManager } from "../core/auth/sessions.js";
 import { ArkdClient } from "../arkd/client/index.js";
 import { DEFAULT_ARKD_URL } from "../core/constants.js";
@@ -306,11 +306,14 @@ export class ArkServer {
           // Origin enforcement on cookie-authed terminal WS upgrade.
           // Cookie auth is CSRF-relevant on WS upgrades (a malicious
           // page could open a terminal WS riding the user's cookie).
-          // Bearer-only requests bypass: CLI / programmatic clients
-          // don't auto-attach Origin and aren't subject to browser
-          // CSRF anyway.
+          // Scoped to the upgrade itself -- a plain GET that happens to
+          // match /terminal/:id (no Upgrade header) doesn't need to nuke
+          // the cookie. Bearer-only requests bypass: CLI / programmatic
+          // clients don't auto-attach Origin and aren't subject to
+          // browser CSRF anyway.
           const hasBearerForTerminal = !!authorizationHeader || !!queryToken;
           if (
+            isWebSocketUpgrade(req) &&
             self.auth?.requireToken &&
             self.auth.authSessions &&
             terminalCookieValue &&
@@ -522,21 +525,29 @@ export class ArkServer {
           }
         }
 
-        // Origin enforcement on WS upgrade. Cookie-authed upgrades are
-        // CSRF-relevant: a malicious page could open a WS to our listener
-        // and ride the user's session cookie. Bearer-authed upgrades
-        // bypass entirely (CLI / programmatic clients don't attach Origin
-        // reliably and aren't subject to browser auto-attach anyway).
-        // Local mode (requireToken=false) skips too -- there's no session
-        // cookie to protect.
+        // Origin enforcement on cookie-authed WS upgrades and state-changing
+        // HTTP. Skipping plain browser GET top-level navigations (which Chrome
+        // omits the Origin header on, by design) -- those are CSRF-safe under
+        // SameSite=Lax. Without this scope, navigating to `localhost:19400/`
+        // immediately after the OAuth callback minted a session cookie ate
+        // the cookie and 401'd the user (#552).
+        //
+        // Cookie-authed WS upgrades are CSRF-relevant: a malicious page could
+        // open a WS to our listener and ride the user's session cookie.
+        // Bearer-authed upgrades bypass entirely (CLI / programmatic clients
+        // don't attach Origin reliably and aren't subject to browser auto-
+        // attach anyway). Local mode (requireToken=false) skips too -- there's
+        // no session cookie to protect.
+        const requiresOriginGate = isWebSocketUpgrade(req) || isStateChanging(req.method);
         if (
+          requiresOriginGate &&
           self.auth?.requireToken &&
           self.auth.authSessions &&
           sessionCookieValue &&
           !hasBearerForUpgrade &&
           !verifyOriginForCookieAuth(req, self.auth.allowedOrigins)
         ) {
-          logDebug("web", `ws upgrade: origin check failed (origin=${req.headers.get("origin") ?? "<none>"})`);
+          logDebug("web", `cookie auth: origin check failed (origin=${req.headers.get("origin") ?? "<none>"})`);
           const headers = new Headers();
           headers.append(
             "Set-Cookie",
