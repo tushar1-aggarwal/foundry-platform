@@ -1,0 +1,3 @@
+packages/core/migrations/registry.ts:44:import * as m018 from "./018_scoping_overrides.js";
+packages/core/migrations/registry.ts:68:  { version: m018.VERSION, name: m018.NAME, up: m018.up },
+packages/core/migrations/018_scoping_overrides.ts:13:export const VERSION = 18;

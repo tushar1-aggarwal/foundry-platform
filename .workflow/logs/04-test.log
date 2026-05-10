@@ -1,0 +1,334 @@
+bun test --concurrency 4 \
+	  $(find packages -name '*.test.ts' -o -name '*.test.tsx' | grep -v e2e | grep -v local-arkd | grep -v local-provider | grep -v /dist/ | sort)
+bun test v1.3.13 (bf2e2cec)
+
+packages/core/__tests__/claude-agent-launch.test.ts:
+[agent-sdk launch] hook forward failed: connection refused
+[agent-sdk launch] hook forward failed: connection refused
+[agent-sdk launch] hook forward failed: connection refused
+
+packages/core/__tests__/config-resolver.test.ts:
+[config] ARK_CONDUCTOR_PORT=not-a-number is not an integer -- ignored
+Cannot connect to the Docker daemon at unix:///Users/paytmlabs/.colima/default/docker.sock. Is the docker daemon running?
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+fatal: ambiguous argument 'origin/main..HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+fatal: ambiguous argument 'origin/main..HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+fatal: ambiguous argument 'origin/main..HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+fatal: ambiguous argument 'origin/main..HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+fatal: ambiguous argument 'origin/main..HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+fatal: ambiguous argument 'origin/main..HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+fatal: ambiguous argument 'origin/main..HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+fatal: ambiguous argument 'origin/main..HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+fatal: ambiguous argument 'origin/main..HEAD': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+
+packages/core/__tests__/bridge.test.ts:
+bridge: slack send failed: Unable to connect. Is the computer able to access the url?
+bridge: email send failed: connect ECONNREFUSED 127.0.0.1:2525
+bridge: email send failed: connect ECONNREFUSED 127.0.0.1:2525
+
+packages/core/__tests__/web.test.ts:
+Skipping: packages/web/dist not built
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+Conductor: online
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+
+packages/core/__tests__/hosted-web-origin.test.ts:
+Conductor: online
+Conductor: online
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'test-branch'
+
+packages/core/__tests__/hooks.test.ts:
+Handler error for error-test: 166 |   });
+167 | 
+168 |   it("handles handler errors without stopping other handlers", () => {
+169 |     const received: string[] = [];
+170 |     eventBus.on("error-test", () => {
+171 |       throw new Error("handler crash");
+                      ^
+error: handler crash
+      at <anonymous> (/Users/paytmlabs/.ark/worktrees/s-uwwzdt836w/packages/core/__tests__/hooks.test.ts:171:17)
+      at emit (/Users/paytmlabs/.ark/worktrees/s-uwwzdt836w/packages/core/hooks.ts:82:9)
+      at <anonymous> (/Users/paytmlabs/.ark/worktrees/s-uwwzdt836w/packages/core/__tests__/hooks.test.ts:177:14)
+
+
+packages/core/__tests__/tools.test.ts:
+[tools] failed to parse /var/folders/0m/d1ncpjbd42n1y__cdr08745r0000gn/T/ark-test-7876-fKGqU2/project/.mcp.json: JSON Parse error: Expected '}'
+
+packages/core/__tests__/claude-hooks.test.ts:
+writeSettings: failed to parse /var/folders/0m/d1ncpjbd42n1y__cdr08745r0000gn/T/ark-test-7876-AntRzJ/.claude/settings.local.json, starting fresh: JSON Parse error: Unexpected identifier "not"
+fatal: cannot change to '/tmp/fake-repo': No such file or directory
+fatal: cannot change to '/tmp/fake-repo': No such file or directory
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+fatal: cannot change to '/tmp/fake-repo': No such file or directory
+
+packages/core/__tests__/daemon-status.test.ts:
+Conductor: online
+Conductor: online
+Conductor: online
+
+packages/core/__tests__/hosted-web-auth.test.ts:
+Conductor: online
+[arkd] [exec] 2026-05-10T03:01:52.276Z cwd=. cmd=echo hello
+[arkd] [exec] 2026-05-10T03:01:52.297Z cwd=. cmd=echo allowed
+[arkd] [exec] 2026-05-10T03:01:52.309Z cwd=. cmd=sh -c echo ok
+[arkd] [exec] 2026-05-10T03:01:52.335Z cwd=/var/folders/0m/d1ncpjbd42n1y__cdr08745r0000gn/T/arkd-confined-36BVGa cmd=pwd
+[arkd] [exec] 2026-05-10T03:02:30.647Z cwd=. cmd=echo client-test
+[arkd] [exec] 2026-05-10T03:02:30.667Z cwd=. cmd=sh -c exit 7
+[arkd] [exec] 2026-05-10T03:02:30.704Z cwd=. cmd=sh -c echo $MY_CLIENT_VAR
+[arkd] [exec] 2026-05-10T03:02:30.731Z cwd=. cmd=cat
+[arkd] [exec] 2026-05-10T03:02:34.659Z cwd=. cmd=echo hello arkd
+[arkd] [exec] 2026-05-10T03:02:34.670Z cwd=. cmd=sh -c echo err >&2; exit 42
+[arkd] [exec] 2026-05-10T03:02:34.689Z cwd=/var/folders/0m/d1ncpjbd42n1y__cdr08745r0000gn/T/arkd-test-1778382154645 cmd=pwd
+[arkd] [exec] 2026-05-10T03:02:34.699Z cwd=. cmd=sh -c sleep 60
+[arkd] [exec] 2026-05-10T03:02:35.204Z cwd=. cmd=cat
+[arkd] [exec] 2026-05-10T03:02:35.215Z cwd=. cmd=sh -c echo $ARKD_TEST_VAR
+[arkd] [exec] 2026-05-10T03:02:38.433Z cwd=. cmd=echo a
+[arkd] [exec] 2026-05-10T03:02:38.436Z cwd=. cmd=echo b
+fatal: cannot change to '/tmp/test-repo': No such file or directory
+fatal: cannot change to 'my/repo-a': No such file or directory
+fatal: cannot change to 'my/repo-b': No such file or directory
+
+packages/router/__tests__/router-usage.test.ts:
+[router] Starting on port 18431, policy=balanced, providers=anthropic,google
+[router] Models: claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5, gemini-2.5-pro, gemini-2.5-flash
+
+packages/router/__tests__/server.test.ts:
+[router] Starting on port 18430, policy=balanced, providers=
+[router] Models: 
+[router] Error handling /v1/chat/completions: undefined is not an object (evaluating 'selected.id')
+
+packages/core/storage/__tests__/s3.test.ts:
+[s3.test] Docker not available -- skipping LocalStack-backed S3 tests.
+
+ 5131 pass
+ 16 skip
+ 0 fail
+ 13566 expect() calls
+Ran 5147 tests across 508 files. [343.04s]

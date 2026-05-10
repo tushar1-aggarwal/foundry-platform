@@ -1,0 +1,1 @@
+bunx --bun eslint packages/ --max-warnings 0

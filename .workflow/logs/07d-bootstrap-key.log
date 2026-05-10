@@ -1,0 +1,3 @@
+158:bootstrap-key: ## Mint the first admin API key (auth-required deployments)
+163:	    echo "A daemon is already running on :19400 -- stop it first ('ark conductor stop')."; \
+173:	  ./ark auth create-key --name "$(NAME)" --tenant "$$tenant" --role "$$role"; \

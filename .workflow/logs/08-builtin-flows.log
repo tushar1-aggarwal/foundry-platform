@@ -1,0 +1,6 @@
+PASS: 'ark flow list' shows all 4 staged builtin flows
+  bare-auto        work  Single agent session, fire-and-forget --
+  autonomous-sdlc  plan > implement > verify > review > pr > merge  Fully autonomous SDLC: plan -> implement
+  bare             work  Single agent session -- interactive, use
+  quick            implement > verify > pr > merge  Quick flow: implement -> verify -> PR (n
+  autonomous       work  Single agent session -- fully autonomous

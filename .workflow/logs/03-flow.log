@@ -1,0 +1,7 @@
+bun test packages/core/__tests__/flow.test.ts --concurrency 4
+bun test v1.3.13 (bf2e2cec)
+
+ 53 pass
+ 0 fail
+ 115 expect() calls
+Ran 53 tests across 2 files. [5.63s]

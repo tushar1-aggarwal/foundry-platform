@@ -1,0 +1,9 @@
+14: *   agent-resolve.ts   resolveDispatchAgent, applyStageModelAndResolveSlug
+50:  applyStageModelAndResolveSlug,
+51:  applyScopingRuntimeHint,
+52:  applyScopingModelHint,
+156:    // Phase 1 scoping hooks must fire BEFORE applyStageModelAndResolveSlug
+164:    // applyStageModelAndResolveSlug after the hints run, matching the
+167:    applyScopingRuntimeHint(this.deps, agent, cfg.scoping_runtime_hint, log);
+168:    applyScopingModelHint(this.deps, agent, cfg.scoping_model_hint, projectRoot, log);
+169:    applyStageModelAndResolveSlug(this.deps, agent, stageDef, projectRoot, log);

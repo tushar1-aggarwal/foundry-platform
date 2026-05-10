@@ -1,0 +1,7 @@
+bun test packages/core/auth/__tests__/origin.test.ts --concurrency 4
+bun test v1.3.13 (bf2e2cec)
+
+ 18 pass
+ 0 fail
+ 50 expect() calls
+Ran 18 tests across 2 files. [91.00ms]

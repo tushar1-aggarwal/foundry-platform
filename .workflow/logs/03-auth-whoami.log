@@ -1,0 +1,7 @@
+bun test packages/conductor/handlers/__tests__/auth-whoami.test.ts --concurrency 4
+bun test v1.3.13 (bf2e2cec)
+
+ 10 pass
+ 0 fail
+ 39 expect() calls
+Ran 10 tests across 2 files. [711.00ms]

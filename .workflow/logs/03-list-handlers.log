@@ -1,0 +1,8 @@
+bun test packages/conductor/__tests__/list-handlers.test.ts --concurrency 4
+bun test v1.3.13 (bf2e2cec)
+fatal: cannot change to '/tmp/test-repo': No such file or directory
+
+ 37 pass
+ 0 fail
+ 178 expect() calls
+Ran 37 tests across 2 files. [1180.00ms]

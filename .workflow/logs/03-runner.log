@@ -1,0 +1,8 @@
+bun test packages/core/migrations/__tests__/runner.test.ts --concurrency 4
+bun test v1.3.13 (bf2e2cec)
+
+ 11 pass
+ 1 skip
+ 0 fail
+ 38 expect() calls
+Ran 12 tests across 2 files. [102.00ms]

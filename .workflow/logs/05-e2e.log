@@ -1,0 +1,10 @@
+Step 5 SKIPPED -- MISSING_PREREQS
+
+Pre-flight check output:
+  docker binary:   /opt/homebrew/bin/docker (Docker version 27.2.0)
+  tmux binary:     /opt/homebrew/bin/tmux (tmux 3.5a)
+  docker info:     FAILED -- "Cannot connect to the Docker daemon at unix:///Users/paytmlabs/.colima/default/docker.sock. Is the docker daemon running?"
+
+Per PLAN.md Step 5 instructions: when `docker info` fails (colima not running), mark SKIP with MISSING_PREREQS and do NOT attempt to start colima or install anything. The reviewer decides whether SKIP is acceptable. This matches the prior smoke (smoke/post-auth-merge @ fae690cc) which also skipped here.
+
+Make target NOT executed: `make test-e2e-control-plane`
