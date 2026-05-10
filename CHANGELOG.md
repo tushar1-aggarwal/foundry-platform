@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.22.0 (2026-05-08)
+
+### Breaking changes
+- **Renamed: `ark daemon` is now `ark conductor`.** The conductor and server daemon are a single process now; old subcommands (`start`, `stop`, `status`) live under `ark conductor`, so update any scripts or systemd units that called `ark daemon`. (#530)
+- **Renamed env var and YAML key: `ARK_SERVER_PORT` -> `ARK_CONDUCTOR_PORT`, `ports.server` -> `ports.conductor`** -- the legacy aliases are removed (no soft fallback), so update any deployment configs that set them. (#530)
+- **Removed: `--provider` flag on `ark compute create`** -- use `--kind` (e.g. `docker`, `ec2`) and `--isolation` (e.g. `firecracker`, `kata`) instead. (#529)
+- **Removed: `arc.json` per-repo config file** -- compute port discovery now happens inside the isolation layer (devcontainer.json `forwardPorts`, docker-compose service ports, `.ark.yaml` `worktree.copy`); delete any leftover `arc.json` files since they are no longer read. (#529)
+- **Moved: runtime-specific fields now nest under `runtime_config:` in agent and runtime YAML** -- top-level `recipe` / `sub_recipes` (Goose) and `default_haiku_model` (claude-agent) are no longer read, so migrate to `runtime_config: { goose: { recipe: ... } }` / `runtime_config: { claude-agent: { default_haiku_model: ... } }`.
+
+### Removed
+- **`ark recipe` commands and the recipe feature** -- 5 RPC handlers, MCP tools, the CLI subcommand, and the 10 builtin templates under `recipes/` are gone; move custom flows to skills or agent definitions.
+- **Skill-extractor** (auto-extract reusable procedures from completed sessions) -- unused.
+- **Code-intel, knowledge graph, repo-map, memory, and eval surfaces** -- `ark knowledge ...`, `ark code-intel ...`, `ark eval ...`, `ark memory ...` no longer exist; workspace indexing for multi-repo dispatch is preserved as a standalone module.
+- **Code search and the History view in the web UI** -- the `ark search` CLI, `History` page, and the `claude_sessions_cache` reader are removed.
+- **ACP headless JSON-RPC server** (`ark acp`) -- unused; the future Zed-flavor ACP adapter is unrelated and remains on the roadmap.
+- **`mcp/attach` and `mcp/attach-by-dir` JSON-RPC methods** plus the underlying `McpDirCapability` -- never called by any UI.
+
+### Features
+- **Live log and terminal subscriptions over JSON-RPC** -- `log/subscribe` streams session log appends and `terminal/subscribe` / `terminal/input` route tmux output and keystrokes through the merged daemon. (#530)
+- **Session forensics handlers** -- `session/stdio` and `session/transcript` surface post-mortem logs for completed/failed sessions. (#530)
+- **Session-tree push subscription** -- `session/tree-stream` replaces the SSE endpoint with a notify-based JSON-RPC subscription on the existing WS connection. (#530)
+- **Post-launch operations on compute and agent handles** -- `AgentHandle.kill / captureOutput / checkAlive` and `ComputeHandle.getMetrics` now cover the full session lifecycle, not just launch. (#529)
+
+### Changed
+- **OpenAI-compatible proxy, webhook, and health endpoints now served on the conductor port** (`/v1/*`, `/hooks/github/merge`, `/hooks/status`, `/health`) -- update any external integrations that pointed at the old separate server port. (#530)
+- **Role-gated JSON-RPC errors now describe the required role** instead of returning an opaque "forbidden" -- e.g. `worker/heartbeat requires worker or admin role`, `session/start is not allowed for this role`.
+- **Web UI realtime updates unified onto a single SSE primitive** (`useSseSubscription`); `useSmartPoll` is gone and `useDaemonStatus` now uses TanStack Query's `refetchInterval`, which should reduce reconnection churn during long sessions.
+
+### Fixes
+- **Multi-stage flows could fail on the second stage with "no spawnProcess on its handle" after a daemon restart** -- compute handles now rehydrate their methods after a JSON round-trip cleanly.
+- **Archived sessions could be revived back to "ready" by late agent hooks** (delayed `SessionEnd` from a process that outlived `archive()`) -- archived sessions now stay archived.
+- **`create_pr` failed the entire flow with "non-fast-forward" if the upstream branch already had divergent history** -- the action now auto-renames the branch with a numeric suffix and retries.
+- **Auto-renamed branches had a redundant `-s-` in the suffix** (e.g. `feat/foo-s-s-e4xgs0`) -- fixed to a single suffix.
+- **`arkd` `/exec` requests that hit the timeout could leak processes** -- the timeout path now sends `SIGKILL` and drains stdout/stderr with a bounded buffer.
+- **Creating a session without specifying compute could persist a non-null `compute_name` at the database layer** -- the default is now applied at the service layer and the column accepts null.
+
+## v0.21.41 (2026-05-05)
+
+### Fixes
+- **Knowledge graph**: proper namespace separation for eval nodes; default-exclude eval nodes at the store layer
+- **Actions**: persist `pr_url` after `create_pr` success; `auto_merge` precondition-checks `session.pr_url`
+- **Compute panel**: default `compute_name` to local with strict UI filter; hide stale sessions and show durable ark id
+- **Planner**: bump `max_turns` from 50 to 200
+- **Arkd**: use absolute `/bin/bash` path, validate cwd, and surface real errno on spawn failures
+- **MCP**: switch Zod 4 schema converter to native `z.toJSONSchema`; hide OAuth metadata in local mode
+- **Action stage**: resolve `GITHUB_TOKEN` from the secrets store (not just env); use `resolveTargetAndHandle` instead of a stub meta object
+- **EC2**: write tunnel port to `compute.config` so metrics survive across sessions; self-refreshing AWS credentials
+
+### Features
+- **Web terminal**: show wall-clock timestamps on tool-block headers; route all traffic through ark (no transport leak)
+
+### Refactor
+- **Session attach**: `SessionAttachService` owns the decision -- one model, one path
+
 ## v0.18.0 (2026-04-17)
 
 ### Web UI Redesign

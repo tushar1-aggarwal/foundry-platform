@@ -122,6 +122,9 @@ async function captureSecretsCommand(args: string[]): Promise<{ stdout: string; 
   } finally {
     console.log = origLog;
     console.error = origErr;
+    // Commander actions may set process.exitCode for non-zero CLI exits;
+    // reset so the test runner does not inherit a stale non-zero code.
+    process.exitCode = 0;
   }
   return { stdout: stdoutLines.join("\n"), stderr: stderrLines.join("\n") };
 }
