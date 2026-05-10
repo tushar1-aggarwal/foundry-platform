@@ -35,3 +35,6 @@ packages/desktop/node_modules/
 packages/desktop/binaries/
 # Ark-managed (written at dispatch, cleaned on stop)
 .mcp.json
+
+# Planning artifacts dropped by agents -- never tracked.
+PLAN.md
