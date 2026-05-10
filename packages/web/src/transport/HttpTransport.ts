@@ -62,11 +62,36 @@ export class HttpTransport implements WebTransport {
     const res = await fetch(`${this.base}/api/rpc`, {
       method: "POST",
       headers: this.authHeaders(),
+      // credentials: "include" makes the browser send + accept the
+      // ark_session HttpOnly cookie set by /auth/google/callback.
+      // Without this, cookie auth silently fails because the bundled
+      // dashboard wouldn't attach the cookie even though the browser
+      // holds it. The Bearer header still rides alongside; the server
+      // has Bearer-first precedence so this is safe to always set.
+      credentials: "include",
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
     });
+
+    // 401 from the HTTP layer = "no valid credential resolved" (stale
+    // cookie, expired Bearer, missing Origin on cookie write). That is
+    // the only condition that should force the user back to LoginPage.
+    // FORBIDDEN errors come back as a 200 with `error.code === FORBIDDEN`
+    // and must NOT log the user out -- that's a per-endpoint permission
+    // denial (e.g. requireRealUser blocking an api-key caller from
+    // minting more keys), and force-logout would mask a real ACL bug.
+    if (res.status === 401) {
+      this.setToken(null);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("ark:auth-required"));
+      }
+      throw new Error("Unauthorized");
+    }
+
     const data = await res.json();
     if (data.error) {
-      throw new Error(data.error.message || "RPC error");
+      const err = new Error(data.error.message || "RPC error") as Error & { code?: number | string };
+      if (data.error.code !== undefined) err.code = data.error.code;
+      throw err;
     }
     return data.result as T;
   }

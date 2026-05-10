@@ -193,7 +193,15 @@ export function mergeOverrides(a: EnvOverrides, b: EnvOverrides): EnvOverrides {
     ports: { ...a.ports, ...b.ports },
     channels: { ...a.channels, ...b.channels },
     observability: { ...a.observability, ...b.observability },
-    auth: { ...a.auth, ...b.auth },
+    auth: {
+      ...a.auth,
+      ...b.auth,
+      // Deep-merge nested google + session so a sparse override
+      // (e.g. only ARK_AUTH_GOOGLE_CLIENT_ID set) doesn't wipe sibling
+      // fields supplied by an earlier YAML / profile-default layer.
+      google: { ...a.auth?.google, ...b.auth?.google },
+      session: { ...a.auth?.session, ...b.auth?.session },
+    },
     features: { ...a.features, ...b.features },
     storage: {
       blobBackend: b.storage?.blobBackend ?? a.storage?.blobBackend,

@@ -31,13 +31,15 @@ import {
 } from "../integrations/github-webhook.js";
 import { handleWebhookRequest, matchWebhookPath } from "../../conductor/handlers/webhooks.js";
 import { type SSEBus, createSSEBus } from "./sse-bus.js";
-import { extractTenantContext, canWrite, type AuthConfig } from "../auth/index.js";
+import { extractTenantContextWithSource, canWrite, type AuthConfig, type AuthSource } from "../auth/index.js";
+import { verifyOriginForCookieAuth } from "../auth/origin.js";
+import { clearSessionCookie } from "../auth/cookies.js";
 import { fromWire, localAdminContext, type TenantContext as HandlerTenantContext } from "../auth/context.js";
 import type { TenantContext } from "../../types/index.js";
 import { resolveWebDist } from "../install-paths.js";
 import { VERSION } from "../version.js";
 import { createHmac, timingSafeEqual } from "crypto";
-import { logInfo, logDebug } from "../observability/structured-log.js";
+import { logInfo, logDebug, logError } from "../observability/structured-log.js";
 
 const WEB_DIST: string = resolveWebDist();
 const SERVER_BOOT_TIME = Date.now();
@@ -50,19 +52,38 @@ export interface WebServerOptions {
   apiOnly?: boolean;
 }
 
-const CORS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
+/**
+ * CORS headers. The `Access-Control-Allow-Origin` value is request-specific:
+ * - Credentialed requests (`credentials: "include"`) MUST NOT receive `*`
+ *   per the CORS spec; browsers reject the response. We echo the request's
+ *   Origin when it is in the allowlist, omit the header otherwise.
+ * - Non-credentialed cross-origin callers continue to work because
+ *   same-origin browsers and Bearer-only callers either don't need CORS at
+ *   all or get a per-request echo of an allowlisted Origin.
+ */
+const CORS_BASE: Record<string, string> = {
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Credentials": "true",
+  Vary: "Origin",
 };
 
-function jsonResponse(data: unknown, status = 200): Response {
-  return Response.json(data, { status, headers: CORS });
+function corsHeaders(req: Request, allowedOrigins: readonly string[]): Record<string, string> {
+  const headers: Record<string, string> = { ...CORS_BASE };
+  const origin = req.headers.get("origin");
+  if (origin && allowedOrigins.includes(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
+  }
+  return headers;
 }
 
-function errorResponse(err: unknown, status = 500): Response {
+function jsonResponse(data: unknown, status: number, headers: Record<string, string>): Response {
+  return Response.json(data, { status, headers });
+}
+
+function errorResponse(err: unknown, status: number, headers: Record<string, string>): Response {
   const message = err instanceof Error ? err.message : String(err);
-  return jsonResponse({ ok: false, message }, status);
+  return jsonResponse({ ok: false, message }, status, headers);
 }
 
 /** Set of RPC methods that mutate state -- blocked in readOnly mode. */
@@ -223,29 +244,47 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
   let apiKeyMgr: import("../auth/api-keys.js").ApiKeyManager | null = null;
   try {
     apiKeyMgr = app.apiKeys;
-  } catch {
-    logInfo("web", "not booted yet or unavailable");
+  } catch (err: any) {
+    // ApiKeyManager isn't optional when auth is enabled -- without it,
+    // Bearer auth silently dies and every cookie-less call falls back to
+    // anonymous. Log loudly so a DI failure is detectable in prod, but
+    // don't crash the boot path because local-mode (auth disabled) does
+    // not need it.
+    if (authConfig.enabled) {
+      logError("web", `apiKeys DI resolve failed: ${err?.message ?? err}`);
+    } else {
+      logInfo("web", "apiKeyManager unavailable (auth disabled)");
+    }
   }
 
   // ── Server ───────────────────────────────────────────────────────────────
+  const sessionAllowedOrigins = app.config.authSection.session.allowedOrigins;
+  const sessionCookieName = app.config.authSection.session.cookieName;
+  const sessionCookieDomain = app.config.authSection.session.cookieDomain;
+
   const server = Bun.serve({
     port,
     async fetch(req, _server) {
       const url = new URL(req.url);
+      const cors = corsHeaders(req, sessionAllowedOrigins);
 
       // CORS preflight
       if (req.method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: CORS });
+        return new Response(null, { status: 204, headers: cors });
       }
 
       // Health probe -- unauthenticated, used by desktop app and external monitors
       // to verify the web server is up. Lightweight: no DB or service checks.
       if (url.pathname === "/api/health" && req.method === "GET") {
-        return jsonResponse({
-          ok: true,
-          version: VERSION,
-          uptime: Math.round((Date.now() - SERVER_BOOT_TIME) / 1000),
-        });
+        return jsonResponse(
+          {
+            ok: true,
+            version: VERSION,
+            uptime: Math.round((Date.now() - SERVER_BOOT_TIME) / 1000),
+          },
+          200,
+          cors,
+        );
       }
 
       // Token auth (legacy simple token) -- checked first for backward compat.
@@ -267,11 +306,17 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
 
       // Multi-tenant auth -- extract tenant context from request
       let tenantCtx: TenantContext | null = null;
+      let authSource: AuthSource = "default";
       if (authConfig.enabled) {
-        tenantCtx = await extractTenantContext(req, authConfig, apiKeyMgr);
-        if (!tenantCtx) {
-          return jsonResponse({ error: "Unauthorized - valid API key required" }, 401);
+        const resolved = await extractTenantContextWithSource(req, authConfig, apiKeyMgr, {
+          authSessions: app.authSessions,
+          cookieName: sessionCookieName,
+        });
+        if (!resolved) {
+          return jsonResponse({ error: "Unauthorized - valid API key required" }, 401, cors);
         }
+        tenantCtx = resolved.ctx;
+        authSource = resolved.source;
       }
 
       // Determine which app context to use for this request
@@ -296,7 +341,7 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
             Connection: "keep-alive",
-            ...CORS,
+            ...cors,
           },
         });
       }
@@ -318,6 +363,33 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
                 error: { code: -32600, message: "Invalid JSON-RPC request" },
               },
               400,
+              cors,
+            );
+          }
+          // Origin enforcement on cookie-authed write methods. Bearer
+          // requests bypass entirely (no browser auto-attach, CSRF-immune).
+          // Cookie-authed mutations are CSRF-relevant; the SameSite=Lax cookie
+          // attribute is not sufficient on its own (older browsers, vendor
+          // SameSite default churn). Mirror the WS upgrade and /auth/logout
+          // policy: missing or non-allowlisted Origin -> 401 + clear cookie.
+          if (
+            authSource === "cookie" &&
+            WRITE_METHODS.has(body.method) &&
+            !verifyOriginForCookieAuth(req, sessionAllowedOrigins)
+          ) {
+            logDebug(
+              "web",
+              `/api/rpc: origin check failed (origin=${req.headers.get("origin") ?? "<none>"}, method=${body.method})`,
+            );
+            const headers = new Headers({ ...cors, "Content-Type": "application/json" });
+            headers.append("Set-Cookie", clearSessionCookie({ name: sessionCookieName, domain: sessionCookieDomain }));
+            return new Response(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: body.id ?? null,
+                error: { code: -32001, message: "invalid origin" },
+              }),
+              { status: 401, headers },
             );
           }
           // Read-only guard
@@ -329,6 +401,7 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
                 error: { code: -32603, message: "Read-only mode" },
               },
               403,
+              cors,
             );
           }
           // Tenant write permission guard
@@ -340,6 +413,7 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
                 error: { code: -32603, message: "Insufficient permissions -- viewer role cannot write" },
               },
               403,
+              cors,
             );
           }
           // Create a tenant-scoped router if needed
@@ -362,9 +436,9 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
             undefined,
             handlerCtx,
           );
-          return jsonResponse(result);
+          return jsonResponse(result, 200, cors);
         } catch (err) {
-          return errorResponse(err, 400);
+          return errorResponse(err, 400, cors);
         }
       }
 
@@ -373,20 +447,20 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
       // generic-hmac, ...). Signature verification + 2xx-fast dispatch lives in
       // packages/conductor/handlers/webhooks.ts.
       if (req.method === "POST" && matchWebhookPath(url.pathname)) {
-        if (readOnly) return jsonResponse({ ok: false, message: "Read-only mode" }, 403);
+        if (readOnly) return jsonResponse({ ok: false, message: "Read-only mode" }, 403, cors);
         try {
           const response = await handleWebhookRequest(requestApp, req, {
             tenant: tenantCtx?.tenantId ?? "default",
           });
           return response;
         } catch (err) {
-          return errorResponse(err);
+          return errorResponse(err, 500, cors);
         }
       }
 
       // GitHub issue webhook (legacy pre-unified path).
       if (url.pathname === "/api/webhooks/github/issues" && req.method === "POST") {
-        if (readOnly) return jsonResponse({ ok: false, message: "Read-only mode" }, 403);
+        if (readOnly) return jsonResponse({ ok: false, message: "Read-only mode" }, 403, cors);
         try {
           const rawBody = await req.text();
           // Verify webhook signature if a secret is configured
@@ -394,13 +468,13 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
           if (webhookSecret) {
             const signature = req.headers.get("x-hub-signature-256");
             if (!signature) {
-              return jsonResponse({ ok: false, message: "Missing webhook signature" }, 401);
+              return jsonResponse({ ok: false, message: "Missing webhook signature" }, 401, cors);
             }
             const expected = "sha256=" + createHmac("sha256", webhookSecret).update(rawBody).digest("hex");
             const sigBuf = Buffer.from(signature);
             const expBuf = Buffer.from(expected);
             if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
-              return jsonResponse({ ok: false, message: "Invalid webhook signature" }, 401);
+              return jsonResponse({ ok: false, message: "Invalid webhook signature" }, 401, cors);
             }
           }
           const payload = JSON.parse(rawBody) as IssueWebhookPayload;
@@ -411,14 +485,14 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
             group: url.searchParams.get("group") ?? undefined,
           };
           const result = await handleIssueWebhook(requestApp, payload, config);
-          return jsonResponse(result, result.ok ? 200 : 400);
+          return jsonResponse(result, result.ok ? 200 : 400, cors);
         } catch (err) {
-          return errorResponse(err);
+          return errorResponse(err, 500, cors);
         }
       }
 
       // ── Static file serving ────────────────────────────────────────────────
-      if (apiOnly) return new Response("Not Found", { status: 404, headers: CORS });
+      if (apiOnly) return new Response("Not Found", { status: 404, headers: cors });
 
       const staticExts: Record<string, string> = {
         ".js": "application/javascript",
@@ -430,11 +504,11 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
       if (staticExts[ext]) {
         const filePath = resolve(join(WEB_DIST, url.pathname));
         if (!filePath.startsWith(resolve(WEB_DIST))) {
-          return new Response("Forbidden", { status: 403, headers: CORS });
+          return new Response("Forbidden", { status: 403, headers: cors });
         }
         if (existsSync(filePath)) {
           return new Response(Bun.file(filePath), {
-            headers: { "Content-Type": staticExts[ext], ...CORS },
+            headers: { "Content-Type": staticExts[ext], ...cors },
           });
         }
       }
@@ -448,12 +522,12 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
           const rootAttrs = `id="root"${readOnly ? ' data-readonly="true"' : ""}${authAttr}`;
           html = html.replace('id="root"', rootAttrs);
           return new Response(html, {
-            headers: { "Content-Type": "text/html", ...CORS },
+            headers: { "Content-Type": "text/html", ...cors },
           });
         }
       }
 
-      return new Response("Not Found", { status: 404, headers: CORS });
+      return new Response("Not Found", { status: 404, headers: cors });
     },
   });
 

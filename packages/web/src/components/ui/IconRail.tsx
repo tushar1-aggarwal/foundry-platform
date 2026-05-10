@@ -21,8 +21,10 @@ export interface IconRailProps extends React.ComponentProps<"nav"> {
   logo?: React.ReactNode;
   /** Daemon health status -- drives the brand live dot + foot-line latency. */
   daemonStatus?: DaemonStatus | null;
-  /** Avatar initials for the pinned avatar button (bottom). */
+  /** Avatar initials for the pinned avatar button (bottom). Ignored when `avatarSlot` is set. */
   avatarInitials?: string;
+  /** Custom node for the bottom-of-rail avatar slot. Used by UserMenu in Phase 1. */
+  avatarSlot?: React.ReactNode;
   /** Optional latency text to render in the foot row (e.g. "18ms"). */
   latencyText?: string;
 }
@@ -87,6 +89,7 @@ export function IconRail({
   logo,
   daemonStatus,
   avatarInitials,
+  avatarSlot,
   latencyText,
   className,
   ...props
@@ -153,19 +156,21 @@ export function IconRail({
       {/* Settings + avatar (pinned bottom) -------------------------------- */}
       <div className="flex flex-col items-center gap-[4px] pb-[10px] pt-[6px] w-full border-t border-[rgba(255,255,255,0.04)] shrink-0">
         {settingsItem && <RailButton item={settingsItem} active={activeId === settingsItem.id} onSelect={onSelect} />}
-        {avatarInitials && (
-          <div
-            className="relative w-[32px] h-[32px] mt-[2px] rounded-full grid place-items-center border-[2px] border-[var(--bg-sidebar)] text-white font-semibold text-[12px] font-[family-name:var(--font-mono-ui)]"
-            style={{ backgroundImage: "linear-gradient(135deg, #f59e0b, #ec4899)" }}
-            title={avatarInitials}
-          >
-            {avatarInitials}
-            <span
-              aria-hidden
-              className="absolute -bottom-[1px] -right-[1px] w-[9px] h-[9px] rounded-full bg-[var(--completed)] shadow-[0_0_0_2px_var(--bg-sidebar),0_0_4px_rgba(52,211,153,0.6)]"
-            />
-          </div>
-        )}
+        {avatarSlot
+          ? avatarSlot
+          : avatarInitials && (
+              <div
+                className="relative w-[32px] h-[32px] mt-[2px] rounded-full grid place-items-center border-[2px] border-[var(--bg-sidebar)] text-white font-semibold text-[12px] font-[family-name:var(--font-mono-ui)]"
+                style={{ backgroundImage: "linear-gradient(135deg, #f59e0b, #ec4899)" }}
+                title={avatarInitials}
+              >
+                {avatarInitials}
+                <span
+                  aria-hidden
+                  className="absolute -bottom-[1px] -right-[1px] w-[9px] h-[9px] rounded-full bg-[var(--completed)] shadow-[0_0_0_2px_var(--bg-sidebar),0_0_4px_rgba(52,211,153,0.6)]"
+                />
+              </div>
+            )}
       </div>
 
       {/* Foot ------------------------------------------------------------- */}

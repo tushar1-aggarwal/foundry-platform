@@ -41,7 +41,9 @@ import type {
   ArtifactRepository,
   FlowStateRepository,
   LedgerRepository,
+  ScopingOverrideRepository,
 } from "./repositories/index.js";
+import type { ScopingResolver } from "./scoping/index.js";
 import { ComputeTemplateRepository as ComputeTemplateRepositoryCtor } from "./repositories/index.js";
 import type { SessionService, ComputeService } from "./services/index.js";
 import type { SessionHooks } from "./services/session-hooks/index.js";
@@ -56,7 +58,15 @@ import { resolveComputeTarget } from "./compute-resolver.js";
 import type { TranscriptParserRegistry } from "./runtimes/transcript-parser.js";
 import type { PluginRegistry } from "./plugins/registry.js";
 import { noopExecutor, NOOP_EXECUTOR_NAMES } from "./executors/noop.js";
-import type { ApiKeyManager, TenantManager, TeamManager, UserManager, TenantPolicyManager } from "./auth/index.js";
+import type {
+  ApiKeyManager,
+  TenantManager,
+  TeamManager,
+  UserManager,
+  TenantPolicyManager,
+  AuthSessionManager,
+  LoginManager,
+} from "./auth/index.js";
 import type { TenantClaudeAuthManager } from "./auth/tenant-claude-auth.js";
 import type { WorkerRegistry } from "./hosted/worker-registry.js";
 import type { SessionScheduler } from "./hosted/scheduler.js";
@@ -639,6 +649,43 @@ export class AppContext {
   /** Per-tenant Claude credential binding manager. Available after boot. */
   get tenantClaudeAuth(): TenantClaudeAuthManager {
     return this._resolve("tenantClaudeAuth");
+  }
+
+  /**
+   * Cookie-session validator for the Phase 1 Google OIDC flow. Resolves
+   * a session cookie value to a TenantContext at request time. Available
+   * after boot. Wired into `materializeContext` by conductor middleware.
+   */
+  get authSessions(): AuthSessionManager {
+    return this._resolve("authSessions");
+  }
+
+  /**
+   * Login lifecycle manager (Phase 1). Owns `completeOAuthLogin` and
+   * `logout`; called by the `/auth/google/callback` and `/auth/logout`
+   * HTTP routes. Available after boot.
+   */
+  get loginManager(): LoginManager {
+    return this._resolve("loginManager");
+  }
+
+  /**
+   * Phase 1 auth scoping resolver. Walks user > team-chain > tenant
+   * against `scoping_overrides` and returns the first non-null match.
+   * Used by handlers that need to honor org-level overrides
+   * (e.g. `flow.allowlist`).
+   */
+  get scoping(): ScopingResolver {
+    return this._resolve("scoping");
+  }
+
+  /**
+   * Storage adapter for the scoping_overrides table. Most callers use
+   * `scoping.resolve()` instead; this is exposed for tests + future
+   * admin RPCs (Phase 2).
+   */
+  get scopingOverrides(): ScopingOverrideRepository {
+    return this._resolve("scopingOverrides");
   }
 
   get sessionService(): SessionService {

@@ -6,6 +6,8 @@ import { AppModeProvider } from "./providers/AppModeProvider.js";
 import { ThemeProvider, useTheme } from "./themes/ThemeProvider.js";
 import { TransportProvider } from "./transport/TransportContext.js";
 import { HttpTransport } from "./transport/HttpTransport.js";
+import { AuthProvider, useAuth } from "./auth/AuthContext.js";
+import { AuthBootSplash } from "./auth/AuthBootSplash.js";
 import { Toast } from "./components/Toast.js";
 import { CommandPalette, type CommandItem } from "./components/ui/CommandPalette.js";
 import { PageFallback } from "./components/ui/PageFallback.js";
@@ -36,7 +38,6 @@ const DesignPreviewPage = lazy(() =>
 );
 
 const READ_ONLY = document.getElementById("root")?.dataset.readonly === "true";
-const AUTH_REQUIRED = document.getElementById("root")?.dataset.auth === "true";
 
 function App() {
   const { view, subId, tab, navigate, setSubId, setTab } = useHashRouter();
@@ -44,16 +45,14 @@ function App() {
   const [toastKey, setToastKey] = useState(0);
   const [cmdkOpen, setCmdkOpen] = useState(false);
   const [cmdkSearch, setCmdkSearch] = useState("");
-  const [authenticated, setAuthenticated] = useState(() => {
-    // If no auth required, or token exists in URL params or localStorage, skip login
-    if (!AUTH_REQUIRED) return true;
-    const urlToken = new URLSearchParams(window.location.search).get("token");
-    if (urlToken) {
-      localStorage.setItem("ark-token", urlToken);
-      return true;
-    }
-    return !!localStorage.getItem("ark-token");
-  });
+  // Auth state is owned by AuthProvider. Boot probes /auth/whoami and
+  // settles on "authed" or "anonymous"; "checking" is the brief
+  // initial state before the probe resolves. The legacy
+  // `data-auth` HTML attribute + URL-token / localStorage-token
+  // dance is gone -- whoami unifies all paths (Bearer + cookie + local
+  // mode). LoginPage's `onLogin` callback calls `refresh()` to
+  // re-probe and flip status.
+  const { status, refresh } = useAuth();
   const readOnly = READ_ONLY;
   const daemonStatus = useDaemonStatus();
 
@@ -112,10 +111,13 @@ function App() {
     [onNavigate, colorMode, toggleColorMode, setThemeName],
   );
 
-  if (!authenticated) {
+  if (status === "checking") {
+    return <AuthBootSplash />;
+  }
+  if (status === "anonymous") {
     return (
       <Suspense fallback={<PageFallback />}>
-        <LoginPage onLogin={() => setAuthenticated(true)} />
+        <LoginPage onLogin={() => void refresh()} />
       </Suspense>
     );
   }
@@ -226,12 +228,14 @@ function App() {
 const root = createRoot(document.getElementById("root")!);
 root.render(
   <TransportProvider transport={new HttpTransport()}>
-    <QueryClientProvider client={queryClient}>
-      <AppModeProvider>
-        <ThemeProvider defaultTheme="midnight-circuit">
-          <App />
-        </ThemeProvider>
-      </AppModeProvider>
-    </QueryClientProvider>
+    <AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <AppModeProvider>
+          <ThemeProvider defaultTheme="midnight-circuit">
+            <App />
+          </ThemeProvider>
+        </AppModeProvider>
+      </QueryClientProvider>
+    </AuthProvider>
   </TransportProvider>,
 );

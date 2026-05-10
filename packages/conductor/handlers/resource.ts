@@ -95,7 +95,17 @@ export function registerResourceHandlers(router: Router, app: AppContext): void 
     return { ok };
   });
 
-  router.handle("flow/list", async () => ({ flows: await app.flows.list() }));
+  // Phase 1: filter the flow list by the caller's scoped allowlist if
+  // any. Empty / null override = back-compat (all flows visible). The
+  // resolver walks user > team-chain > tenant; the most specific match
+  // wins (decision #3). `session/start` re-checks below as defense in
+  // depth in case a CLI client bypasses the dashboard's filter.
+  router.handle("flow/list", async (_p, _notify, ctx) => {
+    const allFlows = await app.flows.list();
+    const allowlist = await app.scoping.resolve<string[]>(ctx, "flow.allowlist");
+    const visible = allowlist ? allFlows.filter((f) => allowlist.includes(f.name)) : allFlows;
+    return { flows: visible };
+  });
   router.handle("flow/read", async (p) => {
     const { name } = extract<FlowReadParams>(p, ["name"]);
     const flow = await app.flows.get(name);

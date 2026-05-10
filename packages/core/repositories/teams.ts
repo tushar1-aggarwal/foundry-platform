@@ -145,6 +145,25 @@ export class TeamRepository {
     return extractChanges(res) > 0;
   }
 
+  /**
+   * Returns the live team's `parent_team_id` (NULL means top-of-tenant), or
+   * null if the team does not exist or is soft-deleted. Used by the scoping
+   * resolver's chain walker -- we deliberately keep this a single-hop lookup
+   * so the walker can defend against cycles + a depth cap centrally.
+   */
+  async getParentTeamId(teamId: string): Promise<string | null | undefined> {
+    const d = this.d();
+    const t = d.schema.teams;
+    const rows = await (d.db as any)
+      .select({ parentTeamId: t.parentTeamId })
+      .from(t)
+      .where(and(eq(t.id, teamId), isNull(t.deletedAt)))
+      .limit(1);
+    const row = (rows as Array<{ parentTeamId: string | null }>)[0];
+    if (!row) return undefined;
+    return row.parentTeamId ?? null;
+  }
+
   /** Cascade helper -- soft-delete every team in a tenant. */
   async softDeleteByTenant(tenantId: string, userId: string | null = null): Promise<void> {
     const d = this.d();

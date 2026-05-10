@@ -16,6 +16,8 @@ import type {
   ChannelsConfig,
   ObservabilityConfig,
   AuthSectionConfig,
+  GoogleAuthConfig,
+  AuthSessionConfig,
   FeaturesConfig,
   StorageConfig,
 } from "./types.js";
@@ -26,12 +28,26 @@ export interface EnvSecretsOverrides {
   awsKmsKeyId?: string;
 }
 
+/**
+ * Sparse-partial AuthSectionConfig override. Nested objects (`google`,
+ * `session`) are themselves `Partial<...>` so a deployment that sets
+ * only `ARK_AUTH_GOOGLE_CLIENT_ID` does NOT also overwrite
+ * `allowedDomains` with hard-coded defaults -- the unset field falls
+ * through to whatever the profile defaults provided.
+ */
+export interface AuthEnvOverrides {
+  requireToken?: AuthSectionConfig["requireToken"];
+  defaultTenant?: AuthSectionConfig["defaultTenant"];
+  google?: Partial<GoogleAuthConfig>;
+  session?: Partial<AuthSessionConfig>;
+}
+
 export interface EnvOverrides {
   arkDir?: string;
   ports: Partial<PortsConfig>;
   channels: Partial<ChannelsConfig>;
   observability: Partial<ObservabilityConfig>;
-  auth: Partial<AuthSectionConfig>;
+  auth: AuthEnvOverrides;
   features: Partial<FeaturesConfig>;
   storage: Partial<StorageConfig>;
   secrets: EnvSecretsOverrides;
@@ -65,6 +81,35 @@ function parseLogLevel(raw: string | undefined): ObservabilityConfig["logLevel"]
   const v = raw.toLowerCase();
   if (v === "debug" || v === "info" || v === "warn" || v === "error") return v;
   return undefined;
+}
+
+/**
+ * Parse a comma-separated list of domains, trimming whitespace and dropping
+ * empty entries. Returns undefined when the env var is unset or empty so
+ * the resolver can fall back to defaults.
+ */
+function parseDomainList(raw: string | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  const list = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return list.length > 0 ? list : undefined;
+}
+
+/**
+ * Parse a comma-separated list of browser origins (e.g. `https://foo.com,
+ * http://localhost:8420`). Same shape as `parseDomainList` but kept separate
+ * because origin values may contain `:port` and the semantic intent is
+ * different. Returns undefined for unset/empty so profile defaults apply.
+ */
+function parseOriginList(raw: string | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  const list = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return list.length > 0 ? list : undefined;
 }
 
 /** Read the current process env into a typed overrides object. */
@@ -107,6 +152,49 @@ export function readEnv(env: NodeJS.ProcessEnv = process.env): EnvOverrides {
   const requireTok = parseBool(env.ARK_AUTH_REQUIRE_TOKEN);
   if (requireTok !== undefined) out.auth.requireToken = requireTok;
   if (env.ARK_DEFAULT_TENANT) out.auth.defaultTenant = env.ARK_DEFAULT_TENANT;
+
+  // Auth -- Google OIDC (Phase 1 cookie login flow). Set only the fields
+  // actually present in env so unset ones fall through to profile defaults.
+  if (env.ARK_AUTH_GOOGLE_CLIENT_ID !== undefined) {
+    out.auth.google = { ...out.auth.google, clientId: env.ARK_AUTH_GOOGLE_CLIENT_ID };
+  }
+  if (env.ARK_AUTH_GOOGLE_CLIENT_SECRET !== undefined) {
+    out.auth.google = { ...out.auth.google, clientSecret: env.ARK_AUTH_GOOGLE_CLIENT_SECRET };
+  }
+  if (env.ARK_AUTH_GOOGLE_REDIRECT_URI !== undefined) {
+    out.auth.google = { ...out.auth.google, redirectUri: env.ARK_AUTH_GOOGLE_REDIRECT_URI };
+  }
+  const allowedDomains = parseDomainList(env.ARK_AUTH_GOOGLE_ALLOWED_DOMAINS);
+  if (allowedDomains !== undefined) {
+    out.auth.google = { ...out.auth.google, allowedDomains };
+  }
+
+  // Auth -- session cookie. Same sparse-partial pattern.
+  const sessionTtl = parseIntStrict(env.ARK_AUTH_SESSION_TTL_SEC, "ARK_AUTH_SESSION_TTL_SEC");
+  if (sessionTtl !== undefined) {
+    out.auth.session = { ...out.auth.session, ttlSec: sessionTtl };
+  }
+  if (env.ARK_AUTH_SESSION_COOKIE_NAME !== undefined) {
+    out.auth.session = { ...out.auth.session, cookieName: env.ARK_AUTH_SESSION_COOKIE_NAME };
+  }
+  if (env.ARK_AUTH_SESSION_COOKIE_DOMAIN !== undefined) {
+    out.auth.session = { ...out.auth.session, cookieDomain: env.ARK_AUTH_SESSION_COOKIE_DOMAIN };
+  }
+  const cookieSecure = parseBool(env.ARK_AUTH_SESSION_COOKIE_SECURE);
+  if (cookieSecure !== undefined) {
+    out.auth.session = { ...out.auth.session, cookieSecure };
+  }
+  const refreshThreshold = parseIntStrict(
+    env.ARK_AUTH_SESSION_REFRESH_THRESHOLD_SEC,
+    "ARK_AUTH_SESSION_REFRESH_THRESHOLD_SEC",
+  );
+  if (refreshThreshold !== undefined) {
+    out.auth.session = { ...out.auth.session, refreshThresholdSec: refreshThreshold };
+  }
+  const allowedOrigins = parseOriginList(env.ARK_AUTH_SESSION_ALLOWED_ORIGINS);
+  if (allowedOrigins !== undefined) {
+    out.auth.session = { ...out.auth.session, allowedOrigins };
+  }
 
   // Features
   const autoRebase = parseBool(env.ARK_AUTO_REBASE);

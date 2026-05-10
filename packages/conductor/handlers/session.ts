@@ -35,6 +35,15 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const opts = extract<SessionStartParams>(params, []);
     const scoped = resolveTenantApp(app, ctx);
 
+    // Default `user_id` to the calling user's real users.id so the
+    // session row records who created it. Skip when the caller is the
+    // local-mode synthetic admin (`local`) or an API-key sentinel
+    // (starts with `ak-`) -- those don't point to a users row, so
+    // writing them would create a misleading audit trail.
+    if (!opts.user_id && ctx.userId && ctx.userId !== "local" && !ctx.userId.startsWith("ak-")) {
+      opts.user_id = ctx.userId;
+    }
+
     // Flow-level requires_repo gate (#416). Code-modifying flows declare
     // `requires_repo: true`; reject the dispatch up-front when no repo is
     // pinned, instead of silently landing the session in an empty worktree
@@ -49,6 +58,140 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
           `Flow '${flowName}' requires a repo. Pass repo: <git-url-or-local-path>.`,
           ErrorCodes.INVALID_PARAMS,
         );
+      }
+    }
+
+    // Phase 1 defense-in-depth: re-check the caller's effective
+    // flow.allowlist at start time. The dashboard already filters via
+    // `flow/list`, but a direct CLI / curl caller could otherwise
+    // dispatch a flow that's not in their allowlist by guessing the
+    // name. Empty / null allowlist = unrestricted (back-compat).
+    if (flowName) {
+      const allowlist = await app.scoping.resolve<string[]>(ctx, "flow.allowlist");
+      if (allowlist && !allowlist.includes(flowName)) {
+        throw new RpcError(`Flow '${flowName}' is not in your allowlist`, ErrorCodes.FORBIDDEN);
+      }
+    }
+
+    // Phase 1 scoping: resolve `runtime` override and stash a hint on
+    // session.config for dispatch. See commit body for full reasoning;
+    // load-bearing decisions captured here:
+    //
+    // (1) Preference, not policy. scoping_overrides rows are READ as
+    //     defaults that fill in when the caller didn't choose. A
+    //     user-level row is functionally a "saved --runtime"; team
+    //     and tenant rows are the same shape one scope outward. They
+    //     are NOT mandates. Caller-explicit therefore wins over rows
+    //     at every scope -- the most-explicit/most-recent signal is
+    //     authoritative. (Considered: tenant=policy + user=preference
+    //     and all-scopes=policy; both rejected because they make
+    //     user-level rows philosophically awkward and bifurcate the
+    //     mental model. Phase 2 may add a separate `policy_lock`
+    //     mechanism if hard mandates are needed.)
+    //
+    // (2) Caller-explicit short-circuits the resolver. When opts.runtime
+    //     is set we do NOT call resolve() at all. Validation cost saved
+    //     and the resolver cannot reject a request the caller already
+    //     answered. A bad scoping_overrides row will still surface --
+    //     just on the next default-using call rather than this one.
+    //
+    // (3) Fail-loud on unknown runtime. If the resolved override does
+    //     NOT match a registered runtime, throw INVALID_PARAMS rather
+    //     than logDebug + drop. Same fail-closed posture as the
+    //     team-chain cycle defense; debug logs are off in default
+    //     prod log levels and would hide the misconfigured row from
+    //     both the caller and ops. Phase 2 adds admin write-time
+    //     validation so the bad row never lands in the first place.
+    //
+    // (4) Agent-side opt-out (`runtime_locked: true` in agent YAML)
+    //     is enforced at DISPATCH, not here -- the agent isn't
+    //     resolved at session/start. See applyScopingRuntimeHint().
+    if (!opts.runtime) {
+      const runtimeOverride = await app.scoping.resolve<string>(ctx, "runtime");
+      if (runtimeOverride !== null) {
+        if (app.runtimes.get(runtimeOverride) === null) {
+          throw new RpcError(
+            `Runtime override '${runtimeOverride}' is not a registered runtime ` +
+              `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
+            ErrorCodes.INVALID_PARAMS,
+          );
+        }
+        opts.config = { ...(opts.config ?? {}), scoping_runtime_hint: runtimeOverride };
+      }
+    }
+
+    // Phase 1 scoping: resolve `model` override. Same shape and
+    // reasoning as the runtime block above (preference-not-policy,
+    // fail-loud on unknown value, agent opt-out enforced at dispatch).
+    //
+    // No caller-explicit short-circuit: CreateSessionOpts has no
+    // top-level `model` field today (only inline-agent / inline-stage
+    // shapes carry one, and those land on agent.model / stage.model
+    // via the existing dispatch pipeline). The hint always runs when
+    // an override is set.
+    //
+    // Validation is against the GLOBAL model catalog (`app.models.get`
+    // without a projectRoot). Scoping overrides are usually
+    // cross-project policies; project-scoped models registered only
+    // under <projectRoot>/.ark/models/ won't be selectable as
+    // overrides today. If that turns out to be a real limitation we
+    // can defer validation to dispatch (where projectRoot is known)
+    // -- but that weakens fail-loud, so prefer the strict path until
+    // a concrete need shows up.
+    //
+    // Cost-pinned agents (the load-bearing case for `model_locked`)
+    // get their declared model honored even when this hint is set --
+    // the lock check happens in applyScopingModelHint at dispatch.
+    {
+      const modelOverride = await app.scoping.resolve<string>(ctx, "model");
+      if (modelOverride !== null) {
+        if (app.models.get(modelOverride) === null) {
+          throw new RpcError(
+            `Model override '${modelOverride}' is not a registered model id or alias ` +
+              `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
+            ErrorCodes.INVALID_PARAMS,
+          );
+        }
+        opts.config = { ...(opts.config ?? {}), scoping_model_hint: modelOverride };
+      }
+    }
+
+    // Phase 1 scoping: resolve `compute.default` override and apply it
+    // by setting opts.compute_name directly. One-phase: no agent-side
+    // opt-out (agents don't bind to a compute target), no dispatch
+    // helper (the existing precedence chain in SessionCreator +
+    // ComputeResolver picks it up via session.compute_name).
+    //
+    // Precedence (top wins):
+    //   1. opts.compute_name -- caller-explicit (--compute, MCP, RPC).
+    //      Resolver short-circuits.
+    //   2. resolver hint -- saved user/team/tenant preference. Wins
+    //      over per-repo defaults because admin policy is current
+    //      intent; per-repo defaults are often stale committed-once
+    //      values. The escape hatch `--compute` is always available.
+    //   3. repoConfig.compute -- per-repo .ark/config.yaml fallback.
+    //   4. "local" -- hardcoded final fallback in SessionCreator.
+    //
+    // Stage-level `stage.compute` / `stage.compute_template` still
+    // wins at dispatch (most-local intent in flow YAML).
+    //
+    // Validation: `app.computes.get(name)` against the caller's tenant
+    // -- compute names are tenant-scoped. Fail loud on unknown name
+    // matching the runtime/model posture; the message names the value
+    // + tenant_id so ops can find the bad scoping_overrides row.
+    if (!opts.compute_name) {
+      const computeOverride = await app.scoping.resolve<string>(ctx, "compute.default");
+      if (computeOverride !== null) {
+        const scopedApp = ctx.tenantId !== app.tenantId ? app.forTenant(ctx.tenantId) : app;
+        const computeRow = await scopedApp.computes.get(computeOverride);
+        if (!computeRow) {
+          throw new RpcError(
+            `Compute override '${computeOverride}' is not a registered compute target ` +
+              `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
+            ErrorCodes.INVALID_PARAMS,
+          );
+        }
+        opts.compute_name = computeOverride;
       }
     }
 

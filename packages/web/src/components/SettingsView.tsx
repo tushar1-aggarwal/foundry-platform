@@ -4,6 +4,7 @@ import { Card } from "./ui/card.js";
 import { Moon, Sun, Monitor, Palette } from "lucide-react";
 import { useTheme } from "../themes/ThemeProvider.js";
 import type { ThemeName, ColorMode } from "../themes/tokens.js";
+import { ApiKeysSection } from "../pages/api-keys/ApiKeysSection.js";
 
 // Theme swatch accents are literal hex samples of each theme's --primary token.
 // These are identity colors (one per theme) rendered as a preview swatch, not
@@ -162,6 +163,9 @@ export function SettingsView() {
           })}
         </div>
       </section>
+
+      {/* API Keys (self-service) */}
+      <ApiKeysSection />
 
       {/* About */}
       <section className="mb-8">

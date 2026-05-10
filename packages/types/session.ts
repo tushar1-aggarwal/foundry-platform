@@ -26,6 +26,29 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
 export interface SessionConfig {
   // Runtime
   turns?: number;
+  /**
+   * Scoping resolver hint for `runtime`, captured at `session/start` from
+   * the user/team/tenant override chain. Dispatch consults this AFTER
+   * agent resolution: if the resolved agent has `runtime_locked: true`,
+   * the hint is ignored; otherwise the agent's runtime is replaced with
+   * this value (and `_resolved_runtime_type` is recomputed). Distinct
+   * from `runtime` (the explicit caller-provided choice) so that an
+   * agent author can opt out of policy overrides without losing the
+   * caller's explicit ask.
+   */
+  scoping_runtime_hint?: string;
+  /**
+   * Scoping resolver hint for `model`, captured at `session/start` from
+   * the user/team/tenant override chain. Dispatch consults this AFTER
+   * agent resolution but BEFORE catalog model resolution: if the
+   * resolved agent has `model_locked: true`, the hint is ignored;
+   * otherwise the agent's model is replaced with this value (and the
+   * model catalog then resolves the slug against the agent's effective
+   * runtime). Stage-level `stage.model` overrides still win over the
+   * resolver hint -- the flow YAML is more specific than a saved
+   * preference.
+   */
+  scoping_model_hint?: string;
   completion_summary?: string;
   filesChanged?: string[];
   commits?: string[];

@@ -56,6 +56,40 @@ export interface AgentDefinition {
    * exit semantics instead.
    */
   runtime_overrides?: Record<string, Partial<Omit<AgentDefinition, "name" | "runtime_overrides">>>;
+  /**
+   * Opt out of `runtime` scoping overrides. When `true`, ScopingResolver-
+   * driven runtime overrides (user/team/tenant scoped) are ignored at
+   * dispatch and this agent's declared `runtime` always wins. Set on
+   * agents whose tools / skills depend on a specific runtime (e.g.
+   * Claude-only tool calls). Defaults to false so most agents inherit
+   * a caller's preferred runtime.
+   */
+  runtime_locked?: boolean;
+  /**
+   * Opt out of `model` scoping overrides. When `true`, ScopingResolver-
+   * driven model overrides (user/team/tenant scoped) are ignored at
+   * dispatch and this agent's declared `model` always wins. Defaults
+   * to false so most agents inherit a caller's preferred model.
+   *
+   * Set this on agents whose behavior or contract depends on a
+   * specific model:
+   *
+   *   - Cost lock-in. An agent intentionally pinned to a cheap model
+   *     (e.g. haiku) should not be silently bumped to a more expensive
+   *     model by an org-wide override -- the cost difference can be
+   *     ~10x and the override-setter is rarely the cost owner.
+   *   - System-prompt tuning. An agent whose system prompt is tuned
+   *     for a particular model's response style (JSON-strictness,
+   *     reasoning patterns) gets visibly worse output if forced onto
+   *     a model with different defaults.
+   *   - Context-window dependency. A 200k-context agent forced onto
+   *     a smaller-context model fails hard with token errors mid-run.
+   *   - Model-specific features. Agents that rely on model-specific
+   *     features (Claude citations, extended thinking, etc.) lose
+   *     them silently when forced onto a model that doesn't support
+   *     them, sometimes giving subtly wrong answers.
+   */
+  model_locked?: boolean;
   /** Resolved runtime type (claude-code, cli-agent, subprocess). Set by resolveAgentWithRuntime. */
   _resolved_runtime_type?: string;
   _source?: "builtin" | "global" | "project";

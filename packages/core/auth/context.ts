@@ -25,6 +25,7 @@
 import type { TenantContext as WireTenantContext } from "../../types/index.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
 import type { ApiKeyManager } from "./api-keys.js";
+import type { AuthSessionManager } from "./sessions.js";
 
 /**
  * Handler-facing view of the caller. Adds `isAdmin` as a precomputed
@@ -63,6 +64,8 @@ export function localAdminContext(defaultTenant: string | null | undefined): Ten
     userId: "local",
     role: "admin",
     isAdmin: true,
+    scopingUserId: null,
+    teamChain: [],
   };
 }
 
@@ -77,6 +80,8 @@ export function anonymousContext(): TenantContext {
     userId: null,
     role: "viewer",
     isAdmin: false,
+    scopingUserId: null,
+    teamChain: [],
   };
 }
 
@@ -98,15 +103,25 @@ export interface MaterializeOptions {
   bearerToken?: string | null;
   /** ApiKeyManager for token -> wire TenantContext lookups. */
   apiKeys?: ApiKeyManager | null;
+  /**
+   * Cookie value extracted from the `ark_session` cookie (or the configured
+   * cookie name). Phase 1 web login flow. When present, takes precedence
+   * over bearer tokens.
+   */
+  cookieValue?: string | null;
+  /** AuthSessionManager for cookie -> wire TenantContext lookups. */
+  authSessions?: AuthSessionManager | null;
 }
 
 /**
  * Materialize a TenantContext from inbound credentials.
  *
- * Precedence for token sources (first non-empty wins):
- *   1. `bearerToken` (explicit)
- *   2. `authorizationHeader` value matching `Bearer <token>`
- *   3. `queryToken`
+ * Precedence (first match wins):
+ *   1. Cookie path: `cookieValue` resolved via `authSessions.validate`
+ *      (Phase 1 web login flow). Browsers / Electron use this.
+ *   2. Bearer token path: `bearerToken` -> `authorizationHeader` -> `queryToken`,
+ *      validated via `apiKeys.validate`. CLI / MCP / programmatic clients
+ *      use this.
  *
  * In local mode (`requireToken: false`) the function returns a local-admin
  * context regardless of the token, because the transport may still be
@@ -118,6 +133,17 @@ export async function materializeContext(opts: MaterializeOptions): Promise<Tena
     return localAdminContext(opts.defaultTenant);
   }
 
+  // Cookie path (Phase 1). Browsers / Electron renderers come through here.
+  // The conductor's WS upgrade and HTTP routes pass `cookieValue` +
+  // `authSessions` after Bearer-first precedence has been resolved.
+  if (opts.cookieValue && opts.authSessions) {
+    const wire = await opts.authSessions.validate(opts.cookieValue);
+    if (wire) return fromWire(wire);
+    // Fall through to bearer path -- a stale cookie shouldn't block a request
+    // that also carries a valid API key (mixed-client scenarios).
+  }
+
+  // Bearer token path. CLI / MCP / programmatic.
   const token = resolveToken(opts);
   if (!token || !opts.apiKeys) {
     return anonymousContext();

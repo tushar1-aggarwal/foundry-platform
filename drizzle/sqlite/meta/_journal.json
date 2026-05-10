@@ -15,6 +15,13 @@
       "when": 1778101292278,
       "tag": "0001_drop_legacy_provider_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1778260968483,
+      "tag": "0002_auth_phase1",
+      "breakpoints": true
     }
   ]
 }

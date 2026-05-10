@@ -8,12 +8,16 @@ import {
   type TenantContext,
   type MaterializeOptions,
 } from "../core/auth/context.js";
+import { getSessionCookie, clearSessionCookie } from "../core/auth/cookies.js";
+import { verifyOriginForCookieAuth } from "../core/auth/origin.js";
+import type { AuthSessionManager } from "../core/auth/sessions.js";
 import { ArkdClient } from "../arkd/client/index.js";
 import { DEFAULT_ARKD_URL } from "../core/constants.js";
 import { handleMcpRequest } from "./mcp/index.js";
 import { proxyToRouter } from "./mounts/llm-proxy.js";
 import { handlePRMergeWebhook } from "./mounts/pr-merge-webhook.js";
 import { handleHookStatus } from "./mounts/hooks.js";
+import { handleAuthGoogleStart, handleAuthGoogleCallback, handleAuthLogout } from "./mounts/auth-routes.js";
 
 export interface ServerConnection {
   id: string;
@@ -24,10 +28,16 @@ export interface ServerConnection {
    * WebSocket clients may send the Bearer token as `Authorization` on the
    * upgrade request or as a `?token=` query param; stdio callers inherit
    * the host process's identity so we treat them as local-admin.
+   *
+   * `sessionCookieValue` is the Phase 1 cookie-based auth path: when
+   * the browser presents `Cookie: ark_session=<value>` on the WS upgrade,
+   * we capture it once here and reuse for every JSON-RPC frame on the
+   * connection. Bearer (above) takes precedence when both are present.
    */
   credentials?: {
     authorizationHeader?: string | null;
     queryToken?: string | null;
+    sessionCookieValue?: string | null;
   };
 }
 
@@ -40,6 +50,22 @@ export interface ServerAuthConfig {
   requireToken: boolean;
   defaultTenant: string | null;
   apiKeys: MaterializeOptions["apiKeys"];
+  /** Cookie-based auth (Phase 1). Null when login flow is not configured. */
+  authSessions: AuthSessionManager | null;
+  /** Name of the session cookie. From `config.authSection.session.cookieName`. */
+  sessionCookieName: string;
+  /**
+   * Browser origin allowlist for cookie-authed state-changing requests.
+   * Empty array means "no cookie-authed cross-site traffic is acceptable"
+   * -- deployment must explicitly populate. Bearer-only requests bypass
+   * this entirely.
+   */
+  allowedOrigins: string[];
+  /**
+   * Domain attribute for `Set-Cookie` clears on Origin/auth failures. Mirror
+   * of `config.authSection.session.cookieDomain`.
+   */
+  cookieDomain: string | null;
 }
 
 export class ArkServer {
@@ -82,6 +108,10 @@ export class ArkServer {
       requireToken: app.config.authSection.requireToken,
       defaultTenant: app.config.authSection.defaultTenant,
       apiKeys: app.apiKeys,
+      authSessions: app.authSessions,
+      sessionCookieName: app.config.authSection.session.cookieName,
+      allowedOrigins: app.config.authSection.session.allowedOrigins,
+      cookieDomain: app.config.authSection.session.cookieDomain,
     };
   }
 
@@ -173,16 +203,26 @@ export class ArkServer {
   private async resolveContextFromCredentials(credentials?: {
     authorizationHeader?: string | null;
     queryToken?: string | null;
+    sessionCookieValue?: string | null;
   }): Promise<TenantContext> {
     if (!this.auth || !this.auth.requireToken) {
       return localAdminContext(this.auth?.defaultTenant ?? null);
     }
+    // Bearer-first precedence: when a Bearer token is presented (on header
+    // or query param), take that path entirely and ignore any cookie.
+    // Bearer requests aren't subject to CSRF (browsers don't auto-attach
+    // them); the cookie path is for browser/Electron renderers.
+    const hasBearer =
+      (credentials?.authorizationHeader ?? "").toLowerCase().startsWith("bearer ") || !!credentials?.queryToken;
     return materializeContext({
       requireToken: true,
       defaultTenant: this.auth.defaultTenant,
       authorizationHeader: credentials?.authorizationHeader ?? null,
       queryToken: credentials?.queryToken ?? null,
       apiKeys: this.auth.apiKeys,
+      // Cookie path: skip when Bearer is present.
+      cookieValue: hasBearer ? null : (credentials?.sessionCookieValue ?? null),
+      authSessions: hasBearer ? null : this.auth.authSessions,
     });
   }
 
@@ -209,6 +249,7 @@ export class ArkServer {
       kind: "rpc";
       authorizationHeader: string | null;
       queryToken: string | null;
+      sessionCookieValue: string | null;
     };
     type WsData = RpcData | TerminalData;
     const wsMetadata = new WeakMap<
@@ -218,6 +259,7 @@ export class ArkServer {
         handlers: ((msg: JsonRpcMessage) => void)[];
         authorizationHeader: string | null;
         queryToken: string | null;
+        sessionCookieValue: string | null;
         subscription: Subscription;
       }
     >();
@@ -251,13 +293,51 @@ export class ArkServer {
             return new Response("Terminal route requires AppContext", { status: 503 });
           }
 
+          // Capture all three credential types: Bearer header, query
+          // token, and the session cookie. The dashboard's terminal
+          // attach uses cookie auth post-Google-login (no Bearer); the
+          // CLI / programmatic paths use Bearer or queryToken. Without
+          // the cookie path here, browser-side terminal attach
+          // resolves to anonymous and 403s on the tenant gate below.
+          const terminalCookieValue = self.auth?.sessionCookieName
+            ? getSessionCookie(req, self.auth.sessionCookieName)
+            : null;
+
+          // Origin enforcement on cookie-authed terminal WS upgrade.
+          // Cookie auth is CSRF-relevant on WS upgrades (a malicious
+          // page could open a terminal WS riding the user's cookie).
+          // Bearer-only requests bypass: CLI / programmatic clients
+          // don't auto-attach Origin and aren't subject to browser
+          // CSRF anyway.
+          const hasBearerForTerminal = !!authorizationHeader || !!queryToken;
+          if (
+            self.auth?.requireToken &&
+            self.auth.authSessions &&
+            terminalCookieValue &&
+            !hasBearerForTerminal &&
+            !verifyOriginForCookieAuth(req, self.auth.allowedOrigins)
+          ) {
+            logDebug("web", `terminal upgrade: origin check failed (origin=${req.headers.get("origin") ?? "<none>"})`);
+            const headers = new Headers();
+            headers.append(
+              "Set-Cookie",
+              clearSessionCookie({ name: self.auth.sessionCookieName, domain: self.auth.cookieDomain }),
+            );
+            headers.set("Content-Type", "application/json;charset=utf-8");
+            return new Response(JSON.stringify({ error: "invalid origin" }), { status: 401, headers });
+          }
+
           // Resolve TenantContext from the captured credentials BEFORE any
           // tenant-scoped lookup. Falls through to localAdminContext when
           // auth is disabled (single-tenant local dev); returns a typed
           // rejection when requireToken is on and no valid token was sent.
           let ctx: TenantContext;
           try {
-            ctx = await self.resolveContextFromCredentials({ authorizationHeader, queryToken });
+            ctx = await self.resolveContextFromCredentials({
+              authorizationHeader,
+              queryToken,
+              sessionCookieValue: terminalCookieValue,
+            });
           } catch (err: any) {
             return new Response(`Unauthorized: ${err?.message ?? "auth failed"}`, { status: 401 });
           }
@@ -386,7 +466,87 @@ export class ArkServer {
           return handlePRMergeWebhook(webhookApp, req);
         }
 
-        const data: RpcData = { kind: "rpc", authorizationHeader, queryToken };
+        // Phase 1 Google OIDC routes. All three require AppContext for
+        // config + LoginManager. AppContext is also where the session
+        // cookie + LoginManager wiring lives.
+        if (url.pathname === "/auth/google/start" && req.method === "GET") {
+          const authApp = self.app ?? app;
+          if (!authApp) return Response.json({ error: "auth route requires AppContext" }, { status: 503 });
+          return handleAuthGoogleStart(authApp, req);
+        }
+        if (url.pathname === "/auth/google/callback" && req.method === "GET") {
+          const authApp = self.app ?? app;
+          if (!authApp) return Response.json({ error: "auth route requires AppContext" }, { status: 503 });
+          return handleAuthGoogleCallback(authApp, req);
+        }
+        if (url.pathname === "/auth/logout" && req.method === "POST") {
+          const authApp = self.app ?? app;
+          if (!authApp) return Response.json({ error: "auth route requires AppContext" }, { status: 503 });
+          return handleAuthLogout(authApp, req);
+        }
+
+        // Capture cookie value at upgrade time. The session cookie is
+        // read via getSessionCookie (fail-closed on duplicate). Used
+        // when no Bearer token is present.
+        const sessionCookieValue = self.auth?.sessionCookieName
+          ? getSessionCookie(req, self.auth.sessionCookieName)
+          : null;
+
+        // Cookie-tossing fallthrough defense. `getSessionCookie` fails
+        // closed (returns null) when the same cookie name appears twice,
+        // and that null was previously indistinguishable from "no cookie
+        // sent" -- which let the upgrade silently degrade to anonymous on
+        // requireToken deployments. A malicious sibling-subdomain or
+        // XSS-injected duplicate cookie would yield read-only access via
+        // session/list etc. on the JSON-RPC channel. Detect: cookie header
+        // names the configured session cookie but `getSessionCookie`
+        // refused, AND no Bearer is present -> reject with 401 + clear.
+        const hasBearerForUpgrade = !!authorizationHeader || !!queryToken;
+        if (
+          self.auth?.requireToken &&
+          self.auth.authSessions &&
+          self.auth.sessionCookieName &&
+          !hasBearerForUpgrade &&
+          !sessionCookieValue
+        ) {
+          const cookieHeader = req.headers.get("cookie");
+          if (cookieHeader && cookieHeader.includes(`${self.auth.sessionCookieName}=`)) {
+            logDebug("web", "ws upgrade: session cookie ambiguous (duplicate or malformed) -- rejecting");
+            const headers = new Headers();
+            headers.append(
+              "Set-Cookie",
+              clearSessionCookie({ name: self.auth.sessionCookieName, domain: self.auth.cookieDomain }),
+            );
+            headers.set("Content-Type", "application/json;charset=utf-8");
+            return new Response(JSON.stringify({ error: "invalid session cookie" }), { status: 401, headers });
+          }
+        }
+
+        // Origin enforcement on WS upgrade. Cookie-authed upgrades are
+        // CSRF-relevant: a malicious page could open a WS to our listener
+        // and ride the user's session cookie. Bearer-authed upgrades
+        // bypass entirely (CLI / programmatic clients don't attach Origin
+        // reliably and aren't subject to browser auto-attach anyway).
+        // Local mode (requireToken=false) skips too -- there's no session
+        // cookie to protect.
+        if (
+          self.auth?.requireToken &&
+          self.auth.authSessions &&
+          sessionCookieValue &&
+          !hasBearerForUpgrade &&
+          !verifyOriginForCookieAuth(req, self.auth.allowedOrigins)
+        ) {
+          logDebug("web", `ws upgrade: origin check failed (origin=${req.headers.get("origin") ?? "<none>"})`);
+          const headers = new Headers();
+          headers.append(
+            "Set-Cookie",
+            clearSessionCookie({ name: self.auth.sessionCookieName, domain: self.auth.cookieDomain }),
+          );
+          headers.set("Content-Type", "application/json;charset=utf-8");
+          return new Response(JSON.stringify({ error: "invalid origin" }), { status: 401, headers });
+        }
+
+        const data: RpcData = { kind: "rpc", authorizationHeader, queryToken, sessionCookieValue };
         if (server.upgrade(req, { data })) return;
         // Friendly landing page for /. Other unknown paths get a JSON 404
         // so any future SDK probe that JSON.parses the response doesn't
@@ -433,6 +593,7 @@ export class ArkServer {
           const handlers: ((msg: JsonRpcMessage) => void)[] = [];
           const authorizationHeader = upgradeData.authorizationHeader ?? null;
           const queryToken = upgradeData.queryToken ?? null;
+          const sessionCookieValue = upgradeData.sessionCookieValue ?? null;
           // Per-connection subscription registry for subscription-style handlers
           // (e.g. session/tree-stream). Flushed when the WS connection closes.
           const subscription = new Subscription();
@@ -451,11 +612,18 @@ export class ArkServer {
               },
             },
             subscriptions: [],
-            credentials: { authorizationHeader, queryToken },
+            credentials: { authorizationHeader, queryToken, sessionCookieValue },
           };
 
           self.connections.set(connId, conn);
-          wsMetadata.set(ws, { connId, handlers, authorizationHeader, queryToken, subscription });
+          wsMetadata.set(ws, {
+            connId,
+            handlers,
+            authorizationHeader,
+            queryToken,
+            sessionCookieValue,
+            subscription,
+          });
 
           // Wire message routing (same as addConnection)
           conn.transport.onMessage(async (msg) => {

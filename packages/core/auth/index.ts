@@ -1,11 +1,38 @@
 export { ApiKeyManager } from "./api-keys.js";
+export { AuthSessionManager } from "./sessions.js";
+export {
+  LoginManager,
+  LoginError,
+  type LoginErrorKind,
+  type LoginRequestMeta,
+  type LoginResult,
+  type LoginManagerDeps,
+} from "./login.js";
+export {
+  verifyGoogleIdToken,
+  type GoogleIdentity,
+  type GoogleVerifyConfig,
+  _resetJwksCacheForTesting,
+} from "./google-oidc.js";
+export {
+  getSessionCookie,
+  getCookie,
+  setSessionCookie,
+  clearSessionCookie,
+  type SetSessionCookieOptions,
+  type ClearSessionCookieOptions,
+} from "./cookies.js";
+export { generateState, validateState } from "./csrf.js";
 export {
   extractTenantContext,
+  extractTenantContextWithSource,
   canWrite,
   isAdmin,
   DEFAULT_AUTH_CONFIG,
   DEFAULT_TENANT_CONTEXT,
   type AuthConfig,
+  type AuthSource,
+  type ResolvedTenantContext,
 } from "./middleware.js";
 export { TenantPolicyManager, type TenantComputePolicy, type ComputePoolRef } from "./tenant-policy.js";
 export { TenantManager, type Tenant, type TenantStatus } from "./tenants.js";

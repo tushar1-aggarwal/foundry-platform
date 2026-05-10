@@ -255,6 +255,12 @@ export const apiKeys = pgTable(
     keyHash: text("key_hash").notNull(),
     name: text("name").notNull(),
     role: text("role").notNull().default("member"),
+    // Self-service ownership. NULL = admin-minted / tenant-level. Set to
+    // a real users.id when the key was minted via the self-service
+    // surface. Soft pointer (no FK), matching `tenantId` above -- this
+    // table is the precedent for "soft pointer" within the schema. The
+    // integrity guarantee lives in the handler via `requireRealUser`.
+    userId: text("user_id"),
     deletedAt: text("deleted_at"),
     deletedBy: text("deleted_by"),
     createdAt: text("created_at").notNull(),
@@ -264,6 +270,7 @@ export const apiKeys = pgTable(
   (t) => ({
     idxTenant: index("idx_api_keys_tenant").on(t.tenantId),
     idxHash: index("idx_api_keys_hash").on(t.keyHash),
+    idxUser: index("idx_api_keys_user").on(t.userId),
     idxHashLive: uniqueIndex("idx_api_keys_hash_live")
       .on(t.keyHash)
       .where(sql`${t.deletedAt} IS NULL`),
@@ -317,6 +324,8 @@ export const users = pgTable(
     id: text("id").primaryKey(),
     email: text("email").notNull(),
     name: text("name"),
+    googleSub: text("google_sub"),
+    lastLoginAt: text("last_login_at"),
     deletedAt: text("deleted_at"),
     deletedBy: text("deleted_by"),
     createdAt: text("created_at").notNull(),
@@ -326,10 +335,19 @@ export const users = pgTable(
     idxEmailLive: uniqueIndex("idx_users_email_live")
       .on(t.email)
       .where(sql`${t.deletedAt} IS NULL`),
+    idxGoogleSubLive: uniqueIndex("idx_users_google_sub_live")
+      .on(t.googleSub)
+      .where(sql`${t.googleSub} IS NOT NULL AND ${t.deletedAt} IS NULL`),
   }),
 );
 
 // ── teams ─────────────────────────────────────────────────────────────────
+//
+// `parentTeamId` is a self-reference that captures DX's variable-depth team
+// hierarchy (entity → HoD team → grandparent_team → parent_team → team,
+// up to 5 levels with rollup). NULL means top-of-tenant (HoD-level). The
+// auth scoping resolver walks this chain from the user's team upward
+// when looking up scoped objects.
 
 export const teams = pgTable(
   "teams",
@@ -338,6 +356,7 @@ export const teams = pgTable(
     tenantId: text("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
+    parentTeamId: text("parent_team_id"),
     slug: text("slug").notNull(),
     name: text("name").notNull(),
     description: text("description"),
@@ -348,6 +367,7 @@ export const teams = pgTable(
   },
   (t) => ({
     idxTenant: index("idx_teams_tenant").on(t.tenantId),
+    idxParent: index("idx_teams_parent").on(t.parentTeamId),
     idxTenantSlugLive: uniqueIndex("idx_teams_tenant_slug_live")
       .on(t.tenantId, t.slug)
       .where(sql`${t.deletedAt} IS NULL`),
@@ -407,6 +427,65 @@ export const tenantClaudeAuth = pgTable("tenant_claude_auth", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+// ── sessions_auth ─────────────────────────────────────────────────────────
+//
+// Auth sessions for the cookie-based Google OIDC flow. One row per active
+// browser/Electron session. The cookie value is the session id; server-side
+// state lives here so revocation is one DELETE rather than maintaining a
+// JWT denylist. Sliding expiry: `expires_at` is bumped on every authenticated
+// request. `team_chain` is a JSON array of team ids ordered from the
+// user's team upward to HoD, computed at login and cached for the
+// session lifetime.
+
+export const sessionsAuth = pgTable(
+  "sessions_auth",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: text("created_at").notNull(),
+    lastSeenAt: text("last_seen_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    teamChain: text("team_chain"),
+    userAgent: text("user_agent"),
+    ip: text("ip"),
+  },
+  (t) => ({
+    idxUser: index("idx_sessions_auth_user").on(t.userId),
+    idxExpires: index("idx_sessions_auth_expires").on(t.expiresAt),
+  }),
+);
+
+// ── scoping_overrides ─────────────────────────────────────────────────────
+//
+// Single override surface for the ScopingResolver. One row per
+// (scope_kind, scope_id, key, tenant_id) live triple. Resolver walks
+// user > team-chain > tenant and returns the first non-null match.
+// tenant_id is on the unique index AND every resolver query (decision #13)
+// as defense in depth against future id-generator changes.
+
+export const scopingOverrides = pgTable(
+  "scoping_overrides",
+  {
+    id: text("id").primaryKey(),
+    scopeKind: text("scope_kind").notNull(),
+    scopeId: text("scope_id").notNull(),
+    key: text("key").notNull(),
+    valueJson: text("value_json").notNull(),
+    tenantId: text("tenant_id").notNull().default("default"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    deletedAt: text("deleted_at"),
+  },
+  (t) => ({
+    idxLive: uniqueIndex("idx_scoping_overrides_live")
+      .on(t.scopeKind, t.scopeId, t.key, t.tenantId)
+      .where(sql`${t.deletedAt} IS NULL`),
+    idxTenant: index("idx_scoping_overrides_tenant").on(t.tenantId),
+  }),
+);
 
 // ── knowledge ─────────────────────────────────────────────────────────────
 

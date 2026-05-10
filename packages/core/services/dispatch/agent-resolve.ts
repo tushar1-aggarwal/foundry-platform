@@ -13,6 +13,7 @@ import type { AgentDefinition } from "../../agent/agent.js";
 import type { Session } from "../../../types/index.js";
 import type { StageDefinition } from "../flow.js";
 import { sessionAsVars } from "../task-builder.js";
+import { logInfo } from "../../observability/structured-log.js";
 
 export type AgentRef = StageDefinition["agent"];
 
@@ -96,4 +97,105 @@ export function applyStageModelAndResolveSlug(
       agent.model = resolved;
     }
   }
+}
+
+/**
+ * Apply a Phase 1 scoping `runtime` hint to a resolved agent. The hint is
+ * stashed at `session/start` from the user/team/tenant override chain
+ * (already validated against the runtime registry there). At dispatch
+ * we either:
+ *
+ *   - Skip if the agent opts out via `runtime_locked` (logged so ops can
+ *     see why an override didn't apply).
+ *   - Skip if the runtime was deleted between start and dispatch (rare
+ *     race; logged but not fatal -- the in-flight session continues
+ *     against the agent's declared runtime).
+ *   - Otherwise replace `agent.runtime` and recompute
+ *     `_resolved_runtime_type` from the new runtime definition so
+ *     downstream type-driven dispatch (executor pick, secrets, env)
+ *     uses the right shape.
+ *
+ * Mutates `agent` in place. Idempotent on a no-hint or no-op.
+ */
+export function applyScopingRuntimeHint(
+  deps: Pick<DispatchDeps, "runtimes">,
+  agent: AgentDefinition,
+  hint: string | undefined,
+  log: (msg: string) => void,
+): void {
+  if (!hint) return;
+  // Emit on BOTH the streaming dispatch log (for live subscribers) and
+  // the structured-log channel (for ops grep / dashboards). The streaming
+  // log defaults to a no-op for non-streaming dispatches, so a structured
+  // log entry is the only durable signal that the hook fired.
+  if (agent.runtime_locked) {
+    const msg = `runtime hint '${hint}' ignored (agent '${agent.name}' has runtime_locked)`;
+    log(msg);
+    logInfo("scoping", msg);
+    return;
+  }
+  const def = deps.runtimes.get(hint);
+  if (!def) {
+    const msg = `runtime hint '${hint}' no longer registered; falling back to '${agent.runtime}'`;
+    log(msg);
+    logInfo("scoping", msg);
+    return;
+  }
+  const msg = `runtime hint '${hint}' applied (was '${agent.runtime}', agent '${agent.name}')`;
+  log(msg);
+  logInfo("scoping", msg);
+  agent.runtime = hint;
+  agent._resolved_runtime_type = def.type;
+}
+
+/**
+ * Apply a Phase 1 scoping `model` hint to a resolved agent. The hint
+ * is stashed at `session/start` from the user/team/tenant override
+ * chain (already validated against the global model catalog there).
+ * At dispatch we either:
+ *
+ *   - Skip if the agent opts out via `model_locked` (the load-bearing
+ *     case: cost-pinned agents intentionally pinned to a cheap model
+ *     do not get silently bumped to a more expensive override).
+ *   - Skip if the model was removed from the catalog between start
+ *     and dispatch (rare; logged but not fatal).
+ *   - Otherwise replace `agent.model` and let
+ *     `applyStageModelAndResolveSlug` run afterwards to (a) honor a
+ *     stage-level `stage.model` if set (it always wins) and (b)
+ *     resolve the catalog slug under the agent's effective runtime.
+ *
+ * Must be called BEFORE `applyStageModelAndResolveSlug` so the
+ * catalog resolution sees the post-hint model. Mutates `agent` in
+ * place. Idempotent on a no-hint or no-op.
+ */
+export function applyScopingModelHint(
+  deps: Pick<DispatchDeps, "models">,
+  agent: AgentDefinition,
+  hint: string | undefined,
+  projectRoot: string | undefined,
+  log: (msg: string) => void,
+): void {
+  if (!hint) return;
+  if (agent.model_locked) {
+    const msg = `model hint '${hint}' ignored (agent '${agent.name}' has model_locked)`;
+    log(msg);
+    logInfo("scoping", msg);
+    return;
+  }
+  // Validate against the catalog (passing projectRoot so a
+  // project-registered model is also accepted at dispatch even if it
+  // wasn't visible at session/start). If the model has been removed
+  // entirely between start and dispatch, drop the hint -- don't fail
+  // an in-flight session for an upstream config edit.
+  const def = deps.models?.get(hint, projectRoot);
+  if (!def) {
+    const msg = `model hint '${hint}' no longer in catalog; falling back to '${agent.model}'`;
+    log(msg);
+    logInfo("scoping", msg);
+    return;
+  }
+  const msg = `model hint '${hint}' applied (was '${agent.model}', agent '${agent.name}')`;
+  log(msg);
+  logInfo("scoping", msg);
+  agent.model = hint;
 }

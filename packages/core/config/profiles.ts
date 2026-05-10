@@ -70,7 +70,19 @@ export async function localDefaults(): Promise<ProfileDefaults> {
       web: 8420,
     },
     channels: { basePort: 19200, range: 10000 },
-    auth: { requireToken: false, defaultTenant: null },
+    auth: {
+      requireToken: false,
+      defaultTenant: null,
+      google: { clientId: null, clientSecret: null, redirectUri: null, allowedDomains: ["paytm.com"] },
+      session: {
+        ttlSec: 2592000,
+        cookieName: "ark_session",
+        cookieDomain: null,
+        cookieSecure: false,
+        refreshThresholdSec: 300,
+        allowedOrigins: ["http://localhost:8420"],
+      },
+    },
     features: { autoRebase: false },
     observability: { logLevel: "info" },
     storage: { blobBackend: "local" },
@@ -87,7 +99,22 @@ export async function controlPlaneDefaults(): Promise<ProfileDefaults> {
       web: 8420,
     },
     channels: { basePort: 19200, range: 10000 },
-    auth: { requireToken: true, defaultTenant: null },
+    auth: {
+      requireToken: true,
+      defaultTenant: null,
+      google: { clientId: null, clientSecret: null, redirectUri: null, allowedDomains: ["paytm.com"] },
+      session: {
+        ttlSec: 2592000,
+        cookieName: "ark_session",
+        cookieDomain: null,
+        cookieSecure: true,
+        refreshThresholdSec: 300,
+        // Empty by default - deployment MUST set ARK_AUTH_SESSION_ALLOWED_ORIGINS.
+        // Otherwise cookie-auth state-changing requests are all rejected.
+        // Bearer auth still works.
+        allowedOrigins: [],
+      },
+    },
     features: { autoRebase: true },
     observability: { logLevel: "info" },
     storage: { blobBackend: "s3" },
@@ -110,7 +137,19 @@ export async function testDefaults(): Promise<ProfileDefaults> {
     arkDir,
     ports: { conductor, arkd, web },
     channels: { basePort: channelsBase, range: 1000 },
-    auth: { requireToken: false, defaultTenant: null },
+    auth: {
+      requireToken: false,
+      defaultTenant: null,
+      google: { clientId: null, clientSecret: null, redirectUri: null, allowedDomains: ["paytm.com"] },
+      session: {
+        ttlSec: 2592000,
+        cookieName: "ark_session",
+        cookieDomain: null,
+        cookieSecure: false,
+        refreshThresholdSec: 300,
+        allowedOrigins: [],
+      },
+    },
     features: { autoRebase: false },
     observability: { logLevel: "error" }, // quiet tests
     storage: { blobBackend: "local" },

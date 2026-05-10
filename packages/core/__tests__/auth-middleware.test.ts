@@ -94,6 +94,56 @@ describe("extractTenantContext - auth enabled", () => {
   });
 });
 
+describe("extractTenantContext - cookie path", () => {
+  const config = { enabled: true, apiKeyEnabled: true };
+
+  async function makeCookieAndCtx(emailLocal: string): Promise<{ cookieValue: string; userId: string }> {
+    const tenant = await app.tenants.create({ slug: `t-${emailLocal}-${Date.now()}`, name: emailLocal });
+    const team = await app.teams.create({ tenant_id: tenant.id, slug: `team-${emailLocal}`, name: emailLocal });
+    const user = await app.users.create({ email: `${emailLocal}@paytm.com` });
+    await app.teams.addMember(team.id, user.id, "member");
+    const session = await app.authSessions.sessions.create({ userId: user.id, ttlSec: 3600 });
+    return { cookieValue: session.cookieValue, userId: user.id };
+  }
+
+  it("resolves a valid session cookie when authSessions + cookieName are wired", async () => {
+    const { cookieValue, userId } = await makeCookieAndCtx("cookie-ok");
+    const ctx = await extractTenantContext(mkReq({ cookie: `ark_session=${cookieValue}` }), config, keyManager, {
+      authSessions: app.authSessions,
+      cookieName: "ark_session",
+    });
+    expect(ctx).not.toBeNull();
+    expect(ctx?.userId).toBe(userId);
+    expect(ctx?.role).toBe("member");
+  });
+
+  it("returns null on an unknown cookie value", async () => {
+    const ctx = await extractTenantContext(mkReq({ cookie: "ark_session=does-not-exist" }), config, keyManager, {
+      authSessions: app.authSessions,
+      cookieName: "ark_session",
+    });
+    expect(ctx).toBeNull();
+  });
+
+  it("Bearer takes precedence over cookie when both are present", async () => {
+    const apiKey = await keyManager.create("bearer-wins", "k", "admin");
+    const { cookieValue } = await makeCookieAndCtx("cookie-loses");
+    const ctx = await extractTenantContext(
+      mkReq({ authorization: `Bearer ${apiKey.key}`, cookie: `ark_session=${cookieValue}` }),
+      config,
+      keyManager,
+      { authSessions: app.authSessions, cookieName: "ark_session" },
+    );
+    expect(ctx?.tenantId).toBe("bearer-wins");
+  });
+
+  it("skips the cookie branch when authSessions or cookieName are not provided (legacy callers)", async () => {
+    const { cookieValue } = await makeCookieAndCtx("legacy");
+    const ctx = await extractTenantContext(mkReq({ cookie: `ark_session=${cookieValue}` }), config, keyManager);
+    expect(ctx).toBeNull();
+  });
+});
+
 describe("role predicates", () => {
   const admin: TenantContext = { tenantId: "t", userId: "u", role: "admin" };
   const member: TenantContext = { tenantId: "t", userId: "u", role: "member" };

@@ -3,6 +3,8 @@ import { IconRail } from "./ui/IconRail.js";
 import type { IconRailItem } from "./ui/IconRail.js";
 import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 import { Play, Bot, Zap, Monitor, Clock, DollarSign, Cog, Wrench, Calendar, Plug } from "lucide-react";
+import { useOptionalAuth } from "../auth/AuthContext.js";
+import { UserMenu } from "./UserMenu.js";
 
 interface LayoutProps {
   view: string;
@@ -72,6 +74,14 @@ export function Layout({
   avatarInitials,
   latencyText,
 }: LayoutProps) {
+  // Phase 1: when an authenticated identity is present, render the
+  // UserMenu (avatar + popover with email/role/logout) in the IconRail
+  // bottom slot. Layout is also rendered by unit tests outside the
+  // App tree, so we use the optional variant -- a missing AuthProvider
+  // simply means no UserMenu (the IconRail's `avatarInitials` fallback
+  // path still works for those tests).
+  const auth = useOptionalAuth();
+  const identity = auth?.identity ?? null;
   const navItems = useMemo(() => {
     if (!totalUnread) return BASE_NAV_ITEMS;
     return BASE_NAV_ITEMS.map((item) => (item.id === "sessions" ? { ...item, badge: totalUnread } : item));
@@ -119,6 +129,7 @@ export function Layout({
         settingsItem={SETTINGS_ITEM}
         daemonStatus={daemonStatus}
         avatarInitials={avatarInitials}
+        avatarSlot={identity ? <UserMenu identity={identity} /> : undefined}
         latencyText={latencyText}
       />
       {list && (

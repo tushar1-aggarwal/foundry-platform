@@ -48,6 +48,8 @@ import { registerCostsAdminHandlers } from "./handlers/costs.js";
 // --- END agent-E ---
 // --- BEGIN agent-F: tenant-auth ---
 import { registerTenantAuthHandlers } from "./handlers/tenant-auth.js";
+import { registerAuthWhoamiHandlers } from "./handlers/auth-whoami.js";
+import { registerApiKeyHandlers } from "./handlers/apikey.js";
 // --- END agent-F ---
 // --- BEGIN agent-G: clusters + tenant compute config ---
 import { registerClusterHandlers } from "./handlers/clusters.js";
@@ -118,6 +120,8 @@ export function registerSharedHandlers(router: Router, app: AppContext): void {
 
   // --- BEGIN agent-F: tenant-auth ---
   registerTenantAuthHandlers(router, app);
+  registerAuthWhoamiHandlers(router, app);
+  registerApiKeyHandlers(router, app);
   // --- END agent-F ---
 
   // --- BEGIN agent-G: clusters + tenant compute config ---

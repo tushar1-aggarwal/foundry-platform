@@ -23,8 +23,18 @@ import {
   ArtifactRepository,
   FlowStateRepository,
   LedgerRepository,
+  ScopingOverrideRepository,
 } from "../repositories/index.js";
-import { ApiKeyManager, TenantManager, TeamManager, UserManager, TenantPolicyManager } from "../auth/index.js";
+import { ScopingResolver } from "../scoping/index.js";
+import {
+  ApiKeyManager,
+  TenantManager,
+  TeamManager,
+  UserManager,
+  TenantPolicyManager,
+  AuthSessionManager,
+  LoginManager,
+} from "../auth/index.js";
 import { TenantClaudeAuthManager } from "../auth/tenant-claude-auth.js";
 import {
   FileFlowStore,
@@ -117,6 +127,41 @@ export function registerRepositories(container: AppContainer): void {
     tenantPolicyManager: asFunction((c: { db: DatabaseAdapter }) => new TenantPolicyManager(c.db), {
       lifetime: Lifetime.SINGLETON,
     }),
+
+    // Phase 1 auth (Google OIDC cookie login flow). AuthSessionManager
+    // resolves cookie -> TenantContext at request time (read path) and
+    // slides the session's expiry on activity (gated by
+    // refreshThresholdSec). LoginManager owns the login lifecycle:
+    // verify Google ID token, JIT user, default-team membership, mint
+    // session cookie.
+    authSessions: asFunction(
+      (c: { db: DatabaseAdapter; config: ArkConfig }) =>
+        new AuthSessionManager(c.db, {
+          ttlSec: c.config.authSection.session.ttlSec,
+          refreshThresholdSec: c.config.authSection.session.refreshThresholdSec,
+        }),
+      { lifetime: Lifetime.SINGLETON },
+    ),
+    loginManager: asFunction(
+      (c: { db: DatabaseAdapter; config: ArkConfig }) =>
+        new LoginManager({
+          googleConfig: c.config.authSection.google,
+          sessionConfig: c.config.authSection.session,
+          db: c.db,
+        }),
+      { lifetime: Lifetime.SINGLETON },
+    ),
+
+    // Phase 1 auth scoping. The repo is the storage adapter for the
+    // scoping_overrides table; the resolver walks user > team-chain >
+    // tenant on each `resolve()` (no caching -- decision #7).
+    scopingOverrides: asFunction((c: { db: DatabaseAdapter }) => new ScopingOverrideRepository(c.db), {
+      lifetime: Lifetime.SINGLETON,
+    }),
+    scoping: asFunction(
+      (c: { scopingOverrides: ScopingOverrideRepository }) => new ScopingResolver(c.scopingOverrides),
+      { lifetime: Lifetime.SINGLETON },
+    ),
   });
 }
 

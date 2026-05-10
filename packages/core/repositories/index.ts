@@ -22,4 +22,10 @@ export {
   type LedgerEntryType,
   type LedgerEntryStatus,
 } from "./ledger.js";
+export {
+  ScopingOverrideRepository,
+  type ScopingOverrideRow,
+  type ScopingOverrideKey,
+  type ScopeKind,
+} from "./scoping-overrides.js";
 export { initSchema, seedLocalCompute } from "./schema.js";

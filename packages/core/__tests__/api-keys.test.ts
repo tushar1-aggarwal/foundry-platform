@@ -91,6 +91,34 @@ describe("ApiKeyManager", async () => {
       expect(ctx).not.toBeNull();
       expect(ctx!.tenantId).toBe("acme");
     });
+
+    it("admin-minted key (NULL user_id): scopingUserId=null, teamChain=[]", async () => {
+      const { key } = await app.apiKeys.create("acme", "admin-key", "admin");
+      const ctx = await app.apiKeys.validate(key);
+      expect(ctx).not.toBeNull();
+      expect(ctx!.scopingUserId).toBeNull();
+      expect(ctx!.teamChain).toEqual([]);
+    });
+
+    it("owned key: scopingUserId = api_keys.user_id; teamChain walks owner's primary membership", async () => {
+      // Build a small org chain `parent <- team` under `default` and put
+      // user `u-owner` on team. Mint a self-service key owned by them.
+      const tenant = await app.tenants.create({ slug: "owned-key-t", name: "T" });
+      const parent = await app.teams.create({ tenant_id: tenant.id, slug: "parent", name: "Parent" });
+      const team = await app.teams.create({ tenant_id: tenant.id, slug: "leaf", name: "Leaf" });
+      await app.db.exec(`UPDATE teams SET parent_team_id = '${parent.id}' WHERE id = '${team.id}'`);
+      const u = await app.users.upsertByEmail({ email: "owner@paytm.com" });
+      await app.teams.addMember(team.id, u.id, "member");
+
+      const { key } = await app.apiKeys.create(tenant.id, "owner-key", "member", undefined, u.id);
+      const ctx = await app.apiKeys.validate(key);
+      expect(ctx).not.toBeNull();
+      // userId stays the ak-... sentinel (identity gate); scopingUserId
+      // is the owner's users.id (scoping gate).
+      expect(ctx!.userId).toMatch(/^ak-/);
+      expect(ctx!.scopingUserId).toBe(u.id);
+      expect(ctx!.teamChain).toEqual([team.id, parent.id]);
+    });
   });
 
   describe("list", async () => {
@@ -147,6 +175,48 @@ describe("ApiKeyManager", async () => {
       const ok = await app.apiKeys.revoke(own.id, "tenant-owner");
       expect(ok).toBe(true);
       expect(await app.apiKeys.validate(own.key)).toBeNull();
+    });
+  });
+
+  describe("revokeAsUser race condition", async () => {
+    it("two concurrent self-service revokes from the same owner both report success (idempotent)", async () => {
+      // The previous implementation did SELECT-then-UPDATE; the second
+      // concurrent revoke saw `changes === 0` and returned `false`, which
+      // the handler mapped to FORBIDDEN ("API key not found or not owned
+      // by caller"). User saw a privilege-denial error on a successful
+      // revoke. With the fix, both revokes return `true` because the
+      // observable end-state ("the row is deleted, by this owner") is
+      // the same.
+      const u = await app.users.upsertByEmail({ email: "race@paytm.com" });
+      const tenant = "race-tenant";
+      const created = await app.apiKeys.create(tenant, "race-key", "member", undefined, u.id);
+
+      const [a, b] = await Promise.all([
+        app.apiKeys.revokeAsUser(u.id, tenant, created.id),
+        app.apiKeys.revokeAsUser(u.id, tenant, created.id),
+      ]);
+      expect(a).toBe(true);
+      expect(b).toBe(true);
+      // The row is in fact revoked.
+      const live = await app.apiKeys.listForUser(u.id, tenant);
+      expect(live.find((k) => k.id === created.id)).toBeUndefined();
+    });
+
+    it("revokeAsUser still rejects when ownership is wrong even if the row is already deleted by someone else", async () => {
+      // Defense in depth: an attacker calling revokeAsUser with a guessed
+      // id that belonged to a different owner must NOT get success just
+      // because that row was concurrently revoked by its real owner.
+      const owner = await app.users.upsertByEmail({ email: "race-owner@paytm.com" });
+      const attacker = await app.users.upsertByEmail({ email: "race-attacker@paytm.com" });
+      const tenant = "race-tenant-2";
+      const created = await app.apiKeys.create(tenant, "race-key-2", "member", undefined, owner.id);
+
+      // Owner revokes successfully.
+      expect(await app.apiKeys.revokeAsUser(owner.id, tenant, created.id)).toBe(true);
+
+      // Now attacker tries the same id; even though the row is now
+      // deleted, ownership doesn't match -> false.
+      expect(await app.apiKeys.revokeAsUser(attacker.id, tenant, created.id)).toBe(false);
     });
   });
 

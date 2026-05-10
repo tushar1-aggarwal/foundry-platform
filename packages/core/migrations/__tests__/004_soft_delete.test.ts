@@ -42,18 +42,23 @@ describe("Migration 004 -- soft-delete", () => {
 
     const names = indexes.map((r) => r.name).sort();
     // Migration 006 adds idx_api_keys_hash_live -- the `%_live` pattern
-    // picks it up too, so the full expected set grows by one.
+    // picks it up too. Migration 017 adds idx_users_google_sub_live for
+    // the OIDC subject id and idx_scoping_overrides_live for the
+    // resolver lookup path (both partial unique indexes scoped to live
+    // rows).
     expect(names).toEqual(
       [
         "idx_api_keys_hash_live",
         "idx_memberships_user_team_live",
+        "idx_scoping_overrides_live",
         "idx_tenants_slug_live",
         "idx_teams_tenant_slug_live",
         "idx_users_email_live",
+        "idx_users_google_sub_live",
       ].sort(),
     );
     for (const r of indexes) {
-      expect(r.sql).toContain("WHERE deleted_at IS NULL");
+      expect(r.sql).toContain("deleted_at IS NULL");
     }
 
     await db.close();

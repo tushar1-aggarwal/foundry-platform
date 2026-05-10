@@ -163,7 +163,12 @@ describe("web server", async () => {
     server = startWebServer(getApp(), { port: 18433 });
     const resp = await fetch("http://localhost:18433/api/rpc", { method: "OPTIONS" });
     expect(resp.status).toBe(204);
-    expect(resp.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    // CORS spec forbids `Access-Control-Allow-Origin: *` on credentialed
+    // (`credentials: "include"`) responses, and the dashboard sends every
+    // RPC credentialed. We echo allowlisted Origins back instead and omit
+    // ACAO entirely when no Origin is provided (which is the case here).
+    expect(resp.headers.get("Access-Control-Allow-Origin")).not.toBe("*");
+    expect(resp.headers.get("Access-Control-Allow-Credentials")).toBe("true");
   });
 
   it("rejects write methods in read-only mode", async () => {

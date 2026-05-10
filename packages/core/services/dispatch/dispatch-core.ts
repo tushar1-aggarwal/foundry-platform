@@ -45,7 +45,12 @@ import {
   cloneRemoteRepoIfNeeded,
   checkPromptInjection,
 } from "./guards.js";
-import { resolveDispatchAgent, applyStageModelAndResolveSlug } from "./agent-resolve.js";
+import {
+  resolveDispatchAgent,
+  applyStageModelAndResolveSlug,
+  applyScopingRuntimeHint,
+  applyScopingModelHint,
+} from "./agent-resolve.js";
 import { assembleTask } from "./task-assembly.js";
 import { buildLaunchEnv, launchAgent } from "./launch.js";
 import { finalizeLaunch } from "./post-launch.js";
@@ -143,10 +148,24 @@ export class CoreDispatcher {
     const { findProjectRoot } = await import("../../agent/agent.js");
     const projectRoot = findProjectRoot(session.workdir || session.repo) ?? undefined;
 
-    // Resolve agent (inline spec or named) + apply stage model override + catalog slug.
+    // Resolve agent (inline spec or named).
     const agentResolution = await resolveDispatchAgent(this.deps, session, action.agent, projectRoot, log);
     if (!agentResolution.ok) return { ok: false, message: agentResolution.message };
     const { agent, agentName } = agentResolution.resolved;
+
+    // Phase 1 scoping hooks must fire BEFORE applyStageModelAndResolveSlug
+    // because:
+    //   - The runtime hint changes agent.runtime, which changes
+    //     `runtime.compat`, which catalog model resolution reads.
+    //   - The model hint changes agent.model, which catalog resolution
+    //     then maps to a provider slug under the (possibly-overridden)
+    //     runtime's compat list.
+    // Stage-level `stage.model` always wins -- it's evaluated inside
+    // applyStageModelAndResolveSlug after the hints run, matching the
+    // documented precedence: stage > resolver > agent declared.
+    const cfg = (session.config as { scoping_runtime_hint?: string; scoping_model_hint?: string } | null) ?? {};
+    applyScopingRuntimeHint(this.deps, agent, cfg.scoping_runtime_hint, log);
+    applyScopingModelHint(this.deps, agent, cfg.scoping_model_hint, projectRoot, log);
     applyStageModelAndResolveSlug(this.deps, agent, stageDef, projectRoot, log);
 
     const autonomy = stageDef?.autonomy ?? "full";

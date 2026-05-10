@@ -282,7 +282,19 @@ export function loadConfig(overrides: LoadConfigOptions = {}): ArkConfig {
     profile,
     ports: { conductor: 19400, arkd: 19300, web: 8420 },
     channels: { basePort: 19200, range: 10000 },
-    auth: { requireToken: profile === "control-plane", defaultTenant: null },
+    auth: {
+      requireToken: profile === "control-plane",
+      defaultTenant: null,
+      google: { clientId: null, clientSecret: null, redirectUri: null, allowedDomains: ["paytm.com"] },
+      session: {
+        ttlSec: 2592000,
+        cookieName: "ark_session",
+        cookieDomain: null,
+        cookieSecure: profile === "control-plane",
+        refreshThresholdSec: 300,
+        allowedOrigins: profile === "local" ? ["http://localhost:8420"] : [],
+      },
+    },
     features: { autoRebase: profile === "control-plane" },
     observability: { logLevel: profile === "test" ? "error" : "info" },
     storage: { blobBackend: profile === "control-plane" ? "s3" : "local" },
@@ -331,6 +343,20 @@ function assemble(defaults: ProfileDefaults, overrides: LoadConfigOptions, profi
   const authSection: AuthSectionConfig = {
     requireToken: merged.auth.requireToken ?? defaults.auth.requireToken,
     defaultTenant: merged.auth.defaultTenant ?? defaults.auth.defaultTenant,
+    google: {
+      clientId: merged.auth.google?.clientId ?? defaults.auth.google.clientId,
+      clientSecret: merged.auth.google?.clientSecret ?? defaults.auth.google.clientSecret,
+      redirectUri: merged.auth.google?.redirectUri ?? defaults.auth.google.redirectUri,
+      allowedDomains: merged.auth.google?.allowedDomains ?? defaults.auth.google.allowedDomains,
+    },
+    session: {
+      ttlSec: merged.auth.session?.ttlSec ?? defaults.auth.session.ttlSec,
+      cookieName: merged.auth.session?.cookieName ?? defaults.auth.session.cookieName,
+      cookieDomain: merged.auth.session?.cookieDomain ?? defaults.auth.session.cookieDomain,
+      cookieSecure: merged.auth.session?.cookieSecure ?? defaults.auth.session.cookieSecure,
+      refreshThresholdSec: merged.auth.session?.refreshThresholdSec ?? defaults.auth.session.refreshThresholdSec,
+      allowedOrigins: merged.auth.session?.allowedOrigins ?? defaults.auth.session.allowedOrigins,
+    },
   };
   const features: FeaturesConfig = {
     autoRebase: merged.features.autoRebase ?? defaults.features.autoRebase,

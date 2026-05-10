@@ -74,3 +74,6 @@ export type InstanceHeartbeatInsert = InferInsertModel<typeof s.instanceHeartbea
 
 export type ArkSchemaMigrationRow = InferSelectModel<typeof s.arkSchemaMigrations>;
 export type ArkSchemaMigrationInsert = InferInsertModel<typeof s.arkSchemaMigrations>;
+
+export type ScopingOverrideRow = InferSelectModel<typeof s.scopingOverrides>;
+export type ScopingOverrideInsert = InferInsertModel<typeof s.scopingOverrides>;
