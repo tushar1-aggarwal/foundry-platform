@@ -12,13 +12,14 @@
  * they're trivially unit-testable and don't widen the dispatcher class surface.
  */
 
-import { mkdirSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "fs";
 import { join } from "path";
 import { promisify } from "util";
 import { execFile } from "child_process";
 
 import { logWarn } from "../../observability/structured-log.js";
 import { detectInjection } from "../../session/prompt-guard.js";
+import { isRepoUrl } from "../../repo-url.js";
 import type { DispatchDeps, DispatchResult } from "./types.js";
 import type { Session } from "../../../types/index.js";
 
@@ -125,7 +126,13 @@ export async function cloneRemoteRepoIfNeeded(
   session: Session,
   log: (msg: string) => void,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  if (!session.config?.remoteRepo || session.workdir) return { ok: true };
+  // config.remoteRepo is the canonical source; fall back to session.repo only
+  // when it looks like a URL (backwards compat for sessions created before the
+  // conductor's URL-normalization fix, where session.repo held the raw URL).
+  const remoteRepo =
+    (session.config?.remoteRepo as string | undefined) ??
+    (session.repo && isRepoUrl(session.repo) ? session.repo : undefined);
+  if (!remoteRepo || session.workdir) return { ok: true };
   // Hosted dispatch normally defers cloning to the compute target. Laptop-hosted
   // mode (ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE=1) lets the conductor handle it,
   // because the conductor and worker are the same host and LocalCompute has no
@@ -135,10 +142,44 @@ export async function cloneRemoteRepoIfNeeded(
     return { ok: true };
   }
   const sessionId = session.id;
-  const remoteUrl = session.config.remoteRepo as string;
+  const remoteUrl = remoteRepo;
+  const tmpDir = join(deps.config.dirs.ark, "worktrees", sessionId);
+
+  // Retry-safe: a prior dispatch may have left tmpDir behind (partial clone,
+  // or full clone that never persisted `session.workdir` due to a crash
+  // between `git clone` and the DB update). Reuse only when the clone is
+  // fully landed (HEAD resolves to a commit); otherwise wipe and re-clone.
+  // `git clone` refuses non-empty destinations with "fatal: destination
+  // path '...' already exists and is not an empty directory."
+  if (existsSync(tmpDir)) {
+    let reusable = false;
+    if (existsSync(join(tmpDir, ".git"))) {
+      try {
+        await execFileAsync("git", ["-C", tmpDir, "rev-parse", "--verify", "HEAD"], { timeout: 5_000 });
+        reusable = true;
+      } catch {
+        // .git exists but HEAD doesn't resolve -- partial / interrupted clone.
+      }
+    }
+    if (reusable) {
+      log(`Reusing existing clone at ${tmpDir} (skipping re-clone)`);
+      await deps.sessions.update(sessionId, { workdir: tmpDir });
+      const updated = await deps.sessions.get(sessionId);
+      if (updated) (session as { workdir: string | null }).workdir = updated.workdir;
+      return { ok: true };
+    }
+    try {
+      if (readdirSync(tmpDir).length > 0) {
+        log(`Removing stale / partial clone contents at ${tmpDir} before re-clone`);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    } catch (e: any) {
+      logWarn("session", `cloneRemoteRepoIfNeeded: failed to clean ${tmpDir}: ${e?.message ?? e}`);
+    }
+  }
+
   log(`Cloning remote repo: ${remoteUrl}`);
   try {
-    const tmpDir = join(deps.config.dirs.ark, "worktrees", sessionId);
     mkdirSync(tmpDir, { recursive: true });
     await execFileAsync("git", ["clone", "--depth", "1", remoteUrl, tmpDir], { timeout: 120_000 });
     await deps.sessions.update(sessionId, { workdir: tmpDir });

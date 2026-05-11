@@ -23,6 +23,30 @@ import type { DatabaseAdapter } from "../database/index.js";
 import { logDebug } from "../observability/structured-log.js";
 
 export async function applySqliteDropLegacyProviderColumns(db: DatabaseAdapter): Promise<void> {
+  // 0. Ensure compute_templates has compute_kind + isolation_kind before we
+  //    touch them. Installs created before these columns were added to the
+  //    initial schema have only the legacy `provider` column. SQLite has no
+  //    ADD COLUMN IF NOT EXISTS, so swallow the "duplicate column name" error.
+  await addColumnIfMissing(db, "ALTER TABLE compute_templates ADD COLUMN compute_kind TEXT NOT NULL DEFAULT 'local'");
+  await addColumnIfMissing(
+    db,
+    "ALTER TABLE compute_templates ADD COLUMN isolation_kind TEXT NOT NULL DEFAULT 'direct'",
+  );
+
+  // Backfill compute_kind from provider only when the legacy provider column
+  // still exists (old installs). Fresh SQLite DBs created with the current
+  // initSchema (which dropped provider from compute_templates) skip this.
+  const hasProvider = await sqliteColumnExists(db, "compute_templates", "provider");
+  if (hasProvider) {
+    await db
+      .prepare(
+        `UPDATE compute_templates
+          SET compute_kind = provider
+          WHERE compute_kind = 'local' AND provider IS NOT NULL AND provider != ''`,
+      )
+      .run();
+  }
+
   // 1. Firecracker data fixup. Idempotent: rows already on (firecracker, direct)
   //    or (k8s, ...) are untouched. Coerces both `local + firecracker-in-container`
   //    AND `ec2 + firecracker-in-container` (the previously coerced legacy
@@ -56,6 +80,21 @@ export async function applySqliteDropLegacyProviderColumns(db: DatabaseAdapter):
 
 async function runDdl(db: DatabaseAdapter, sql: string): Promise<void> {
   await db.exec(sql);
+}
+
+async function sqliteColumnExists(db: DatabaseAdapter, table: string, column: string): Promise<boolean> {
+  const cols = (await db.prepare(`PRAGMA table_info(${table})`).all()) as Array<{ name: string }>;
+  return cols.some((c) => c.name === column);
+}
+
+async function addColumnIfMissing(db: DatabaseAdapter, sql: string): Promise<void> {
+  try {
+    await db.exec(sql);
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    if (!/duplicate column name/i.test(msg)) throw e;
+    logDebug("general", `column already exists (idempotent): ${msg}`);
+  }
 }
 
 async function dropColumnIfExists(db: DatabaseAdapter, table: string, column: string): Promise<void> {

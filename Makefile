@@ -15,6 +15,7 @@
 .PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-control-plane dev-control-plane-down claude-tfy pi-tfy web desktop \
         test test-file test-e2e test-e2e-fast test-e2e-web test-e2e-web-dev test-install test-watch lint lint-fix \
         format format-check \
+        dev-kill \
         docs-cli \
         build build-cli build-web build-desktop \
         package package-cli package-desktop \
@@ -175,6 +176,23 @@ bootstrap-key: ## Mint the first admin API key (auth-required deployments)
 	  echo "Restart the daemon with ARK_AUTH_REQUIRE_TOKEN=true to enable auth."; \
 	  echo "Key is persisted in the database; it survives the restart."; \
 	  ./ark server daemon stop >/dev/null 2>&1 || true
+
+dev-kill: ## Kill processes listening on dev ports (web 8420, vite 5173, conductor 19100, arkd 19300, WS 19400)
+	@for port in 8420 5173 19100 19300 19400; do \
+	  pids=$$(lsof -ti tcp:$$port 2>/dev/null); \
+	  if [ -n "$$pids" ]; then \
+	    echo "Killing PID(s) on :$$port -> $$pids"; \
+	    kill $$pids 2>/dev/null || true; \
+	    sleep 1; \
+	    pids=$$(lsof -ti tcp:$$port 2>/dev/null); \
+	    if [ -n "$$pids" ]; then \
+	      echo "  still alive, sending SIGKILL -> $$pids"; \
+	      kill -9 $$pids 2>/dev/null || true; \
+	    fi; \
+	  else \
+	    echo "Nothing listening on :$$port"; \
+	  fi; \
+	done
 
 spike-temporal-bun: ## Run the Phase 0 Bun / Temporal worker compat spike
 	@./scripts/spike-temporal-bun.sh

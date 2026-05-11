@@ -134,16 +134,24 @@ export async function worktreeDiff(
   // Use the repo's actual default branch when the caller didn't pin one.
   // Hard-coding "main" misses repos whose default is `develop` / `master`
   // and silently produces empty diffs.
-  const baseBranch = opts?.base ?? (await detectDefaultBranch(repo)) ?? DEFAULT_BASE_BRANCH;
+  //
+  // Cwd selection: worktree dir is the right anchor in both local-repo
+  // (worktrees share the parent .git, so origin refs are accessible) and
+  // remote-repo (the clone IS the workdir) modes. Falling back to
+  // `session.repo` only when wtDir is missing avoids the "fatal: cannot
+  // change to '<basename>'" log noise when session.repo is the synthesised
+  // basename from a URL.
+  const gitCwd = existsSync(wtDir) ? wtDir : repo;
+  const baseBranch = opts?.base ?? (await detectDefaultBranch(gitCwd)) ?? DEFAULT_BASE_BRANCH;
 
   try {
     // Get diff stat
-    const { stdout: stat } = await execFileAsync("git", ["-C", repo, "diff", "--stat", `${baseBranch}...${branch}`], {
+    const { stdout: stat } = await execFileAsync("git", ["-C", gitCwd, "diff", "--stat", `${baseBranch}...${branch}`], {
       encoding: "utf-8",
     });
 
     // Get full diff (truncated to 50KB)
-    const { stdout: fullDiff } = await execFileAsync("git", ["-C", repo, "diff", `${baseBranch}...${branch}`], {
+    const { stdout: fullDiff } = await execFileAsync("git", ["-C", gitCwd, "diff", `${baseBranch}...${branch}`], {
       encoding: "utf-8",
       maxBuffer: 1024 * 1024,
     });
@@ -152,7 +160,7 @@ export async function worktreeDiff(
     // Parse shortstat for counts
     const { stdout: shortstat } = await execFileAsync(
       "git",
-      ["-C", repo, "diff", "--shortstat", `${baseBranch}...${branch}`],
+      ["-C", gitCwd, "diff", "--shortstat", `${baseBranch}...${branch}`],
       { encoding: "utf-8" },
     );
     // "3 files changed, 42 insertions(+), 7 deletions(-)"
@@ -165,14 +173,14 @@ export async function worktreeDiff(
     try {
       const { stdout: diffNames } = await execFileAsync(
         "git",
-        ["-C", repo, "diff", "--name-only", `${baseBranch}...${branch}`],
+        ["-C", gitCwd, "diff", "--name-only", `${baseBranch}...${branch}`],
         { encoding: "utf-8" },
       );
       const files = diffNames.trim().split("\n").filter(Boolean);
       const fileHashes: Record<string, string> = {};
       for (const file of files) {
         try {
-          const { stdout: hash } = await execFileAsync("git", ["-C", repo, "rev-parse", `${branch}:${file}`], {
+          const { stdout: hash } = await execFileAsync("git", ["-C", gitCwd, "rev-parse", `${branch}:${file}`], {
             encoding: "utf-8",
           });
           fileHashes[file] = hash.trim();

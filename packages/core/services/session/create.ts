@@ -4,6 +4,7 @@
  */
 
 import { execFileSync } from "child_process";
+import { existsSync } from "fs";
 
 import type { Session } from "../../../types/index.js";
 import type { LifecycleHooks, SessionLifecycleDeps, StartSessionOpts } from "./types.js";
@@ -13,10 +14,16 @@ import { profileGroupPrefix } from "../profile.js";
 import { logDebug, logError, logWarn } from "../../observability/structured-log.js";
 import { track } from "../../observability/telemetry.js";
 import { emitSessionSpanStart, emitStageSpanStart } from "../../observability/otlp.js";
+import { isRepoUrl } from "../../repo-url.js";
 
 /** Resolve GitHub repo URL from a local git directory. Returns null if not a GitHub repo. */
 export function resolveGitHubUrl(dir?: string | null): string | null {
   if (!dir) return null;
+  // Skip git when `dir` clearly isn't a local checkout. Remote-repo sessions
+  // pass the URL basename (e.g. "recharge-h5-pos") here before the clone has
+  // landed -- shelling out to `git -C <basename>` produces "fatal: cannot
+  // change to ..." log noise on every retry without surfacing any signal.
+  if (isRepoUrl(dir) || !existsSync(dir)) return null;
   try {
     const remote = execFileSync("git", ["-C", dir, "remote", "get-url", "origin"], {
       encoding: "utf-8",

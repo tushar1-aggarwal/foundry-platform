@@ -6,6 +6,7 @@ import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
 import { resolveTenantApp } from "./scope-helpers.js";
 import { eventBus } from "../../core/hooks.js";
+import { isRepoUrl } from "../../core/repo-url.js";
 import type {
   SessionIdParams,
   SessionStartParams,
@@ -195,19 +196,36 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       }
     }
 
+    // Normalize the repo field: if a URL was passed as `opts.repo` (e.g.
+    // from the web New Session form's repo input), promote it to
+    // `config.remoteRepo` and synthesize a local basename for `session.repo`.
+    // This ensures the cloning guard (`cloneRemoteRepoIfNeeded`) triggers and
+    // the URL is never used as a filesystem path.
+    let normalizedOpts = opts;
+    if (opts.repo && isRepoUrl(opts.repo)) {
+      const basename = opts.repo.match(/\/([^/]+?)(?:\.git)?$/)?.[1] ?? opts.repo;
+      normalizedOpts = {
+        ...opts,
+        repo: basename,
+        config: { ...(opts.config as Record<string, unknown> | null | undefined), remoteRepo: opts.repo },
+      };
+    }
+
     // Synthesize session.repo from config.remoteRepo when only the URL was
-    // passed. Mirrors the CLI's `--remote-repo` handling (formerly in
-    // packages/cli/services/session-start.ts) -- moved server-side so every
-    // entry point (CLI, web New Session form, MCP, raw JSON-RPC) produces an
-    // identical DB row. Downstream readers (`create_pr`, `merge`, ...) consult
+    // passed via config (CLI --remote-repo path). Mirrors the above but for
+    // the config-first entry point so every caller produces an identical DB
+    // row. Downstream readers (`create_pr`, `merge`, ...) consult
     // `session.repo` only; without this synthesis remote-first dispatches via
     // non-CLI callers leave the column null and the action stages bail with
     // "Session has no repo".
-    const cfg = (opts.config ?? null) as { remoteRepo?: string } | null;
+    const cfg = (normalizedOpts.config ?? null) as { remoteRepo?: string } | null;
     const startOpts: SessionStartParams =
-      cfg?.remoteRepo && !opts.repo
-        ? { ...opts, repo: cfg.remoteRepo.match(/\/([^/]+?)(?:\.git)?$/)?.[1] ?? cfg.remoteRepo }
-        : opts;
+      cfg?.remoteRepo && !normalizedOpts.repo
+        ? {
+            ...normalizedOpts,
+            repo: cfg.remoteRepo.match(/\/([^/]+?)(?:\.git)?$/)?.[1] ?? cfg.remoteRepo,
+          }
+        : normalizedOpts;
 
     // Atomic create + dispatch: splitting these across two RPCs used to force
     // every caller (CLI, web, tests) to remember the second call or live with
