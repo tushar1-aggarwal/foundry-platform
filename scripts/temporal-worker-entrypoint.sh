@@ -4,7 +4,6 @@ ARK_DIR="${ARK_DIR:-/root/.ark}"
 PLUGIN_DIR="$ARK_DIR/plugins/executors"
 FLOW_DIR="$ARK_DIR/flows"
 mkdir -p "$PLUGIN_DIR" "$FLOW_DIR"
-
 # E2E-only fixtures. Gated on ARK_E2E_MODE=1 so prod worker images (which
 # also ship the e2e/ directory due to `COPY . .` in Dockerfile.temporal-worker)
 # don't shadow the real claude-code executor at runtime.
@@ -20,9 +19,7 @@ mkdir -p "$PLUGIN_DIR" "$FLOW_DIR"
 # `ARK_E2E_MODE` is the explicit opt-in. The e2e compose stack
 # (.infra/docker-compose.e2e.yaml) sets it; chart deployments do not.
 if [ "${ARK_E2E_MODE:-0}" = "1" ]; then
-  echo "[entrypoint] ARK_E2E_MODE=1, installing e2e stub executors and flow fixtures"
-  [ -f /app/e2e/fixtures/stub-runner-executor.mjs ] \
-    && cp /app/e2e/fixtures/stub-runner-executor.mjs "$PLUGIN_DIR/stub-runner.mjs"
+  echo "[entrypoint] ARK_E2E_MODE=1, installing e2e stub executor and flow fixtures"
   [ -f /app/e2e/fixtures/fake-claude-code-executor.mjs ] \
     && cp /app/e2e/fixtures/fake-claude-code-executor.mjs "$PLUGIN_DIR/claude-code.mjs"
   if [ -d /app/e2e/fixtures/flows ]; then
