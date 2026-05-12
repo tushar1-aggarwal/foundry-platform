@@ -44,6 +44,32 @@ spec:
             - name: DB_NAME
               value: {{ .Values.postgresql.external.database | quote }}
             {{- end }}
+            # LLM keys -- Temporal activities (dispatch-stage, run-verification)
+            # exec agent runtimes that read these directly from process.env.
+            {{- if or .Values.llm.anthropicApiKey .Values.llm.existingSecret }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ark.llmSecretName" . }}
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            {{- end }}
+            {{- if or .Values.llm.openaiApiKey .Values.llm.existingSecret }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ark.llmSecretName" . }}
+                  key: OPENAI_API_KEY
+                  optional: true
+            {{- end }}
+            {{- if or .Values.llm.googleApiKey .Values.llm.existingSecret }}
+            - name: GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ark.llmSecretName" . }}
+                  key: GOOGLE_API_KEY
+                  optional: true
+            {{- end }}
           resources:
             {{- toYaml .Values.temporal.worker.resources | nindent 12 }}
           # Liveness via a noop curl to Temporal frontend -- if frontend is
