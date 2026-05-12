@@ -13,7 +13,7 @@ WORKDIR /app
 # Install Node + npm from Debian's repo (Node 20 LTS, which is fine -- the
 # Temporal worker SDK supports Node 18+). Avoids the Zscaler-MITM-blocked
 # nodesource pull.
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm curl \
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm curl git tmux \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g tsx
 COPY package.json bun.lock* ./
