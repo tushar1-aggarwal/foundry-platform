@@ -33,6 +33,25 @@ async function restartTemporalWorker(): Promise<void> {
   await Bun.sleep(3000);
 }
 
+/**
+ * Write or clear the failure-injection flag inside the temporal-worker container.
+ * The fake-claude-code-executor plugin reads /tmp/ark-fail-stage at launch
+ * time -- when present, it emits an AuthError report for that stage instead
+ * of the normal completion report.
+ *
+ * Test isolation: test 1 (compound) MUST clear this flag, otherwise leftover
+ * state from a prior test 2 run causes implement stage to fail on the happy
+ * path too. Both flows call this helper unconditionally with the test's
+ * intended value (or null to clear).
+ */
+async function setWorkerFailStage(stage: string | null): Promise<void> {
+  const cmd = stage
+    ? ["docker", "exec", "ark-e2e-temporal-worker-1", "sh", "-c", `echo -n '${stage}' > /tmp/ark-fail-stage`]
+    : ["docker", "exec", "ark-e2e-temporal-worker-1", "sh", "-c", "rm -f /tmp/ark-fail-stage"];
+  const proc = Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" });
+  await proc.exited;
+}
+
 async function createOrIgnore(
   rpc: RpcClient,
   method: string,
@@ -50,7 +69,10 @@ async function createOrIgnore(
   }
 }
 
-export async function registerE2eFixtures(rpc: RpcClient): Promise<void> {
+export async function registerE2eFixtures(
+  rpc: RpcClient,
+  opts: { failStage?: string | null } = {},
+): Promise<void> {
   // claude-code runtime declares CLAUDE_CODE_OAUTH_TOKEN as a required secret
   // and dispatch validates it before launching the agent. Fake-claude doesn't
   // read it, but the runtime contract still demands a non-empty value.
@@ -84,6 +106,10 @@ export async function registerE2eFixtures(rpc: RpcClient): Promise<void> {
     readFileSync(join(REPO_ROOT, "e2e/fixtures/agents/stub-implementer.yaml"), "utf-8"),
   );
   await createOrIgnore(rpc, "agent/create", { name: "stub-implementer", ...implDef });
+
+  // Set/clear the failure-injection flag BEFORE restarting the worker, so
+  // any in-flight launches see the correct state on the next dispatch.
+  await setWorkerFailStage(opts.failStage ?? null);
 
   // The temporal-worker container booted before this test ran and cached
   // an empty flow/agent list. Restart it so it re-reads from Postgres.

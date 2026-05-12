@@ -89,8 +89,9 @@ describe("docs-flow e2e -- hosted (Temporal + docker isolation)", () => {
       rpc = new RpcClient(server.webUrl);
       // Hosted server seeds builtins from flows/definitions/, which does not
       // include e2e fixtures. Register them via RPC so session/start can find
-      // the flow and resolve its first stage.
-      await registerE2eFixtures(rpc);
+      // the flow and resolve its first stage. Pass failStage:null to clear any
+      // leftover flag file from a prior restart-then-fail test run.
+      await registerE2eFixtures(rpc, { failStage: null });
     }, 120_000);
 
     afterAll(async () => {
@@ -148,7 +149,11 @@ describe("docs-flow e2e -- hosted (Temporal + docker isolation)", () => {
         extraEnv: FAIL_ENV,
       });
       rpc = new RpcClient(server.webUrl);
-      await registerE2eFixtures(rpc);
+      // Inject failStage so the worker's fake-claude-code plugin emits an
+      // AuthError on the implement stage. Without this, the executor sees no
+      // flag and completes successfully -- the very bug that made this test
+      // miss the durability assertion last run.
+      await registerE2eFixtures(rpc, { failStage: "implement" });
     }, 120_000);
 
     afterAll(async () => {

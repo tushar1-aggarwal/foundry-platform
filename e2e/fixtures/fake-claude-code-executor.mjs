@@ -68,9 +68,23 @@ const executor = {
         // dispatch.return, so 100ms is plenty.
         await new Promise((r) => setTimeout(r, 200));
 
-        // Failure injection -- restart-then-fail test runs with
-        // ARK_FAKE_CLAUDE_FAIL_STAGE=implement set on the worker's env.
-        const failStage = process.env.ARK_FAKE_CLAUDE_FAIL_STAGE ?? opts.env?.ARK_FAKE_CLAUDE_FAIL_STAGE;
+        // Failure injection. Three resolution paths, first match wins:
+        //   1. /tmp/ark-fail-stage flag file (written by register-fixtures via
+        //      docker exec). This is the path the restart-then-fail test uses,
+        //      because the host can't set worker env vars without rebuilding
+        //      the container.
+        //   2. process.env (works only if the worker container was started
+        //      with the env var baked in).
+        //   3. opts.env (per-launch env if dispatch forwards it).
+        let failStage = null;
+        try {
+          const fs = await import("fs");
+          const flag = fs.readFileSync("/tmp/ark-fail-stage", "utf-8").trim();
+          if (flag) failStage = flag;
+        } catch {}
+        if (!failStage) {
+          failStage = process.env.ARK_FAKE_CLAUDE_FAIL_STAGE ?? opts.env?.ARK_FAKE_CLAUDE_FAIL_STAGE;
+        }
         if (failStage && failStage === stage) {
           await handleReport(app, sessionId, {
             type: "error",
