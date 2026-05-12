@@ -18,10 +18,12 @@ import type {
   FlushPlacementOpts,
   MethodedComputeHandle,
   PersistedComputeHandleState,
+  PrepareWorkspaceOpts,
   ProvisionOpts,
   Snapshot,
 } from "./types.js";
 import { NotSupportedError } from "./types.js";
+import { cloneWorkspaceViaArkd } from "./workspace-clone.js";
 import { LocalPlacementCtx } from "./local-placement-ctx.js";
 import { DEFAULT_ARKD_URL, DEFAULT_CONDUCTOR_URL } from "../constants.js";
 import { channelLaunchSpec } from "../install-paths.js";
@@ -105,6 +107,44 @@ export class LocalCompute implements Compute {
     return `http://localhost:${this.app.config.ports.arkd}`;
   }
 
+  // ── resolveWorkdir ────────────────────────────────────────────────────────
+  //
+  // Mirrors EC2's layout: <worktreesDir>/<sessionId>/<repoBasename>.
+  // Returns null when no clone source is set (bare-worktree mode), letting
+  // the dispatcher fall back to session.workdir.
+  resolveWorkdir(_h: ComputeHandle, session: Session): string | null {
+    const cloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo;
+    if (!cloneSource) return null;
+    const repoBasename =
+      cloneSource
+        .split("/")
+        .pop()
+        ?.replace(/\.git$/, "") ?? "project";
+    return `${this.app.config.dirs.worktrees}/${session.id}/${repoBasename}`;
+  }
+
+  // ── prepareWorkspace ──────────────────────────────────────────────────────
+  //
+  // mkdir + git clone via local arkd HTTP -- same path as EC2/K8s so the
+  // full target-lifecycle flow runs identically regardless of compute kind.
+
+  /** Test-only: swap the clone helper. */
+  setCloneHelperForTesting(fn: typeof cloneWorkspaceViaArkd): void {
+    this.cloneHelper = fn;
+  }
+
+  private cloneHelper: typeof cloneWorkspaceViaArkd = cloneWorkspaceViaArkd;
+
+  async prepareWorkspace(h: ComputeHandle, opts: PrepareWorkspaceOpts): Promise<void> {
+    if (!opts.source || !opts.remoteWorkdir) return;
+    await this.cloneHelper({
+      arkdUrl: this.getArkdUrl(h),
+      arkdToken: process.env.ARK_ARKD_TOKEN ?? null,
+      source: opts.source,
+      remoteWorkdir: opts.remoteWorkdir,
+    });
+  }
+
   async ensureReachable(h: ComputeHandle): Promise<void> {
     // Local arkd shares a host with the conductor; no transport to set up.
     // BUT: the conductor's hooks-channel subscriber still needs to attach so
@@ -119,10 +159,6 @@ export class LocalCompute implements Compute {
     const { startArkdEventsConsumer } = await import("../services/channel/arkd-events-consumer.js");
     startArkdEventsConsumer(this.app, h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
   }
-
-  // resolveWorkdir intentionally omitted: LocalCompute shares the
-  // conductor's filesystem layout, so callers fall back to
-  // `session.workdir` (the conductor-side path is the right path).
 
   // ── flushPlacement ────────────────────────────────────────────────────────
   //

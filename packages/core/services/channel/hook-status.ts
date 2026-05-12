@@ -220,10 +220,24 @@ export async function processHookPayload(
   }
 
   if (result.shouldAdvance) {
-    await scoped.sessionHooks.mediateStageHandoff(sessionId, {
-      autoDispatch: result.shouldAutoDispatch,
-      source: "hook_status",
-    });
+    // Under Temporal orchestration the session-workflow loop drives stage
+    // advancement. Running the bespoke handoff here races the workflow's own
+    // dispatchStageActivity and double-executes action stages (T6 hit this:
+    // hook_status fired `create_pr` a second time after the Temporal activity
+    // had already failed-and-marked-the-session). Mirror the gates in
+    // report-pipeline.ts and session-signals.ts.
+    const sessionForOrch = await scoped.sessions.get(sessionId);
+    if (sessionForOrch?.orchestrator === "temporal") {
+      logDebug(
+        "conductor",
+        `hook_status: skipping bespoke handoff for ${sessionId} -- Temporal workflow drives advancement`,
+      );
+    } else {
+      await scoped.sessionHooks.mediateStageHandoff(sessionId, {
+        autoDispatch: result.shouldAutoDispatch,
+        source: "hook_status",
+      });
+    }
   }
 
   if (result.newStatus) {

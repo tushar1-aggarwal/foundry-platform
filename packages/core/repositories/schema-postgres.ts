@@ -82,7 +82,7 @@ export async function initPostgresSchema(db: DatabaseAdapter): Promise<void> {
   // single row type.
   await db.exec(`
     CREATE TABLE IF NOT EXISTS compute (
-      name TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
       compute_kind TEXT NOT NULL DEFAULT 'local',
       isolation_kind TEXT NOT NULL DEFAULT 'direct',
       status TEXT NOT NULL DEFAULT 'stopped',
@@ -91,7 +91,8 @@ export async function initPostgresSchema(db: DatabaseAdapter): Promise<void> {
       cloned_from TEXT,
       tenant_id TEXT NOT NULL DEFAULT 'default',
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (name, tenant_id)
     )
   `);
 
@@ -471,9 +472,9 @@ export async function seedLocalComputePostgres(db: DatabaseAdapter): Promise<voi
   await db
     .prepare(
       `
-    INSERT INTO compute (name, compute_kind, isolation_kind, status, config, created_at, updated_at)
-    VALUES ($1, 'local', 'direct', 'running', '{}', $2, $3)
-    ON CONFLICT (name) DO NOTHING
+    INSERT INTO compute (name, compute_kind, isolation_kind, status, config, tenant_id, created_at, updated_at)
+    VALUES ($1, 'local', 'direct', 'running', '{}', 'default', $2, $3)
+    ON CONFLICT (name, tenant_id) DO NOTHING
   `,
     )
     .run("local", ts, ts);

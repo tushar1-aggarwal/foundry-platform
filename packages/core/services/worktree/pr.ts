@@ -316,6 +316,33 @@ async function resolveGithubToken(app: AppContext, session: Session): Promise<st
 }
 
 /**
+ * Resolve the Bitbucket token (Bitbucket Cloud HTTP access token / app
+ * password) for this session's tenant. Mirrors `resolveGithubToken` exactly
+ * so the auth surface is uniform across hosts.
+ *
+ * Resolution order:
+ *   1. Tenant-scoped `BITBUCKET_TOKEN` in the secrets store.
+ *   2. `process.env.BITBUCKET_TOKEN`. Conductor-process fallback.
+ *   3. undefined. Falls back to the existing SSH path (sidecar's
+ *      `/root/.ssh` bind-mount in DockerIsolation, or whatever credential
+ *      helper the remote host has otherwise).
+ *
+ * Token format: Bitbucket Cloud HTTP access tokens use the username
+ * `x-token-auth` in HTTPS basic-auth. App passwords (legacy) work with
+ * `<username>:<app-password>`. We standardise on `x-token-auth` in the URL
+ * rewrite below; that form is what Bitbucket recommends for headless usage.
+ */
+async function resolveBitbucketToken(app: AppContext, session: Session): Promise<string | undefined> {
+  try {
+    const fromStore = await app.secrets.get(session.tenant_id, "BITBUCKET_TOKEN");
+    if (fromStore) return fromStore;
+  } catch {
+    // Secret store unavailable -- fall through to env fallback.
+  }
+  return process.env.BITBUCKET_TOKEN || undefined;
+}
+
+/**
  * Read the `origin` remote URL via the same dispatcher used for push/rebase.
  * Returns null on any error (not a git repo, no origin, network failure on
  * remote, etc.).
@@ -424,20 +451,32 @@ export async function createWorktreePR(
   const localPushDir = existsSync(wtDir) ? wtDir : repo;
 
   try {
-    // For remote-dispatch push to github over HTTPS the worker has no
-    // git credential helper -- `git push https://github.com/...` then
-    // hangs prompting for a username. Inject GITHUB_TOKEN into the
-    // origin URL before push so HTTPS basic-auth carries the token.
-    // Idempotent: only runs on remote+github+https; the cleanup at the
-    // end restores the original URL so we don't leak the token into the
-    // worker's git config.
+    // For remote-dispatch push over HTTPS the worker has no git credential
+    // helper -- `git push https://<host>/...` then hangs prompting for a
+    // username. Inject the tenant-scoped token into the origin URL before
+    // push so HTTPS basic-auth carries it. Idempotent: only runs on
+    // remote+matching-host+https; the cleanup at the end restores the
+    // original URL so we don't leak the token into the worker's git config.
+    //
+    // GitHub uses username `x-access-token`; Bitbucket Cloud uses
+    // `x-token-auth`. Both are documented per-host conventions for
+    // headless HTTPS access via personal-access / app tokens.
+    // Resolve both tokens up front -- outer scope so the redaction calls
+    // later in this function (replaceAll(githubToken, "***")) and the REST
+    // API path for PR creation can reuse them.
     let originalOriginUrl: string | null = null;
     const githubToken = await resolveGithubToken(app, session);
-    if (routing.remote && githubToken) {
+    const bitbucketToken = await resolveBitbucketToken(app, session);
+    if (routing.remote) {
       const probe = await readOriginUrl(app, session);
-      if (probe && probe.startsWith("https://github.com/")) {
+      let authedUrl: string | null = null;
+      if (probe?.startsWith("https://github.com/") && githubToken) {
+        authedUrl = probe.replace("https://", `https://x-access-token:${githubToken}@`);
+      } else if (probe?.startsWith("https://bitbucket.org/") && bitbucketToken) {
+        authedUrl = probe.replace("https://", `https://x-token-auth:${bitbucketToken}@`);
+      }
+      if (authedUrl && probe) {
         originalOriginUrl = probe;
-        const authedUrl = probe.replace("https://", `https://x-access-token:${githubToken}@`);
         try {
           await runGit(app, session, ["remote", "set-url", "origin", authedUrl], { timeout: 15_000 });
         } catch (err: any) {
@@ -469,9 +508,20 @@ export async function createWorktreePR(
     // work on, e.g. via `--branch my-fix`) keep the safe default --
     // those CAN have concurrent writers.
     const isSessionOwnedBranch = branch === `ark-s-${sessionId}`;
+    // `--no-verify` skips the operator's local pre-push hook. Ark sessions
+    // run in worktrees that may not have full dev setup (no node_modules,
+    // no poetry env, no python venv), so hooks like `make lint` either fail
+    // outright or, worse, succeed but emit dep-resolution chatter ("Resolving
+    // dependencies / Resolved, downloaded and extracted [150]" from Bun)
+    // that the dispatcher then captures as the apparent push failure -- the
+    // push itself succeeded, only the hook's stdout/stderr corruption made
+    // the action look like it failed (real incident, session s-xrqnks8z5k).
+    // The implement stage already runs the project's tests + lint inside the
+    // agent loop; the operator's pre-push is a duplicate gate that doesn't
+    // apply to automated dispatch.
     const pushArgs = isSessionOwnedBranch
-      ? ["push", "-u", "--force", "origin", branch]
-      : ["push", "-u", "origin", branch];
+      ? ["push", "--no-verify", "-u", "--force", "origin", branch]
+      : ["push", "--no-verify", "-u", "origin", branch];
     let pushStdout = "";
     let pushStderr = "";
     try {
@@ -514,7 +564,7 @@ export async function createWorktreePR(
             timeout: 15_000,
             localCwd: routing.remote ? undefined : localPushDir,
           });
-          const retryArgs = ["push", "-u", "origin", renamedBranch];
+          const retryArgs = ["push", "--no-verify", "-u", "origin", renamedBranch];
           const r = await runGit(app, session, retryArgs, {
             timeout: 60_000,
             localCwd: routing.remote ? undefined : localPushDir,

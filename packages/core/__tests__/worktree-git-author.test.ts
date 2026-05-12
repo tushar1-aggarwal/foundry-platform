@@ -1,19 +1,23 @@
 /**
  * Per-worktree git author identity.
  *
- * Real incident (PAI-31995 dispatch on the staging box): the host's
- * `~/.gitconfig` had `user.email=ark-test@example.com` from a manual
- * setup. The agent's commits inherited that, and Bitbucket's
- * BB Violator hook auto-rewrote the commit (changing the SHA and
- * appending a marker file) because the email isn't a valid Paytm
- * address.
+ * Resolution chain (highest priority first):
+ *   1. Explicit override -- `ARK_GIT_AUTHOR_NAME` / `_EMAIL` env or
+ *      `app.config.git.author{Name,Email}` set to a non-placeholder value.
+ *   2. The parent repo's effective git config (worktree -> repo-local ->
+ *      `~/.gitconfig` -> system). This is what lets a laptop dev's local
+ *      identity flow through automatically without operator action.
+ *   3. The user's global git config (probed independently as a backstop
+ *      when the parent repo's local config carries the placeholder from
+ *      a prior `applyWorktreeGitIdentity` write).
+ *   4. The placeholder `"Ark Agent" / "agent@ark.local"` -- last resort.
  *
- * The fix sets `user.name` / `user.email` on the worktree's local
- * git config the moment Ark creates the worktree, so commits don't
- * fall through to the host's global config. Defaults are
- * "Ark Agent" / "agent@ark.local"; both are overridable via
- * `app.config.git.author{Name,Email}`, `~/.ark/config.yaml`, or
- * `ARK_GIT_AUTHOR_NAME` / `ARK_GIT_AUTHOR_EMAIL`.
+ * The placeholder strings are treated as "no override" everywhere in the
+ * chain because Bitbucket's BB Violator pre-receive hook rejects the
+ * `agent@ark.local` email and rewrites the commit to a generic bot author
+ * (see real incident PAI-31995). Production environments where the host
+ * `~/.gitconfig` might also carry an invalid identity should set the
+ * explicit env override.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
@@ -57,26 +61,25 @@ function readWorktreeIdentity(wt: string): { name: string; email: string } {
 }
 
 describe("setupSessionWorktree -- git author identity", () => {
-  it("pins user.name / user.email on the worktree's local git config", async () => {
-    const session = await app.sessions.create({ summary: "git-author test", repo: "." });
+  it("inherits the parent repo's git identity when no override is configured", async () => {
+    // Default config carries the placeholder "Ark Agent" / "agent@ark.local"
+    // (see config.ts:498-507), which the resolver treats as "no override".
+    // The parent repo has user.name="Host User" / user.email="host-config@example.com"
+    // (set in beforeEach), so those should propagate into the worktree.
+    const session = await app.sessions.create({ summary: "git-author cascade", repo: "." });
     const wt = await setupSessionWorktree(app, session, null);
 
-    const { name, email } = readWorktreeIdentity(wt);
-    expect(name).toBe(app.config.git?.authorName ?? "Ark Agent");
-    expect(email).toBe(app.config.git?.authorEmail ?? "agent@ark.local");
+    expect(readWorktreeIdentity(wt)).toEqual({
+      name: "Host User",
+      email: "host-config@example.com",
+    });
   });
 
-  it("does NOT inherit the host's global git identity on agent commits", async () => {
-    const session = await app.sessions.create({ summary: "git-author isolation", repo: "." });
-    const wt = await setupSessionWorktree(app, session, null);
-
-    const { email } = readWorktreeIdentity(wt);
-    expect(email).not.toBe("host-config@example.com");
-  });
-
-  it("honors app.config.git override when present", async () => {
-    // Mutate the resolved config directly -- this is what env-source /
-    // YAML overlay will produce in real deployments.
+  it("honors app.config.git override over the parent repo's identity", async () => {
+    // Mutate the resolved config directly -- this mirrors what env-source /
+    // YAML overlay produces in real deployments. Explicit non-placeholder
+    // overrides MUST win over the parent repo's identity even when the latter
+    // is set and valid.
     (app.config as Record<string, unknown>).git = {
       authorName: "Custom Bot",
       authorEmail: "bot@example.org",
@@ -86,5 +89,24 @@ describe("setupSessionWorktree -- git author identity", () => {
     const wt = await setupSessionWorktree(app, session, null);
 
     expect(readWorktreeIdentity(wt)).toEqual({ name: "Custom Bot", email: "bot@example.org" });
+  });
+
+  it("treats the literal placeholder in config.git as 'no override'", async () => {
+    // Production deployments where the operator left ARK_GIT_AUTHOR_NAME
+    // unset (or explicitly set to "Ark Agent") still get the parent repo's
+    // identity. The placeholder is the BB-Violator-incompatible value we
+    // want to avoid in practice.
+    (app.config as Record<string, unknown>).git = {
+      authorName: "Ark Agent",
+      authorEmail: "agent@ark.local",
+    };
+
+    const session = await app.sessions.create({ summary: "git-author placeholder", repo: "." });
+    const wt = await setupSessionWorktree(app, session, null);
+
+    expect(readWorktreeIdentity(wt)).toEqual({
+      name: "Host User",
+      email: "host-config@example.com",
+    });
   });
 });

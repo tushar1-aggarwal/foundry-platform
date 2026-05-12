@@ -86,6 +86,14 @@ export async function startHostedServer(config: ArkConfig): Promise<{
         const ready = await app.sessions.listAcrossTenants({ status: "ready", limit: 20 });
         for (const s of ready) {
           if (inFlight.has(s.id)) continue;
+          // Skip Temporal-orchestrated sessions: the workflow drives every
+          // stage via dispatchStageActivity. Letting the bespoke dispatcher
+          // also pick them up here produces a dual-track race (see T5b: the
+          // poller's bespoke dispatch can race the workflow's non-retryable
+          // failure handling and complete the session "successfully" instead
+          // of recording the AuthError). The workflow is the single writer
+          // for these sessions.
+          if (s.orchestrator === "temporal") continue;
           inFlight.add(s.id);
           const tenantApp = s.tenant_id ? app.forTenant(s.tenant_id) : app;
           // Warm agent/runtime caches for this tenant scope so resolveAgent

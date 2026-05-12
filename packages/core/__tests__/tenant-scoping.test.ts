@@ -250,6 +250,31 @@ describe("tenant scoping", async () => {
       expect((await scoped.computes.list()).length).toBe(1);
       expect((await app.computes.list()).length).toBe(defaultCount);
     });
+
+    it("two tenants can share the same compute name", async () => {
+      // Multi-tenancy correctness: the compute PK is (name, tenant_id), so
+      // two tenants holding the same compute name are distinct rows. Today
+      // the default tenant has a seeded `local` row -- another tenant must
+      // be free to create its own `local` without colliding.
+      const a = app.forTenant("share-name-a");
+      await a.computeService.create({ name: "local" });
+
+      const b = app.forTenant("share-name-b");
+      await b.computeService.create({ name: "local" });
+
+      // Each tenant resolves to its own row
+      const aLocal = await a.computes.get("local");
+      const bLocal = await b.computes.get("local");
+      expect(aLocal).not.toBeNull();
+      expect(bLocal).not.toBeNull();
+      expect(aLocal!.name).toBe("local");
+      expect(bLocal!.name).toBe("local");
+
+      // Default tenant's seeded `local` is still its own row, not leaked
+      const defaultLocal = await app.computes.get("local");
+      expect(defaultLocal).not.toBeNull();
+      expect(defaultLocal!.name).toBe("local");
+    });
   });
 
   describe("forTenant", () => {

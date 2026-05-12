@@ -277,6 +277,49 @@ export interface FeaturesConfig {
    * @envvar ARK_AUTO_REBASE
    */
   autoRebase: boolean;
+  /**
+   * Route new hosted sessions through Temporal.
+   * @envvar ARK_TEMPORAL_ORCHESTRATION
+   * @default false
+   */
+  temporalOrchestration: boolean;
+}
+
+/** Temporal workflow engine configuration. */
+export interface TemporalConfig {
+  /**
+   * Temporal server address.
+   * @envvar ARK_TEMPORAL_SERVER_URL
+   * @default "localhost:7233"
+   */
+  serverUrl: string;
+  /**
+   * Temporal namespace.
+   * @envvar ARK_TEMPORAL_NAMESPACE
+   * @default "default"
+   */
+  namespace: string;
+  /**
+   * Task queues this worker pulls from.
+   * @default []
+   */
+  taskQueueAssignments: string[];
+  /**
+   * Whether to start a Temporal worker in this process.
+   * @envvar ARK_TEMPORAL_WORKER
+   * @default false
+   */
+  workerEnabled: boolean;
+  /**
+   * Hard wall-clock cap passed to `client.workflow.start({ workflowExecutionTimeout })`.
+   * Without it, an orphan workflow (worker crash, stop() that didn't cleanly
+   * terminate, signal that never arrives) sits in Temporal's history table as
+   * Running until the namespace retention period expires. Format: Temporal
+   * duration string (e.g. "24h", "5m").
+   * @envvar ARK_TEMPORAL_WORKFLOW_EXECUTION_TIMEOUT
+   * @default "24h"
+   */
+  workflowExecutionTimeout?: string;
 }
 
 /**
@@ -293,4 +336,5 @@ export interface ProfileDefaults {
   features: FeaturesConfig;
   observability: { logLevel: ObservabilityConfig["logLevel"] };
   storage: StorageConfig;
+  temporal?: Partial<TemporalConfig>;
 }

@@ -44,8 +44,10 @@ describe("SessionScheduler with tenant policies", async () => {
       compute_pools: [],
     });
 
-    // Create a compute record with ec2 provider
-    await app.computeService.create({
+    // Create a compute record with ec2 provider in the dispatching tenant's
+    // scope. Compute PK is (name, tenant_id); the scheduler looks up the
+    // compute under the dispatching tenant, so the row must live there.
+    await app.forTenant("strict-tenant").computeService.create({
       name: "ec2-box",
       compute: "ec2",
       isolation: "direct" as any,

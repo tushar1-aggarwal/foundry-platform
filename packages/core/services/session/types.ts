@@ -118,4 +118,17 @@ export interface SessionLifecycleDeps {
     workspace: Workspace,
     opts: { primaryRepoId: string | null },
   ) => Promise<string>;
+  /**
+   * Optional Temporal workflow starter. When provided (hosted mode with
+   * `config.features.temporalOrchestration = true`), `start()` will call this
+   * after persisting the session row to launch the Temporal sessionWorkflow.
+   * Returns the workflow ID and the first execution run ID -- both are
+   * persisted on the session row so operators can correlate session rows
+   * with workflow histories in the Temporal UI.
+   */
+  startTemporalWorkflow?: (
+    sessionId: string,
+    flowName: string,
+    tenantId: string,
+  ) => Promise<{ workflowId: string; runId: string }>;
 }

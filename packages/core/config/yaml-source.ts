@@ -181,7 +181,7 @@ export function loadYamlOverrides(arkDir: string, profile: ArkProfile): EnvOverr
 }
 
 function emptyOverrides(): EnvOverrides {
-  return { ports: {}, channels: {}, observability: {}, auth: {}, features: {}, storage: {}, secrets: {} };
+  return { ports: {}, channels: {}, observability: {}, auth: {}, features: {}, storage: {}, secrets: {}, temporal: {} };
 }
 
 /** Shallow-merge with `b` winning per section. */
@@ -208,5 +208,6 @@ export function mergeOverrides(a: EnvOverrides, b: EnvOverrides): EnvOverrides {
       s3: b.storage?.s3 ?? a.storage?.s3,
     },
     secrets: { ...(a.secrets ?? {}), ...(b.secrets ?? {}) },
+    temporal: { ...(a.temporal ?? {}), ...(b.temporal ?? {}) },
   };
 }

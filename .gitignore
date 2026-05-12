@@ -36,5 +36,16 @@ packages/desktop/binaries/
 # Ark-managed (written at dispatch, cleaned on stop)
 .mcp.json
 
+# Local scratchpads for planning / specs / live notes; never committed.
+task_*/
+
+# Local-only ark state for `make test-e2e-t6-docker` (server.pid, secrets.json,
+# session worktrees, recordings). Per-machine; never committed.
+.tmp/
+
 # Planning artifacts dropped by agents -- never tracked.
 PLAN.md
+
+# macOS Finder droppings -- never tracked.
+.DS_Store
+**/.DS_Store

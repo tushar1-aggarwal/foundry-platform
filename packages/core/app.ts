@@ -11,10 +11,8 @@
  * and is registered in packages/core/di/runtime.ts.
  */
 
-import { Database } from "bun:sqlite";
 import { mkdirSync, rmSync, existsSync, mkdtempSync } from "fs";
 import type { DatabaseAdapter } from "./database/index.js";
-import { BunSqliteAdapter } from "./database/index.js";
 import { buildSqliteDrizzle, buildPostgresDrizzle, type DrizzleClient } from "./drizzle/index.js";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -523,6 +521,12 @@ export class AppContext {
       this._drizzle = buildPostgresDrizzle(adapter.connection);
       return adapter;
     }
+    // bun:sqlite + BunSqliteAdapter are loaded lazily so the worker, which
+    // only runs in Postgres mode, can boot under Node without these imports
+    // failing at module load time. See feedback memory on the Bun ↔ Temporal
+    // worker SDK V8 isolate hang -- the worker now runs on Node.
+    const { Database } = await import("bun:sqlite");
+    const { BunSqliteAdapter } = await import("./database/index.js");
     const rawDb = new Database(this.config.dbPath);
     rawDb.run("PRAGMA journal_mode = WAL");
     rawDb.run("PRAGMA busy_timeout = 5000");

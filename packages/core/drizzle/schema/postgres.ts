@@ -64,6 +64,8 @@ export const sessions = pgTable(
     tenantId: text("tenant_id").notNull().default("default"),
     workspaceId: text("workspace_id"),
     orchestrator: text("orchestrator").notNull().default("custom"),
+    workflowId: text("workflow_id"),
+    workflowRunId: text("workflow_run_id"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
@@ -105,7 +107,7 @@ export const events = pgTable(
 export const compute = pgTable(
   "compute",
   {
-    name: text("name").primaryKey(),
+    name: text("name").notNull(),
     computeKind: text("compute_kind").notNull().default("local"),
     isolationKind: text("isolation_kind").notNull().default("direct"),
     status: text("status").notNull().default("stopped"),
@@ -117,6 +119,7 @@ export const compute = pgTable(
     updatedAt: text("updated_at").notNull(),
   },
   (t) => ({
+    pk: primaryKey({ columns: [t.name, t.tenantId] }),
     idxKind: index("idx_compute_kind").on(t.computeKind),
     idxIsolationKind: index("idx_compute_isolation_kind").on(t.isolationKind),
     idxStatus: index("idx_compute_status").on(t.status),

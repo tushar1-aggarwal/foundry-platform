@@ -16,6 +16,7 @@
 
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { spawn as nodeSpawn } from "child_process";
 
 // Derive the repo root from this file's location.
 // At e2e time this file lives at:
@@ -36,8 +37,11 @@ const executor = {
     // session.stage is the authoritative stage for this dispatch -- read from
     // opts.stage (LaunchOpts) which dispatch-core.ts sets from session.stage.
     const stage = opts.stage ?? "";
+    // ARK_CONDUCTOR_URL takes precedence so containerised executors can
+    // reach the conductor on the docker host (e.g. host.docker.internal).
+    // Falls back to localhost+port for the local-mode executor.
     const conductorPort = process.env.ARK_CONDUCTOR_PORT ?? "19102";
-    const conductorUrl = `http://localhost:${conductorPort}`;
+    const conductorUrl = process.env.ARK_CONDUCTOR_URL ?? `http://localhost:${conductorPort}`;
 
     const env = {
       ...process.env,
@@ -49,13 +53,15 @@ const executor = {
 
     const handle = `stub-${sessionId}-${Date.now()}`;
 
+    // Use Node's child_process.spawn so the executor runs unchanged under
+    // both Bun (local mode) and Node (Temporal worker container). Bun also
+    // implements the `child_process` shim so `nodeSpawn` works there.
     let proc;
     try {
-      proc = Bun.spawn(["bash", STUB_SCRIPT], {
+      proc = nodeSpawn("bash", [STUB_SCRIPT], {
         cwd: process.cwd(),
         env,
-        stdout: "pipe",
-        stderr: "pipe",
+        stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {
       return { ok: false, handle: "", message: `stub-runner spawn failed: ${err?.message ?? err}` };
@@ -63,7 +69,7 @@ const executor = {
 
     const tracked = { proc, exited: false, exitCode: null };
 
-    proc.exited.then((code) => {
+    proc.on("exit", (code) => {
       tracked.exited = true;
       tracked.exitCode = code;
       // Auto-cleanup after 5 minutes.

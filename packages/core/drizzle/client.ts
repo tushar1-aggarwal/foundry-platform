@@ -14,13 +14,19 @@
  * so there is no duplicate connection pool.
  */
 
-import type { Database as BunSqliteDatabase } from "bun:sqlite";
-import { drizzle as drizzleSqlite } from "drizzle-orm/bun-sqlite";
+// `bun:sqlite` is Bun-only; the worker runs under Node which rejects the
+// `bun:` URL scheme even transitively. `drizzle-orm/bun-sqlite` imports
+// `bun:sqlite` internally, so we cannot statically import it under Node.
+// Both the type alias and the runtime call go through `any` here; the
+// runtime adapter is only constructed in `app.ts`'s SQLite branch (Bun
+// only), so the type leakage never hits Node.
+
+type BunSqliteDatabase = any;
 import { drizzle as drizzlePostgres } from "drizzle-orm/postgres-js";
 import * as sqliteSchema from "./schema/sqlite.js";
 import * as pgSchema from "./schema/postgres.js";
 
-export type DrizzleSqliteClient = ReturnType<typeof drizzleSqlite<typeof sqliteSchema>>;
+export type DrizzleSqliteClient = any;
 export type DrizzlePostgresClient = ReturnType<typeof drizzlePostgres<typeof pgSchema>>;
 
 /**
@@ -34,6 +40,11 @@ export type DrizzleClient =
   | { dialect: "postgres"; db: DrizzlePostgresClient; schema: typeof pgSchema };
 
 export function buildSqliteDrizzle(raw: BunSqliteDatabase): DrizzleClient {
+  // require() the bun-sqlite drizzle adapter lazily so Node never resolves
+  // `bun:sqlite` at module-load time. This function is only called in
+  // local-mode SQLite (Bun), never from the worker (Node, Postgres-only).
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { drizzle: drizzleSqlite } = require("drizzle-orm/bun-sqlite");
   return {
     dialect: "sqlite",
     db: drizzleSqlite(raw, { schema: sqliteSchema }),

@@ -1,0 +1,39 @@
+# Hybrid image: oven/bun base supplies the cached Linux userland and Bun
+# runtime (which we still need to install npm deps fast via `bun install`),
+# then we layer Node+tsx on top so the worker entrypoint runs under Node.
+#
+# Why Node for the worker: the Temporal worker SDK relies on
+# `v8.promiseHooks.createHook` to detect workflow microtask-queue drain.
+# Bun's V8 build doesn't expose that API; the SDK's setImmediate fallback
+# also misbehaves under Bun on Apple Silicon (workflow tasks always TIMED_OUT
+# at 10s). Running the worker entrypoint on Node sidesteps this entirely;
+# the rest of Ark stays on Bun.
+FROM oven/bun:1.3.13-slim
+WORKDIR /app
+# Install Node + npm from Debian's repo (Node 20 LTS, which is fine -- the
+# Temporal worker SDK supports Node 18+). Avoids the Zscaler-MITM-blocked
+# nodesource pull.
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g tsx
+COPY package.json bun.lock* ./
+# bun install is fast and we already have the cached layer from previous builds.
+# The worker doesn't actually need bun:sqlite at runtime (Postgres-only mode).
+RUN bun install --frozen-lockfile --ignore-scripts
+COPY . .
+RUN chmod +x scripts/temporal-worker-entrypoint.sh
+CMD ["scripts/temporal-worker-entrypoint.sh"]
+
+# Note (T6 / DockerIsolation): a previous iteration added the `docker` CLI
+# here so this worker could spawn per-session sidecars from inside the
+# compose stack. Reverted because the necessary binary fetches (download.
+# docker.com / npm registry) get TLS-intercepted by Zscaler on this network,
+# which corrupts tarballs and hangs bun-install. The runnable T6 path
+# instead spawns the temporal worker on the HOST (where docker is already
+# installed) and points it at the e2e Temporal :7234. See Makefile target
+# `test-e2e-t6-docker` for the host-worker bootstrap.
+#
+# When Docker Desktop's daemon is configured to trust the Zscaler root CA
+# (one-time UI op), re-enable the worker-in-compose path by reintroducing
+# the docker CLI install and the /var/run/docker.sock mount in
+# .infra/docker-compose.e2e.yaml.

@@ -12,8 +12,8 @@
 #   make build         Build native macOS binary + Electron app
 #   make package       Package everything for distribution
 
-.PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-control-plane dev-control-plane-down claude-tfy pi-tfy web desktop \
-        test test-file test-e2e test-e2e-fast test-e2e-web test-e2e-web-dev test-install test-watch lint lint-fix \
+.PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-temporal-worker dev-docker dev-control-plane dev-control-plane-down dev-control-plane-bootstrap claude-tfy pi-tfy web desktop \
+        test test-file test-e2e test-e2e-fast test-e2e-web test-e2e-web-dev test-install test-watch test-e2e-control-plane test-e2e-control-plane-up test-e2e-control-plane-down test-e2e-t6-docker test-e2e-temporal-docker lint lint-fix \
         format format-check \
         docs-cli \
         build build-cli build-web build-desktop \
@@ -25,6 +25,14 @@
 
 BUN := bun
 ARK_BIN := /usr/local/bin/ark
+
+# ── T6 e2e: host paths exported to docker-compose.e2e.yaml ───────────────────
+# Universal: derived from the operator's `$(CURDIR)` (repo root the Makefile
+# was invoked from) and `$(HOME)`. No hardcoded user paths. Override on the
+# command line if your layout differs (e.g. `make ... ARK_HOST_ARKDIR=/foo`).
+export ARK_HOST_REPO_ROOT ?= $(CURDIR)
+export ARK_HOST_ARKDIR    ?= $(CURDIR)/.tmp/t6-arkdir
+export ARK_HOST_HOME      ?= $(HOME)
 # Bedrock allowlist ids are pi-agentic/<slug> (two /-segments). Use that literal string for make claude-tfy.
 TRUEFOUNDRY_ANTHROPIC_MODEL_DEFAULT := pi-agentic/global.anthropic.claude-opus-4-6-v1
 # make claude-tfy passes --dangerously-skip-permissions unless CLAUDE_SKIP_PERMISSIONS=0 (unsafe; dev/sandbox only).
@@ -37,7 +45,7 @@ CLAUDE_CONTINUE_FLAGS := $(if $(filter 0,$(CLAUDE_CONTINUE)),,--continue)
 help: ## Show available commands
 	@echo ""
 	@echo "  \033[1mDevelopment\033[0m"
-	@grep -E '^(install|dev|dev-daemon|dev-arkd|dev-web|dev-stack|dev-stack-down|dev-control-plane|dev-control-plane-down|claude-tfy|pi-tfy|web|desktop):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^(install|dev|dev-daemon|dev-arkd|dev-web|dev-docker|dev-temporal|dev-temporal-down|dev-temporal-worker|dev-control-plane|dev-control-plane-down|dev-control-plane-bootstrap|claude-tfy|pi-tfy|web|desktop):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  \033[1mTesting\033[0m"
 	@grep -E '^(test|test-file|test-e2e|test-install|test-watch|lint|format):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -83,11 +91,13 @@ dev-daemon: ## Hot-reload: server daemon (conductor :19100 + arkd :19300 + WS :1
 	@echo ""
 	$(BUN) --watch packages/cli/index.ts server daemon start
 
-dev-arkd: ## Hot-reload: arkd agent daemon (:19300)
-	@echo "\033[1mArkD agent daemon (hot-reload)\033[0m"
-	@echo "  ArkD:  http://localhost:19300"
-	@echo ""
-	$(BUN) --watch packages/cli/index.ts arkd
+dev-arkd: ## Hot-reload: arkd agent daemon (port from .env.control-plane = :19301)
+	@test -f .env.control-plane || { echo ".env.control-plane missing"; exit 1; }
+	@set -a && . ./.env.control-plane && set +a && \
+	  echo "\033[1mArkD agent daemon (hot-reload)\033[0m" && \
+	  echo "  ArkD:  http://localhost:$$ARK_ARKD_PORT" && \
+	  echo "" && \
+	  $(BUN) --watch packages/cli/index.ts arkd
 
 dev-web: ## Hot-reload: API server (:8420) + Vite frontend (:5173)
 	@echo "\033[1mArk Web (hot-reload)\033[0m"
@@ -102,7 +112,11 @@ dev-web: ## Hot-reload: API server (:8420) + Vite frontend (:5173)
 dev-temporal: ## Start local Temporal cluster (server :7233 + UI :8088) for Phase 0/1
 	@command -v docker >/dev/null 2>&1 || { echo "Docker required. Install Docker Desktop."; exit 1; }
 	@echo "\033[1mStarting Ark local Temporal cluster...\033[0m"
-	docker compose -f .infra/docker-compose.temporal.yaml -p ark-temporal up -d --wait
+	# `--wait` fails when the run-once `temporal-admin` container exits 0
+	# (which it is supposed to do after registering the namespace). Run
+	# without --wait and rely on the per-service healthchecks plus the
+	# follow-up health probe in dev-control-plane.
+	$(DOCKER_COMPOSE) -f .infra/docker-compose.temporal.yaml -p ark-temporal up -d
 	@echo ""
 	@echo "  Temporal gRPC:   localhost:7233     (ARK_TEMPORAL_ADDRESS=localhost:7233)"
 	@echo "  Temporal UI:     http://localhost:8088"
@@ -112,7 +126,7 @@ dev-temporal: ## Start local Temporal cluster (server :7233 + UI :8088) for Phas
 	@echo "  See docs/temporal-local-dev.md for next steps."
 
 dev-temporal-down: ## Stop and remove the local Temporal cluster + its data volume
-	docker compose -f .infra/docker-compose.temporal.yaml -p ark-temporal down -v
+	$(DOCKER_COMPOSE) -f .infra/docker-compose.temporal.yaml -p ark-temporal down -v
 	@echo "Ark local Temporal cluster stopped."
 
 # Pick whichever docker compose CLI is on PATH. Modern installs ship the
@@ -120,31 +134,67 @@ dev-temporal-down: ## Stop and remove the local Temporal cluster + its data volu
 # ship as `docker-compose`. Some laptop setups have only one of the two.
 DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 
-dev-stack: build-web ## Start local Ark dev stack (Postgres :15433 + Redis :6379) and build web bundle
+dev-docker: ## Sub-target: Postgres :15433 + Redis :6379 containers (factored out of dev-control-plane)
 	@command -v docker >/dev/null 2>&1 || { echo "Docker required. Install Docker Desktop."; exit 1; }
-	@echo "\033[1mStarting Ark dev stack (Postgres + Redis)...\033[0m"
+	@echo "\033[1mStarting Ark dev docker (Postgres + Redis)...\033[0m"
 	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d --wait
 	@echo ""
 	@echo "  Postgres:  postgres://ark:ark@localhost:15433/ark"
 	@echo "  Redis:     redis://localhost:6379"
+
+dev-temporal-worker: ## Sub-target: Temporal worker on host (Node + tsx; Bun lacks v8.promiseHooks)
+	@command -v node >/dev/null || { echo "Node required for Temporal worker"; exit 1; }
+	@command -v tsx >/dev/null || { echo "Installing tsx globally..."; npm install -g tsx; }
+	@test -f .env.control-plane || { echo ".env.control-plane missing"; exit 1; }
+	@set -a && . ./.env.control-plane && set +a && \
+	  echo "\033[1mArk Temporal worker (host, Node + tsx)\033[0m" && \
+	  echo "  Temporal:  $$ARK_TEMPORAL_SERVER_URL  ns=$$ARK_TEMPORAL_NAMESPACE" && \
+	  echo "  arkd:      $$ARK_ARKD_URL" && \
+	  echo "  conductor: http://localhost:$$ARK_WEB_PORT" && \
+	  echo "" && \
+	  exec tsx packages/core/temporal/worker.ts
+
+dev-control-plane: dev-docker dev-temporal ## Boot full laptop dev stack -- docker + arkd + temporal worker + ark server
+	@test -f .env.control-plane || { echo ".env.control-plane missing"; exit 1; }
 	@echo ""
-	@echo "  Next: source .env.control-plane && bun packages/cli/index.ts server start --hosted"
-
-dev-stack-down: ## Stop and remove the local Ark dev stack + its data volumes
-	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev down -v
-	@echo "Ark local dev stack stopped."
-
-dev-control-plane: dev-stack ## Boot Ark in control-plane (hosted) mode against local Postgres + Redis
-	@test -f .env.control-plane || { echo ".env.control-plane missing -- copy from repo"; exit 1; }
-	@echo "\033[1mStarting Ark control-plane (hosted)...\033[0m"
+	@echo "\033[1mArk dev stack -- full laptop\033[0m"
 	@set -a && . ./.env.control-plane && set +a && \
-	  echo "  ARK_PROFILE=$$ARK_PROFILE  WEB=:$$ARK_WEB_PORT  DB=$$DATABASE_URL" && \
-	  exec $(BUN) packages/cli/index.ts server start --hosted --port $$ARK_WEB_PORT
+	  echo "  ark server:        http://localhost:$$ARK_WEB_PORT" && \
+	  echo "  arkd:              http://localhost:$$ARK_ARKD_PORT" && \
+	  echo "  Temporal UI:       http://localhost:8088" && \
+	  echo "  Temporal gRPC:     $$ARK_TEMPORAL_SERVER_URL  ns=$$ARK_TEMPORAL_NAMESPACE" && \
+	  echo "  Postgres:          localhost:15433" && \
+	  echo "  Redis:             localhost:6379" && \
+	  echo "" && \
+	  echo "  One-time after first boot:  make dev-control-plane-bootstrap" && \
+	  echo "  Stop everything:            make dev-control-plane-down" && \
+	  echo ""
+	@set -a ; . ./.env.control-plane ; set +a ; \
+	  trap 'kill 0' EXIT ; \
+	  $(BUN) --watch packages/cli/index.ts arkd 2>&1 | sed 's/^/[arkd]    /' & \
+	  sleep 2 && tsx packages/core/temporal/worker.ts 2>&1 | sed 's/^/[worker]  /' & \
+	  sleep 1 && $(BUN) packages/cli/index.ts server start --hosted --port $$ARK_WEB_PORT 2>&1 | sed 's/^/[server]  /' & \
+	  sleep 2 && $(BUN) packages/cli/index.ts server daemon start --port $$ARK_CONDUCTOR_PORT 2>&1 | sed 's/^/[daemon]  /' & \
+	  wait
 
-dev-control-plane-down: ## Stop the running hosted server (port from .env.control-plane)
+dev-control-plane-down: ## Stop everything: containers + any host processes still listening
+	@$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml      -p ark-dev      down 2>&1 | sed 's/^/[ark-dev]    /' || true
+	@$(DOCKER_COMPOSE) -f .infra/docker-compose.temporal.yaml -p ark-temporal down 2>&1 | sed 's/^/[temporal]   /' || true
 	@set -a && . ./.env.control-plane && set +a && \
-	  pid=$$(lsof -nP -iTCP:$$ARK_WEB_PORT -sTCP:LISTEN -t 2>/dev/null | head -1); \
-	  if [ -n "$$pid" ]; then echo "Killing hosted server PID $$pid on :$$ARK_WEB_PORT"; kill $$pid; else echo "No hosted server listening on :$$ARK_WEB_PORT"; fi
+	  for port in $$ARK_WEB_PORT $$ARK_CONDUCTOR_PORT $$ARK_ARKD_PORT; do \
+	    pid=$$(lsof -nP -iTCP:$$port -sTCP:LISTEN -t 2>/dev/null | head -1); \
+	    if [ -n "$$pid" ]; then echo "killing PID $$pid on :$$port"; kill $$pid 2>/dev/null || true; fi; \
+	  done
+
+dev-control-plane-bootstrap: ## One-time: register `compute/create local` so dispatch can run
+	@test -f .env.control-plane || { echo ".env.control-plane missing"; exit 1; }
+	@set -a && . ./.env.control-plane && set +a && \
+	  echo "Registering compute=local against ark server on :$$ARK_WEB_PORT..." && \
+	  curl -sf -X POST http://localhost:$$ARK_WEB_PORT/api/rpc \
+	    -H 'Content-Type: application/json' \
+	    -d '{"jsonrpc":"2.0","id":"1","method":"compute/create","params":{"name":"local","compute":"local","isolation":"direct"}}' \
+	  | (jq . 2>/dev/null || cat) ; \
+	  echo
 
 # Bootstrap the FIRST admin API key on a deployment with auth required.
 # `admin/apikey/create` is gated by requireAdmin -- without an existing
@@ -244,24 +294,275 @@ test-file: ## Run a single test: make test-file F=packages/core/__tests__/foo.te
 
 test-e2e: test-web-e2e ## Run all end-to-end tests (web Playwright)
 
-# Control-plane e2e: real `ark server start --hosted` against an isolated
-# Docker compose stack (Postgres :15434 + Redis :6380). Distinct from the
-# dev stack so this can run alongside `make dev-stack`.
+# Control-plane e2e -- the test-side counterpart of `dev-control-plane`.
 #
-# CI must have docker + (for Phase 2) tmux on PATH. The test boots the
-# stack, spawns the real server binary, and exercises the dispatch chain
-# via /api/rpc -- never imports AppContext directly.
-test-e2e-control-plane: ## Run control-plane e2e against isolated Postgres+Redis
-	@command -v docker >/dev/null 2>&1 || { echo "Docker required for control-plane e2e."; exit 1; }
+# `dev-control-plane` brings up the full hosted-mode stack (Postgres + Redis + Temporal
+# + worker + arkd + ark server) and runs the dev processes against it; the
+# stack stays up across `Ctrl+C` so the developer can iterate.
+# `test-e2e-control-plane` mirrors that shape for the test side: bring up an
+# isolated stack (shifted +1 from dev ports so both can coexist), run every
+# docker-stack e2e test file in `e2e/`, and leave the stack up for re-runs.
+# Tear down explicitly via `test-e2e-control-plane-down`.
+#
+# Iteration loop:
+#   make test-e2e-control-plane        # boots stack (idempotent) + runs tests
+#   make test-e2e-control-plane        # re-uses stack, much faster
+#   make test-e2e-control-plane-down   # stop + drop volumes when done
+#
+# Test files run sequentially against the same stack via ARK_E2E_STACK_RUNNING=1
+# so their internal compose lifecycle is a no-op.
+#
+# CI must have docker + tmux on PATH. The test spawns the real `ark server
+# start --hosted` binary and exercises the dispatch chain via /api/rpc --
+# never imports AppContext directly.
+test-e2e-control-plane: test-e2e-control-plane-up ## Run all docker-stack e2e tests (boots stack, leaves it up)
 	@command -v tmux >/dev/null 2>&1 || { echo "tmux required for control-plane e2e (brew install tmux / apt-get install tmux)."; exit 1; }
-	@echo "\033[1mRunning control-plane e2e (Postgres :15434 + Redis :6380)...\033[0m"
-	$(BUN) test e2e/control-plane.test.ts
+	@# Migration runner uses session-scoped `pg_advisory_lock` which is
+	@# released on connection close. The hosted ark server has no SIGTERM
+	@# handler that drains the postgres pool, so a SIGKILL'd test run leaves
+	@# orphan idle connections holding the migration lock. Subsequent boots
+	@# block forever on `pg_advisory_lock(hashtext('ark_migrations'))`. Until
+	@# the server learns graceful shutdown, terminate every non-self backend
+	@# in the ark DB before each test run. Safe because the test owns the
+	@# whole stack lifecycle while this target is executing.
+	@$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e exec -T postgres \
+	  psql -U ark -d ark -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='ark' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true
+	@echo "\033[1mRunning bespoke control-plane e2e...\033[0m"
+	@ARK_E2E_STACK_RUNNING=1 $(BUN) test e2e/control-plane.test.ts
+	@echo "\033[1mRunning Temporal T1-T5 e2e...\033[0m"
+	@ARK_E2E_STACK_RUNNING=1 $(BUN) test e2e/temporal-control-plane.test.ts
 
-test-e2e-control-plane-up: ## Bring up the e2e Docker stack only (debug aid)
-	$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e up -d --wait
+test-e2e-control-plane-up: ## Bring up the e2e Docker stack (Postgres :15434 + Redis :6380 + Temporal :7234)
+	@command -v docker >/dev/null 2>&1 || { echo "Docker required for control-plane e2e."; exit 1; }
+	@echo "\033[1mBringing up e2e Docker stack...\033[0m"
+	@mkdir -p "$(ARK_HOST_ARKDIR)"
+	@# Build the worker image only when it doesn't exist locally. Once cached,
+	@# subsequent runs use the cached image -- crucial on networks that MITM
+	@# the npm/docker registries (Zscaler etc) where a forced rebuild would
+	@# hang on `bun install`. To force a rebuild, run:
+	@#   docker compose -f .infra/docker-compose.e2e.yaml -p ark-e2e build temporal-worker
+	@if ! docker image inspect ark-temporal-worker:e2e >/dev/null 2>&1; then \
+	  echo "  building temporal-worker image (first run)..."; \
+	  $(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e build temporal-worker; \
+	fi
+	@$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e up -d --wait
 
 test-e2e-control-plane-down: ## Tear down the e2e Docker stack and volumes
 	$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e down -v
+
+# ── T6 end-to-end (real claude in docker sidecar) ─────────────────────────────
+#
+# Brings up the e2e Docker stack + a host-side temporal worker, runs the
+# laptop-docs-real-llm test against `compute=local + isolation=docker`.
+# claude runs inside a per-session sidecar container (`ark-rt-local`)
+# spawned by DockerIsolation; the sidecar receives the host's Claude OAuth
+# token via a Keychain mirror (T6 pre-flight writes it to
+# ~/.claude/.credentials.json on every run).
+#
+# Worker location: host process, not the compose `temporal-worker` service.
+# Reason: when Zscaler intercepts TLS, the compose worker image can't be
+# rebuilt with the `docker` CLI -- binary fetches from download.docker.com
+# get MITM-mangled. Host already has docker working, so the host-worker
+# path is unblocked. Once Docker Desktop's daemon trusts the Zscaler CA,
+# revert this to worker-in-compose.
+#
+# Pre-reqs the operator owns:
+#   - macOS Keychain: signed in to Claude Code (`claude` once, complete OAuth)
+#   - Bitbucket SSH auth via ~/.ssh (mounted into sidecar) OR BITBUCKET_TOKEN
+#     env var (passed through to a tenant secret; skips ~/.ssh mount)
+#
+# Stack layout:
+#   postgres:15434  redis:6380  temporal:7234  temporal-worker  (compose)
+#   ark-rt-local                                                (per-session)
+#   ark server :8422   (host process, started by this target)
+#   tsx temporal/worker.ts (host process, points at e2e Temporal :7234)
+#
+# Cleanup: `make test-e2e-control-plane-down` tears the docker stack down.
+test-e2e-t6-docker: test-e2e-control-plane-up ## Run T6 (real claude in docker sidecar) end-to-end
+	@command -v tmux >/dev/null 2>&1 || { echo "tmux required (host side, for ark server)."; exit 1; }
+	@# Migration lock cleanup (same trick the bespoke target uses) -- prior
+	@# crashed runs can leave idle backends holding the advisory lock.
+	@$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e exec -T postgres \
+	  psql -U ark -d ark -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='ark' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true
+	@# Two workers on the same task queue race for dispatches; stop the
+	@# compose worker so the host worker we spawn next owns every task.
+	@docker stop ark-e2e-temporal-worker-1 >/dev/null 2>&1 || true
+	@# Clean up any orphaned sidecar from a prior crashed run. New session
+	@# will create a fresh one.
+	@docker rm -f ark-rt-local >/dev/null 2>&1 || true
+	@# Clean stale worktrees -- `cloneRemoteRepoIfNeeded` refuses to clone
+	@# into a non-empty directory. Each test run gets a fresh session id but
+	@# leftover dirs from interrupted prior runs collide with `mkdir + git
+	@# clone` if ARK_HOST_ARKDIR is reused.
+	@rm -rf "$(ARK_HOST_ARKDIR)/worktrees"
+	@echo "\033[1mStarting host ark server :8422 against e2e stack...\033[0m"
+	@lsof -ti :8422 -i :19302 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+	@sleep 1
+	@set -a; . ./.env.e2e; set +a; \
+	  ARK_DIR=$(ARK_HOST_ARKDIR) ARK_TEMPORAL_ORCHESTRATION=true ARK_CONDUCTOR_HOSTNAME=0.0.0.0 \
+	    $(BUN) packages/cli/index.ts server start --hosted --port 8422 > $(ARK_HOST_ARKDIR)/server.log 2>&1 & \
+	  echo $$! > $(ARK_HOST_ARKDIR)/server.pid
+	@# Wait for /api/health (max 30s).
+	@for i in $$(seq 1 60); do \
+	  if curl -sf http://localhost:8422/api/health >/dev/null 2>&1; then echo "  ark server up"; break; fi; \
+	  sleep 0.5; \
+	done
+	@# Start host-side temporal worker pointing at e2e Temporal :7234.
+	@# This is the dispatcher that spawns DockerIsolation sidecars via the
+	@# host's docker daemon. Killed alongside the ark server in the trap.
+	@echo "\033[1mStarting host temporal worker against e2e :7234...\033[0m"
+	@ARK_DIR=$(ARK_HOST_ARKDIR) \
+	  DATABASE_URL="postgres://ark:ark@localhost:15434/ark?sslmode=disable" \
+	  ARK_TEMPORAL_SERVER_URL=localhost:7234 ARK_TEMPORAL_NAMESPACE=default \
+	  ARK_PROFILE=control-plane ARK_BLOB_BACKEND=local \
+	  ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE=1 ARK_SECRETS_BACKEND=file \
+	  ARK_AUTH_REQUIRE_TOKEN=false ARK_DEFAULT_TENANT=default \
+	  ARK_TEMPORAL_WORKER=true ARK_TEMPORAL_ORCHESTRATION=true \
+	  ARK_ENABLE_TEST_ACTIONS=1 \
+	  ARK_LOG_LEVEL=info ARK_CONDUCTOR_URL=http://localhost:8422 \
+	  ARK_ARKD_PORT=19302 ARK_WEB_PORT=8422 ARK_CONDUCTOR_PORT=19102 \
+	  tsx packages/core/temporal/worker.ts > $(ARK_HOST_ARKDIR)/worker.log 2>&1 & \
+	  echo $$! > $(ARK_HOST_ARKDIR)/worker.pid
+	@# Wait for worker to register.
+	@for i in $$(seq 1 60); do \
+	  if grep -q "Worker state changed" "$(ARK_HOST_ARKDIR)/worker.log" 2>/dev/null; then echo "  host worker up"; break; fi; \
+	  sleep 0.5; \
+	done
+	@# Seed compute=local + isolation=docker (idempotent: create or update).
+	@curl -sf -X POST http://localhost:8422/api/rpc -H 'Content-Type: application/json' \
+	  -d '{"jsonrpc":"2.0","id":"1","method":"compute/create","params":{"name":"local","compute":"local","isolation":"docker"}}' >/dev/null 2>&1 || true
+	@$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e exec -T postgres \
+	  psql -U ark -d ark -c "UPDATE compute SET isolation_kind='docker', updated_at=NOW() WHERE name='local' AND tenant_id='default';" >/dev/null 2>&1
+	@# Seed empty ANTHROPIC_* tenant secrets. StageSecretResolver requires
+	@# these names to exist (even when empty) -- without them dispatch fails
+	@# with "Missing secrets for tenant 'default'". Empty values let claude
+	@# fall through to the Keychain-mirrored OAuth in ~/.claude/credentials.json
+	@# inside the sidecar. Operators with a real key in env can override.
+	@for n in ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS; do \
+	  v=$$(eval echo "\$$$$n"); \
+	  curl -sf -X POST http://localhost:8422/api/rpc -H 'Content-Type: application/json' \
+	    -d "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"secret/set\",\"params\":{\"name\":\"$$n\",\"value\":\"$$v\",\"type\":\"env-var\"}}" >/dev/null 2>&1; \
+	done
+	@echo "  ANTHROPIC_* secrets seeded (empty unless overridden in env)"
+	@# Seed BITBUCKET_TOKEN from operator env if provided. When set, the
+	@# sidecar drops the ~/.ssh bind-mount and pushes via HTTPS-token; when
+	@# unset, T6 falls back to the existing SSH key mount (still works,
+	@# just less prod-aligned). Token format: Bitbucket Cloud HTTP access
+	@# token or app password with `repository:write` scope.
+	@if [ -n "$$BITBUCKET_TOKEN" ]; then \
+	  curl -sf -X POST http://localhost:8422/api/rpc -H 'Content-Type: application/json' \
+	    -d "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"secret/set\",\"params\":{\"name\":\"BITBUCKET_TOKEN\",\"value\":\"$$BITBUCKET_TOKEN\",\"type\":\"env-var\"}}" >/dev/null 2>&1 \
+	    && echo "  BITBUCKET_TOKEN seeded -> sidecar will skip ~/.ssh mount"; \
+	else \
+	  echo "  BITBUCKET_TOKEN not in env -- sidecar will use host ~/.ssh mount"; \
+	fi
+	@# Run T6. Trap kills both host processes (ark server + temporal worker)
+	@# even if bun test exits non-zero. Sidecar container left for inspection;
+	@# `make test-e2e-control-plane-down` removes it via stack teardown.
+	@trap 'kill -TERM $$(cat $(ARK_HOST_ARKDIR)/server.pid 2>/dev/null) $$(cat $(ARK_HOST_ARKDIR)/worker.pid 2>/dev/null) 2>/dev/null || true' EXIT INT TERM; \
+	  ARK_REAL_LLM_E2E=1 T6_ISOLATION=docker \
+	  ARK_BITBUCKET_TOKEN_AVAILABLE=$$([ -n "$$BITBUCKET_TOKEN" ] && echo 1 || echo 0) \
+	  T6_WEB_URL=http://localhost:8422 T6_ARKD_URL=http://localhost:19302 T6_TEMPORAL_PORT=7234 \
+	  T6_REPO_URL=$${T6_REPO_URL:-git@bitbucket.org:paytmteam/foundry-test-repo.git} \
+	  $(BUN) test e2e/laptop-docs-real-llm.test.ts
+
+# ── T1-T5 docker isolation variant (Phase A1 of t0-t5 migration) ──────────────
+#
+# Mirrors `test-e2e-t6-docker` for the stub-runner T1-T5 suite: same docker
+# stack, same host ark server + host temporal worker, same compute=local +
+# isolation=docker row, but the runtime is `stub-runner` (no LLM) and the
+# plugin is `stub-runner-executor-sidecar.mjs` which spawns stub-agent.sh
+# INSIDE the sidecar via arkd /process/spawn.
+#
+# Why host worker (not compose temporal-worker): the worker container would
+# need docker.sock + the docker CLI to dispatch sibling sidecars. Zscaler
+# blocks the docker.io binary fetch in our `bun install` layer, so the image
+# can't be rebuilt with docker CLI installed. Host already has docker working
+# -- same workaround `test-e2e-t6-docker` uses.
+#
+# The compose temporal-worker IS stopped before tests run so two workers
+# don't race for the same task-queue dispatches.
+test-e2e-temporal-docker: test-e2e-control-plane-up ## Run T1-T5 against compute=local + isolation=docker (stub-runner-sidecar)
+	@command -v tmux >/dev/null 2>&1 || { echo "tmux required (host side, for ark server)."; exit 1; }
+	@# Migration lock cleanup (same trick the other e2e targets use).
+	@$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e exec -T postgres \
+	  psql -U ark -d ark -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='ark' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true
+	@# Kill any stale host workers / ark servers from prior runs. The trap at
+	@# the end of this target only catches signals delivered to the make
+	@# subshell, and a Ctrl-C / non-zero test exit can leave the background
+	@# tsx + bun processes orphaned. Old workers on the same task queue would
+	@# race the new one for dispatches -- old code, new code, both visible to
+	@# Temporal, dispatches come back with old behaviour intermittently.
+	@#
+	@# Skipped on CI: GitHub-hosted Linux pkill matches its own parent bash
+	@# subshell's argv (which contains the pattern string after `pkill -f`),
+	@# SIGKILLs the shell, and exits the make target with "Killed". macOS
+	@# pkill happens to not self-match, which is why laptop runs work. CI
+	@# runners are fresh per job and never have stale processes anyway, so
+	@# the cleanup has no work to do there.
+	@if [ -z "$$CI" ]; then \
+	  pkill -9 -f "packages/core/temporal/worker.ts" 2>/dev/null || true; \
+	  pkill -9 -f "packages/cli/index.ts server start" 2>/dev/null || true; \
+	  sleep 0.5; \
+	fi
+	@# Stop the compose worker so the host worker we spawn next owns every
+	@# task on the queue. Two workers on the same queue race dispatches.
+	@docker stop ark-e2e-temporal-worker-1 >/dev/null 2>&1 || true
+	@# Clean any orphaned sidecar from a prior crashed run. T1-T5 share one
+	@# sidecar (`ark-rt-local`) per host -- idempotent prepare() reuses it
+	@# across sessions, but a stale container from a previous SIGKILL'd run
+	@# still needs to be removed so the new run can re-prepare cleanly.
+	@docker rm -f ark-rt-local >/dev/null 2>&1 || true
+	@rm -rf "$(ARK_HOST_ARKDIR)/worktrees"
+	@mkdir -p "$(ARK_HOST_ARKDIR)/plugins/executors" "$(ARK_HOST_ARKDIR)/flows"
+	@# Install the stub-runner plugin into the host worker's ARK_DIR so
+	@# dispatchStageActivity can resolve `runtime: stub-runner`. The compose
+	@# worker does the equivalent in scripts/temporal-worker-entrypoint.sh;
+	@# the host worker has no entrypoint wrapper so we mirror that step here.
+	@cp e2e/fixtures/stub-runner-executor-sidecar.mjs "$(ARK_HOST_ARKDIR)/plugins/executors/stub-runner.mjs"
+	@# Install e2e flow fixtures so the worker's FlowStore can resolve them
+	@# during dispatch (same logic the compose worker entrypoint follows).
+	@cp e2e/fixtures/flows/*.yaml "$(ARK_HOST_ARKDIR)/flows/" 2>/dev/null || true
+	@echo "\033[1mStarting host ark server :8422 against e2e stack...\033[0m"
+	@lsof -ti :8422 -i :19302 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+	@sleep 1
+	@set -a; . ./.env.e2e; set +a; \
+	  ARK_DIR=$(ARK_HOST_ARKDIR) ARK_TEMPORAL_ORCHESTRATION=true ARK_CONDUCTOR_HOSTNAME=0.0.0.0 \
+	    $(BUN) packages/cli/index.ts server start --hosted --port 8422 > $(ARK_HOST_ARKDIR)/server.log 2>&1 & \
+	  echo $$! > $(ARK_HOST_ARKDIR)/server.pid
+	@for i in $$(seq 1 60); do \
+	  if curl -sf http://localhost:8422/api/health >/dev/null 2>&1; then echo "  ark server up"; break; fi; \
+	  sleep 0.5; \
+	done
+	@echo "\033[1mStarting host temporal worker against e2e :7234...\033[0m"
+	@ARK_DIR=$(ARK_HOST_ARKDIR) \
+	  DATABASE_URL="postgres://ark:ark@localhost:15434/ark?sslmode=disable" \
+	  ARK_TEMPORAL_SERVER_URL=localhost:7234 ARK_TEMPORAL_NAMESPACE=default \
+	  ARK_PROFILE=control-plane ARK_BLOB_BACKEND=local \
+	  ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE=1 ARK_SECRETS_BACKEND=file \
+	  ARK_AUTH_REQUIRE_TOKEN=false ARK_DEFAULT_TENANT=default \
+	  ARK_TEMPORAL_WORKER=true ARK_TEMPORAL_ORCHESTRATION=true \
+	  ARK_ENABLE_TEST_ACTIONS=1 \
+	  ARK_LOG_LEVEL=info ARK_CONDUCTOR_URL=http://localhost:8422 \
+	  ARK_ARKD_PORT=19302 ARK_WEB_PORT=8422 ARK_CONDUCTOR_PORT=19102 \
+	  tsx packages/core/temporal/worker.ts > $(ARK_HOST_ARKDIR)/worker.log 2>&1 & \
+	  echo $$! > $(ARK_HOST_ARKDIR)/worker.pid
+	@for i in $$(seq 1 60); do \
+	  if grep -q "Worker state changed" "$(ARK_HOST_ARKDIR)/worker.log" 2>/dev/null; then echo "  host worker up"; break; fi; \
+	  sleep 0.5; \
+	done
+	@# Force the compute row to isolation=docker + the cached image / skip-
+	@# bootstrap config. The test ALSO calls compute/create (idempotent), but
+	@# create on an existing row no-ops -- so a stale row from a previous
+	@# direct-mode run would otherwise keep its old isolation_kind / config.
+	@# Pinning the image to oven/bun:canary (cached locally) sidesteps the
+	@# Zscaler MITM blocking ubuntu:22.04 pulls; bootstrap.skip=true skips
+	@# the apt-get/bun/curl install pass since the image already has them.
+	@$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e exec -T postgres \
+	  psql -U ark -d ark -c "UPDATE compute SET isolation_kind='docker', config='{\"image\":\"oven/bun:canary\",\"bootstrap\":{\"skip\":true}}'::jsonb, updated_at=NOW() WHERE name='local' AND tenant_id='default';" >/dev/null 2>&1 || true
+	@trap 'kill -TERM $$(cat $(ARK_HOST_ARKDIR)/server.pid 2>/dev/null) $$(cat $(ARK_HOST_ARKDIR)/worker.pid 2>/dev/null) 2>/dev/null || true' EXIT INT TERM; \
+	  ARK_E2E_STACK_RUNNING=1 T1_T5_ISOLATION=docker \
+	  $(BUN) test e2e/temporal-control-plane.test.ts
 
 test-web-e2e: build-web ## Run web end-to-end tests (Playwright against the web dashboard)
 	@# `bunx --bun playwright test` runs Playwright under Bun, which is

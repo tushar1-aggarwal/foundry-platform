@@ -18,10 +18,13 @@
  *        - delegation when both are set, with `getArkdUrl(handle)`
  *          threaded through to the helper
  *
- * LocalCompute does not implement prepareWorkspace (the conductor and
- * compute share a filesystem; the worktree is already on the host).
- * That branch is asserted via the same shape the resolve-workdir tests
- * use.
+ * LocalCompute also implements prepareWorkspace now (commit 7833a533).
+ * Under `isolation=docker` the conductor and the sidecar do NOT share a
+ * filesystem -- the host's worktree path is `git clone`d INSIDE the
+ * sidecar via the shared `cloneWorkspaceViaArkd` helper, identical to
+ * EC2's path. Local+direct calls remain a no-op via the early return on
+ * missing `source`/`remoteWorkdir` (the caller passes nothing because
+ * the host filesystem already holds the worktree).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -203,16 +206,43 @@ describe("EC2Compute.prepareWorkspace", () => {
   });
 });
 
-// ── LocalCompute (no impl) ──────────────────────────────────────────────────
+// ── LocalCompute ────────────────────────────────────────────────────────────
 
 describe("Compute.prepareWorkspace -- LocalCompute", () => {
-  test("LocalCompute does not implement prepareWorkspace (caller skips remote setup)", () => {
+  test("no-ops when source / remoteWorkdir are missing (local+direct path)", async () => {
     const c = new LocalCompute(STUB_APP);
-    // The conductor and the local compute share a filesystem, so the
-    // worktree is already on the host -- no remote setup needed. The
-    // dispatcher's null/undefined fallback covers both shapes; we
-    // assert "undefined" here because LocalCompute deliberately omits
-    // the method (matching the resolveWorkdir style).
-    expect(c.prepareWorkspace).toBeUndefined();
+    let called = false;
+    c.setCloneHelperForTesting((async () => {
+      called = true;
+    }) as unknown as typeof cloneWorkspaceViaArkd);
+
+    // Local+direct caller passes nothing: the host already holds the
+    // worktree. Early return MUST prevent the clone helper from firing.
+    await c.prepareWorkspace({ kind: "local", name: "local", meta: {} } as any, {
+      source: null as any,
+      remoteWorkdir: null as any,
+    });
+
+    expect(called).toBe(false);
+  });
+
+  test("delegates to cloneWorkspaceViaArkd with the host arkd url", async () => {
+    // LocalCompute.getArkdUrl returns `http://localhost:${app.config.ports.arkd}`
+    // so we hand it a minimal stub app with that port wired up.
+    const c = new LocalCompute({ config: { ports: { arkd: 19302 } } } as any);
+    const captured: RemoteCloneOpts[] = [];
+    c.setCloneHelperForTesting((async (opts: RemoteCloneOpts) => {
+      captured.push(opts);
+    }) as unknown as typeof cloneWorkspaceViaArkd);
+
+    await c.prepareWorkspace({ kind: "local", name: "local", meta: {} } as any, {
+      source: "git@example.com:org/repo.git",
+      remoteWorkdir: "/work/s-x/repo",
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].source).toBe("git@example.com:org/repo.git");
+    expect(captured[0].remoteWorkdir).toBe("/work/s-x/repo");
+    expect(captured[0].arkdUrl).toBe("http://localhost:19302");
   });
 });

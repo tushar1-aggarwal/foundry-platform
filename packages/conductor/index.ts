@@ -233,9 +233,18 @@ export class ArkServer {
   }
 
   /** Start WebSocket server on a port. Returns stop function. */
-  startWebSocket(port: number, opts?: { app?: import("../core/app.js").AppContext }): { stop(): void } {
+  startWebSocket(
+    port: number,
+    opts?: { app?: import("../core/app.js").AppContext; hostname?: string },
+  ): { stop(): void } {
     const self = this;
     const app = opts?.app ?? null;
+    // Bind address: defaults to loopback for local mode (the safer default
+    // when a developer's machine is on a hostile network). e2e/control-plane
+    // setups that need a docker worker to reach the conductor over
+    // host.docker.internal pass `0.0.0.0` here, or set
+    // ARK_CONDUCTOR_HOSTNAME=0.0.0.0 in the server env.
+    const hostname = opts?.hostname ?? process.env.ARK_CONDUCTOR_HOSTNAME ?? "127.0.0.1";
     type TerminalData = {
       kind: "terminal";
       sessionId: string;
@@ -275,7 +284,7 @@ export class ArkServer {
     >();
     const server = Bun.serve<WsData, never>({
       port,
-      hostname: "127.0.0.1",
+      hostname,
       async fetch(req, server) {
         const url = new URL(req.url, `http://localhost`);
         const authorizationHeader = req.headers.get("authorization");

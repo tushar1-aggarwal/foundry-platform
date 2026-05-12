@@ -58,9 +58,28 @@ const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000] as const;
 
 function defaultWsBase(): string {
   if (typeof window === "undefined") return "";
+  // Server-injected meta tag wins -- the hosted web server stamps the
+  // configured conductor port into <meta name="ark-conductor-ws-base">
+  // when serving index.html so the SPA doesn't have to know which port
+  // the daemon runs on. See packages/core/hosted/web.ts.
+  //
+  // The server emits a `__HOST__` placeholder (not the literal hostname)
+  // so the same HTML response works whether the user hits the UI via
+  // localhost, 127.0.0.1, a LAN IP, or a public DNS name -- we resolve
+  // it here against the actual window hostname at runtime.
+  //
+  // The meta tag also chooses `ws://` vs `wss://`: we upgrade to `wss`
+  // whenever the page itself is served over https so mixed-content
+  // policies don't kill the upgrade silently.
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="ark-conductor-ws-base"]');
+  if (meta?.content) {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const resolved = meta.content.replace(/^wss?:/i, proto).replace(/__HOST__/g, window.location.hostname);
+    return resolved;
+  }
+  // Fallback for legacy / dev-vite / no-meta-tag deployments. 19400 was
+  // the hardcoded port before the meta-tag injection landed.
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  // Server daemon runs on port 19400 in local + control-plane profiles. In
-  // dev with vite-proxied APIs, callers can override with `wsBaseUrl`.
   return `${proto}//${window.location.hostname}:19400`;
 }
 

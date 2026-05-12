@@ -53,6 +53,10 @@ export interface SpawnOptions {
   envFile: string;
   /** ms to wait for /api/health before giving up. */
   startupTimeoutMs?: number;
+  /** Extra env vars merged on top of process.env + envFile. Useful for
+   *  Temporal-specific overrides (ARK_TEMPORAL_ORCHESTRATION, etc.) that
+   *  differ between test suites without editing .env.e2e. */
+  extraEnv?: Record<string, string>;
 }
 
 function parseEnvFile(path: string): Record<string, string> {
@@ -72,7 +76,12 @@ function parseEnvFile(path: string): Record<string, string> {
 
 export async function spawnServer(opts: SpawnOptions): Promise<ServerHandle> {
   const fileEnv = parseEnvFile(opts.envFile);
-  const env: Record<string, string> = { ...process.env, ...fileEnv, ARK_DIR: opts.arkDir } as Record<string, string>;
+  const env: Record<string, string> = {
+    ...process.env,
+    ...fileEnv,
+    ARK_DIR: opts.arkDir,
+    ...(opts.extraEnv ?? {}),
+  } as Record<string, string>;
   const repoRoot = resolve(import.meta.dir, "../..");
 
   // Free any ports left bound by a prior test run that crashed before

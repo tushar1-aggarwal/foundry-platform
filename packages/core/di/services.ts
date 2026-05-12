@@ -147,6 +147,26 @@ export function registerServices(
           resolveComputeTarget: (session) => c.app.resolveComputeTarget(session),
           advance: (id, force) => c.app.stageAdvance.advance(id, force),
           provisionWorkspaceWorkdir: (session, ws, opts) => provisionWorkspaceWorkdir(c.app, session, ws, opts),
+          // Wire Temporal workflow starter when hosted mode + flag enabled.
+          // Uses a lazy async import so the @temporalio packages are only
+          // loaded when actually needed (avoids startup cost in local mode).
+          startTemporalWorkflow:
+            c.config.features.temporalOrchestration && (c.config.database?.url?.startsWith("postgres") ?? false)
+              ? async (sessionId: string, flowName: string, tenantId: string) => {
+                  const { getTemporalClient } = await import("../temporal/client.js");
+                  const client = await getTemporalClient(c.config.temporal);
+                  const wfId = `session-${sessionId}`;
+                  const handle = await client.workflow.start("sessionWorkflow", {
+                    taskQueue: `ark.${tenantId}.stages`,
+                    workflowId: wfId,
+                    // Hard wall-clock cap so a stuck workflow eventually closes
+                    // itself. See SessionService.start() for rationale.
+                    workflowExecutionTimeout: (c.config.temporal?.workflowExecutionTimeout ?? "24h") as any,
+                    args: [{ sessionId, tenantId, flowName }],
+                  });
+                  return { workflowId: wfId, runId: handle.firstExecutionRunId };
+                }
+              : undefined,
         }),
       { lifetime },
     ),

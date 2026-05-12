@@ -176,14 +176,29 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
       }
     }
 
-    const created = await app.computeService.create({
-      name,
-      compute: effectiveCompute,
-      isolation: effectiveIsolation,
-      config,
-      is_template,
-      cloned_from,
-    });
+    // Idempotent on (name, tenant_id) collision. The repo throws a raw
+    // postgres unique-constraint error (no "already exists" string in the
+    // message); operators retrying `compute create` -- including the e2e
+    // suite seeding `local` between runs -- need a clear error they can
+    // catch. Convert to an explicit "already exists" so existing callers'
+    // catch-on-/exist/ guards work.
+    let created;
+    try {
+      created = await app.computeService.create({
+        name,
+        compute: effectiveCompute,
+        isolation: effectiveIsolation,
+        config,
+        is_template,
+        cloned_from,
+      });
+    } catch (err: any) {
+      const msg = String(err?.message ?? err);
+      if (/duplicate key|unique.*constraint|primary key|UNIQUE constraint/i.test(msg)) {
+        throw new RpcError(`Compute "${name}" already exists for this tenant`, ErrorCodes.INVALID_PARAMS);
+      }
+      throw err;
+    }
     // RPC wire format still carries `provider` for back-compat clients;
     // derive the legacy label from the (compute_kind, isolation_kind) axes.
     return { compute: { ...created, provider: legacyProviderLabel(created) } };

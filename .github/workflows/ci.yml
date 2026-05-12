@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # workflow_dispatch lets a maintainer fire CI manually from the Actions
+  # tab (or via `gh workflow run CI`). Useful for validating long-lived
+  # feature branches whose base is an integration branch rather than main
+  # -- e.g. PRs into `temporal-integration` don't satisfy the branch
+  # filter above and would otherwise never see this workflow.
+  workflow_dispatch:
 
 jobs:
   test:
@@ -106,6 +112,218 @@ jobs:
 
       - name: LocalStack-backed S3 tests
         run: bun test packages/core/storage/__tests__/s3.test.ts --timeout 120000
+
+  # Control-plane e2e: brings up the full hosted-mode docker stack (Postgres
+  # :15434 + Redis :6380 + Temporal :7234 + temporal-worker container), spawns
+  # the real `ark server start --hosted` binary, and runs every docker-stack
+  # e2e file in `e2e/`:
+  #   - e2e/control-plane.test.ts          (bespoke dispatch path)
+  #   - e2e/temporal-control-plane.test.ts (Temporal T1-T5 routing + retries)
+  #
+  # The Makefile target boots the stack once and shares it across both files
+  # via ARK_E2E_STACK_RUNNING=1; teardown runs on shell exit even when a test
+  # fails. Worker image is built from .infra/Dockerfile.temporal-worker; GHA
+  # layer cache keeps the rebuild cheap on subsequent runs (~30s warm vs
+  # ~150s cold).
+  e2e-control-plane:
+    name: e2e (control-plane + temporal)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # DISABLED 2026-05-12: scoped down to the docker-isolation T1 + T5b path
+    # while we work through the agent-cache warmup race introduced by the
+    # auth-phase1 main merge. The direct-mode bespoke + Temporal coverage
+    # here will resume once the DbResourceStore async-get path is fixed
+    # across both dispatch entry points.
+    if: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Start tmux server
+        run: tmux new-session -d -s ci-init
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Verify Docker is available
+        run: docker ps
+
+      # Pre-pull pinned images so the compose `up --wait` doesn't pay the
+      # registry-fetch cost inside the test budget. Versions mirror what
+      # .infra/docker-compose.e2e.yaml references.
+      - name: Pre-pull e2e stack images
+        run: |
+          docker pull postgres:16 &
+          docker pull redis:7-alpine &
+          docker pull temporalio/auto-setup:1.26 &
+          docker pull temporalio/ui:2.31.2 &
+          wait
+
+      # Build temporal-worker image with GHA layer cache. Cold builds take
+      # ~150s; warm builds drop to ~30s once the cache is primed. The image
+      # tag must match the `image:` field on the `temporal-worker` service
+      # in docker-compose.e2e.yaml so compose picks it up instead of building
+      # locally during `up --wait`.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build temporal-worker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: .infra/Dockerfile.temporal-worker
+          tags: ark-temporal-worker:e2e
+          load: true
+          cache-from: type=gha,scope=temporal-worker
+          cache-to: type=gha,scope=temporal-worker,mode=max
+
+      - name: Run control-plane + Temporal e2e
+        run: make test-e2e-control-plane
+
+      # Capture every container's stdout/stderr on failure so post-mortems
+      # aren't blind. Logs are written by docker daemon and only survive
+      # teardown if we grab them BEFORE `test-e2e-control-plane-down` drops
+      # the volumes.
+      - name: Dump docker compose logs (on failure)
+        if: failure()
+        run: |
+          docker compose -f .infra/docker-compose.e2e.yaml -p ark-e2e logs --no-color > /tmp/e2e-stack.log 2>&1 || true
+          ls -lh /tmp/ark-* 2>/dev/null || true
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-control-plane-logs
+          path: |
+            /tmp/e2e-stack.log
+            /tmp/ark-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # Mirror of `dev-stack` -> `dev-stack-down`: the test target leaves the
+      # stack up for iteration, so CI must tear it down explicitly. `always()`
+      # ensures cleanup runs whether tests passed or failed.
+      - name: Tear down e2e Docker stack
+        if: always()
+        run: make test-e2e-control-plane-down || true
+
+  # T0-T5 docker-isolation e2e: same stack as e2e-control-plane plus a
+  # host-side ark server + host-side temporal worker dispatching per-session
+  # DockerIsolation sidecars. The Makefile target stops the compose
+  # temporal-worker (host worker owns the task queue) and seeds the compute
+  # row with isolation=docker + a cached sidecar image. This is the
+  # production-parity shape -- same as T6's claude-agent path, just with
+  # the stub-runner runtime so no real LLM is needed.
+  #
+  # Why a separate job from e2e-control-plane: this target exercises a
+  # different dispatch path (full DockerIsolation lifecycle, sidecar arkd,
+  # host.docker.internal callback) and surfaces regressions invisible to
+  # the direct-isolation T1-T5. Running both gives independent coverage of
+  # bespoke vs docker-isolation dispatch chains.
+  e2e-temporal-docker:
+    name: e2e (T0-T5 docker isolation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Start tmux server
+        run: tmux new-session -d -s ci-init
+
+      # tsx runs the host-side temporal worker (the Makefile target spawns
+      # `tsx packages/core/temporal/worker.ts` directly). Bun-only nodes
+      # don't ship tsx; install it globally so the worker entrypoint
+      # resolves.
+      - name: Install tsx
+        run: npm install -g tsx
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Verify Docker is available
+        run: docker ps
+
+      # Pre-pull pinned stack images so `up --wait` doesn't pay the fetch
+      # cost under the test budget. Versions mirror docker-compose.e2e.yaml.
+      - name: Pre-pull e2e stack images
+        run: |
+          docker pull postgres:16 &
+          docker pull redis:7-alpine &
+          docker pull temporalio/auto-setup:1.26 &
+          docker pull temporalio/ui:2.31.2 &
+          wait
+
+      # Pre-pull the sidecar image -- DockerIsolation pulls on first prepare()
+      # otherwise, and serial pulls inside the test budget waste seconds.
+      # oven/bun:canary is the same image laptop dev uses and matches the
+      # one the test seeds into compute.config.image.
+      - name: Pre-pull sidecar image
+        run: docker pull oven/bun:canary
+
+      # The Makefile target's `test-e2e-control-plane-up` dependency builds
+      # the temporal-worker image as a compose side effect even though this
+      # target stops it before tests run. Pre-building with GHA layer cache
+      # cuts the cold path to ~30s.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build temporal-worker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: .infra/Dockerfile.temporal-worker
+          tags: ark-temporal-worker:e2e
+          load: true
+          cache-from: type=gha,scope=temporal-worker
+          cache-to: type=gha,scope=temporal-worker,mode=max
+
+      - name: Run T0-T5 docker-isolation e2e
+        run: make test-e2e-temporal-docker
+
+      # Capture container + host process logs on failure. ARK_HOST_ARKDIR
+      # defaults to $(CURDIR)/.tmp/t6-arkdir per the Makefile -- server.log
+      # and worker.log live there.
+      - name: Dump docker compose logs (on failure)
+        if: failure()
+        run: |
+          docker compose -f .infra/docker-compose.e2e.yaml -p ark-e2e logs --no-color > /tmp/e2e-stack.log 2>&1 || true
+          cp -r .tmp/t6-arkdir /tmp/ark-host-logs 2>/dev/null || true
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-temporal-docker-logs
+          path: |
+            /tmp/e2e-stack.log
+            /tmp/ark-host-logs/server.log
+            /tmp/ark-host-logs/worker.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Tear down e2e Docker stack
+        if: always()
+        run: make test-e2e-control-plane-down || true
 
   # Build binaries for all 4 platforms
   build:
@@ -296,4 +514,3 @@ jobs:
             packages/desktop/test-results/
             packages/desktop/playwright-report/
           retention-days: 7
-

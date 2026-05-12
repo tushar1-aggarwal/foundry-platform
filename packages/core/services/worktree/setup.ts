@@ -288,15 +288,97 @@ async function setupWorktree(
 }
 
 /**
- * Pin `user.name` / `user.email` on the worktree's local git config so agent
- * commits don't inherit a stale or invalid `~/.gitconfig` from the host.
- * Server-side hooks (e.g. Bitbucket's BB Violator) reject or rewrite commits
- * with placeholder author emails -- setting these values on the worktree
- * avoids that. Non-fatal: we log and continue if `git config` fails.
+ * The literal placeholder identity. Treated as "no override" in the resolution
+ * chain because server-side hooks (e.g. Bitbucket's BB Violator) reject the
+ * `agent@ark.local` email outright and rewrite the commit to a generic bot
+ * author. If a user actually wants these literal values they can still get
+ * them by not having any other identity configured anywhere.
+ */
+const ARK_PLACEHOLDER_NAME = "Ark Agent";
+const ARK_PLACEHOLDER_EMAIL = "agent@ark.local";
+
+/**
+ * Read a `git config --get <key>` value from a workdir. Returns trimmed value
+ * or undefined when unset / command fails. Cascades through the worktree's
+ * own scope -> the repo-local scope (the parent clone's `.git/config`) ->
+ * the user's `~/.gitconfig` (global) -> `/etc/gitconfig` (system).
+ */
+async function readGitConfigValue(cwd: string, key: string, scope?: "global"): Promise<string | undefined> {
+  try {
+    const args = scope === "global" ? ["config", "--global", "--get", key] : ["-C", cwd, "config", "--get", key];
+    const { stdout } = await execFileAsync("git", args, { encoding: "utf-8", timeout: 5_000 });
+    const v = stdout.trim();
+    return v.length > 0 ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the agent's commit identity for a worktree. Resolution chain (first
+ * non-empty wins):
+ *
+ *   1. Explicit override -- `ARK_GIT_AUTHOR_NAME` / `ARK_GIT_AUTHOR_EMAIL` env
+ *      var, or `git.authorName` / `git.authorEmail` in the YAML config. The
+ *      literal placeholder ("Ark Agent" / "agent@ark.local") is treated as
+ *      "no override" so it never out-prioritises a real identity below.
+ *   2. Effective git config inside the worktree -- `git config --get user.name`
+ *      cascades through worktree -> repo-local -> global -> system. This is
+ *      where the OS user's `~/.gitconfig` is picked up automatically in local-
+ *      compute mode (laptop dev), AND where any prior `applyWorktreeGitIdentity`
+ *      write on this worktree would show up. We skip values that match the
+ *      placeholder so a previous default-write doesn't pin the placeholder
+ *      forever even after the user adds an env override.
+ *   3. Global git config -- a belt-and-braces second probe for the user's
+ *      identity even when steps 1 and 2 only see the placeholder. Useful when
+ *      ark already wrote the placeholder once and the worktree's repo-local
+ *      scope is now "Ark Agent"; without this probe we'd never escape.
+ *   4. Ark's placeholder default -- only when nothing else exists. This is
+ *      the BB-Violator-incompatible fallback we want to avoid in practice.
+ */
+async function resolveAuthorIdentity(app: AppContext, wtPath: string): Promise<{ name: string; email: string }> {
+  const explicitName = app.config.git?.authorName;
+  const explicitEmail = app.config.git?.authorEmail;
+  const isPlaceholderName = !explicitName || explicitName === ARK_PLACEHOLDER_NAME;
+  const isPlaceholderEmail = !explicitEmail || explicitEmail === ARK_PLACEHOLDER_EMAIL;
+
+  let name = !isPlaceholderName ? explicitName! : ARK_PLACEHOLDER_NAME;
+  let email = !isPlaceholderEmail ? explicitEmail! : ARK_PLACEHOLDER_EMAIL;
+
+  if (isPlaceholderName) {
+    const effective = await readGitConfigValue(wtPath, "user.name");
+    if (effective && effective !== ARK_PLACEHOLDER_NAME) {
+      name = effective;
+    } else {
+      const global = await readGitConfigValue(wtPath, "user.name", "global");
+      if (global && global !== ARK_PLACEHOLDER_NAME) name = global;
+    }
+  }
+  if (isPlaceholderEmail) {
+    const effective = await readGitConfigValue(wtPath, "user.email");
+    if (effective && effective !== ARK_PLACEHOLDER_EMAIL) {
+      email = effective;
+    } else {
+      const global = await readGitConfigValue(wtPath, "user.email", "global");
+      if (global && global !== ARK_PLACEHOLDER_EMAIL) email = global;
+    }
+  }
+
+  return { name, email };
+}
+
+/**
+ * Pin `user.name` / `user.email` on the worktree's local git config so the
+ * agent's commits inherit a stable identity. Prefers (in order): explicit
+ * env/YAML override, the OS user's effective git config, the user's global
+ * `~/.gitconfig`, and finally ark's placeholder. The placeholder is rejected
+ * by server-side hooks (e.g. Bitbucket BB Violator) so the cascade gives the
+ * laptop dev experience a real identity without any operator action.
+ *
+ * Non-fatal: we log and continue if the underlying `git config` writes fail.
  */
 export async function applyWorktreeGitIdentity(app: AppContext, wtPath: string): Promise<void> {
-  const name = app.config.git?.authorName ?? "Ark Agent";
-  const email = app.config.git?.authorEmail ?? "agent@ark.local";
+  const { name, email } = await resolveAuthorIdentity(app, wtPath);
   try {
     await execFileAsync("git", ["-C", wtPath, "config", "user.name", name], { encoding: "utf-8" });
     await execFileAsync("git", ["-C", wtPath, "config", "user.email", email], { encoding: "utf-8" });

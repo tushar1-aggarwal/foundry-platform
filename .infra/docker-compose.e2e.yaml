@@ -5,16 +5,23 @@
 # without either stack touching the other's data, ports, or volumes.
 #
 # Brings up:
-#   - ark-e2e-postgres : Postgres 16 on :15434 (vs dev :15433)
-#   - ark-e2e-redis    : Redis 7    on :6380  (vs dev :6379)
+#   - ark-e2e-postgres         : Postgres 16 on :15434 (vs dev :15433)
+#   - ark-e2e-redis            : Redis 7    on :6380  (vs dev :6379)
+#   - ark-e2e-temporal-postgres: Postgres 16 on :15435 (Temporal persistence)
+#   - ark-e2e-temporal         : Temporal server on :7234 (vs dev :7233)
+#   - ark-e2e-temporal-ui      : Temporal UI on :8089 (vs dev :8088)
+#   - ark-e2e-temporal-worker  : Ark worker (replicas: 2) for T1-T5
 #
 # Volumes: ark-e2e-* (vs dev's ark-dev-*). Wiped on every
-# `make test-e2e-control-plane` run via `down -v`.
+# `make test-e2e-temporal-down` run via `down -v`.
 #
 # Usage (via Makefile):
-#   make test-e2e-control-plane            # full lifecycle
-#   make test-e2e-control-plane-up         # just bring up (debug)
-#   make test-e2e-control-plane-down       # just tear down (debug)
+#   make test-e2e-temporal             # full lifecycle (T1-T5)
+#   make test-e2e-temporal-up          # just bring up (debug)
+#   make test-e2e-temporal-down        # just tear down (debug)
+#   make test-e2e-control-plane        # bespoke-only (no Temporal services needed)
+#   make test-e2e-control-plane-up     # just bring up (debug)
+#   make test-e2e-control-plane-down   # just tear down (debug)
 
 name: ark-e2e
 
@@ -52,8 +59,118 @@ services:
       timeout: 3s
       retries: 30
 
+  temporal-postgres:
+    image: postgres:16
+    container_name: ark-e2e-temporal-postgres
+    restart: "no"
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    ports:
+      - "15435:5432"
+    volumes:
+      - ark-e2e-temporal-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  temporal:
+    image: temporalio/auto-setup:1.26
+    container_name: ark-e2e-temporal
+    restart: "no"
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-postgres
+    ports:
+      - "7234:7233"
+    healthcheck:
+      test: ["CMD-SHELL", "temporal workflow list --namespace default --address $$(hostname -i):7233"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 30s
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    container_name: ark-e2e-temporal-ui
+    restart: "no"
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "8089:8080"
+
+  temporal-worker:
+    build:
+      context: ..
+      dockerfile: .infra/Dockerfile.temporal-worker
+    image: ark-temporal-worker:e2e
+    restart: on-failure
+    depends_on:
+      temporal:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    # Linux CI runners do not auto-resolve `host.docker.internal` (it is
+    # only wired up on Docker Desktop for Mac/Windows). The
+    # `host-gateway` magic value asks the daemon to point the alias at
+    # the docker0 bridge IP, which is what reaches the test process'
+    # ark server. Without this, stub-runner agents inside the worker
+    # cannot deliver completion reports and every T1-T5 test that
+    # awaits a session-status transition hangs to its timeout.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgres://ark:ark@postgres:5432/ark?sslmode=disable
+      ARK_TEMPORAL_SERVER_URL: temporal:7233
+      ARK_TEMPORAL_NAMESPACE: default
+      ARK_TEMPORAL_WORKER: "true"
+      ARK_TEMPORAL_ORCHESTRATION: "true"
+      ARK_PROFILE: control-plane
+      ARK_LOG_LEVEL: warn
+      ARK_BLOB_BACKEND: local
+      ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE: "1"
+      ARK_SECRETS_BACKEND: file
+      ARK_AUTH_REQUIRE_TOKEN: "false"
+      ARK_DEFAULT_TENANT: default
+      # Enable test-only action handlers (notably `flaky_pr`) so T5a/T5b can
+      # exercise retry policy + non-retryable failures through this worker.
+      # Without this, executeAction sees flaky_pr as an unknown action and
+      # returns ok:true ("skipped"), letting the workflow mark the session
+      # completed -- which is what made T5b silently fail on CI while
+      # passing locally (the host-side worker target wires this in).
+      ARK_ENABLE_TEST_ACTIONS: "1"
+      # The stub-runner executor spawns child processes that report stage
+      # completion via JSON-RPC channel/deliver to the conductor. In hosted
+      # mode the conductor is merged into the web server, so the agent
+      # callback URL is the web port (ARK_WEB_PORT in .env.e2e = 8422).
+      # host.docker.internal reaches the test process on the docker host
+      # (Mac/Windows), and via the gateway on Linux.
+      ARK_CONDUCTOR_URL: "http://host.docker.internal:8422"
+    # Note (T6 worker-in-container): an earlier iteration mounted the host's
+    # docker.sock + arkDir + source tree here so this worker could dispatch
+    # T6 sidecars from inside compose. Reverted because we can't currently
+    # rebuild this image with the docker CLI installed -- Zscaler intercepts
+    # the binary fetches. T6's runnable path spawns the temporal worker on
+    # the HOST (see Makefile `test-e2e-t6-docker`). When the Zscaler CA is
+    # trusted by Docker Desktop, re-add the mounts + ARK_DOCKER_AGENT_NETWORK
+    # env to flip back to worker-in-compose.
+
 volumes:
   ark-e2e-postgres-data:
     name: ark-e2e-postgres-data
   ark-e2e-redis-data:
     name: ark-e2e-redis-data
+  ark-e2e-temporal-postgres-data:
+    name: ark-e2e-temporal-postgres-data

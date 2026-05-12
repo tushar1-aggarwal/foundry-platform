@@ -126,8 +126,47 @@ export class DockerIsolation implements Isolation {
     }
 
     const containerName = this._containerName(compute, h);
-    const arkdHostPort = await this.helpers.allocatePort();
-    const arkdUrl = `http://localhost:${arkdHostPort}`;
+
+    // Network mode: when ARK_DOCKER_AGENT_NETWORK is set (the case for a
+    // compose-managed temporal-worker spawning sidecars via /var/run/
+    // docker.sock), the sidecar joins that named network and we reach arkd
+    // by DNS. No host port is allocated -- the dispatcher container sees
+    // the host port mapping in a different network namespace anyway, so
+    // the mapping isn't useful. Standalone laptop dev keeps the existing
+    // host-loopback behavior when this env is unset.
+    const agentNetwork = process.env.ARK_DOCKER_AGENT_NETWORK;
+
+    // Idempotent reuse: every dispatch of a multi-stage session runs through
+    // `runTargetLifecycle.prepare`. The sidecar is meant to be shared across
+    // stages, not recreated -- arkd inside it is stateless w.r.t. which agent
+    // it's running. If a container with this name already exists and is
+    // healthy, rehydrate meta and short-circuit. Without this, stage 2 hits
+    // "container name already in use" and dispatch fails the moment the
+    // agent for stage 1 returns.
+    const existing = await this._inspectExistingContainer(containerName);
+    if (existing) {
+      const reuseUrl = agentNetwork ? `http://${containerName}:19300` : `http://localhost:${existing.hostPort}`;
+      if ((agentNetwork || existing.hostPort) && (await this._isArkdHealthy(reuseUrl))) {
+        const meta: DockerHandleMeta = {
+          containerName,
+          arkdHostPort: existing.hostPort,
+          arkdUrl: reuseUrl,
+          image,
+          arkSource,
+          tempPaths: [],
+        };
+        (h.meta as Record<string, unknown>).docker = meta;
+        return;
+      }
+      // Container exists but arkd inside it isn't responding. Treat as
+      // garbage from a crashed prior dispatch and rebuild from scratch.
+      await this.helpers.removeContainer(containerName).catch(() => {
+        logDebug("compute", "stale container remove failed -- continuing");
+      });
+    }
+
+    const arkdHostPort = agentNetwork ? 0 : await this.helpers.allocatePort();
+    const arkdUrl = agentNetwork ? `http://${containerName}:${19300}` : `http://localhost:${arkdHostPort}`;
 
     // Track progress so we can clean up on partial failure.
     let created = false;
@@ -140,7 +179,8 @@ export class DockerIsolation implements Isolation {
         arkDir: this.app.config.dirs.ark,
         arkSource,
         workdir: ctx.workdir,
-        arkdHostPort,
+        arkdHostPort: agentNetwork ? undefined : arkdHostPort,
+        network: agentNetwork,
       });
       created = true;
 
@@ -262,5 +302,52 @@ export class DockerIsolation implements Isolation {
       throw new Error("DockerIsolation: handle.meta.docker missing -- prepare() was not called or failed");
     }
     return meta;
+  }
+
+  /**
+   * Look up an existing sidecar container by name. Returns whether it's
+   * running plus the host port mapped to arkd's internal port (0 when the
+   * sidecar uses a docker network and has no host port at all). Used by
+   * `prepare()` to short-circuit when a prior stage of the same session
+   * already brought the sidecar up.
+   */
+  private async _inspectExistingContainer(name: string): Promise<{ hostPort: number } | null> {
+    const { execFile } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFileAsync = promisify(execFile);
+    try {
+      // Running state always queried; hostPort lookup tolerates "no mapping"
+      // (network-mode sidecars). The Go-template `index ... 0` panics when
+      // the slice is empty, so we guard with `if` -- it emits empty string
+      // when there's no mapping, which the caller treats as port 0.
+      const { stdout } = await execFileAsync(
+        "docker",
+        [
+          "inspect",
+          "--format",
+          '{{.State.Running}}|{{with index .NetworkSettings.Ports "19300/tcp"}}{{(index . 0).HostPort}}{{end}}',
+          name,
+        ],
+        { timeout: 5_000 },
+      );
+      const [running, port] = stdout.trim().split("|");
+      if (running !== "true") return null;
+      const portNum = port ? Number(port) : 0;
+      return { hostPort: Number.isFinite(portNum) ? portNum : 0 };
+    } catch {
+      // Container doesn't exist, or inspect failed for some other reason.
+      // Either way the caller should rebuild fresh.
+      return null;
+    }
+  }
+
+  /** Quick arkd health probe, used by the idempotent-reuse branch. */
+  private async _isArkdHealthy(url: string): Promise<boolean> {
+    try {
+      const r = await fetch(`${url}/snapshot`, { method: "GET", signal: AbortSignal.timeout(2_000) });
+      return r.ok;
+    } catch {
+      return false;
+    }
   }
 }

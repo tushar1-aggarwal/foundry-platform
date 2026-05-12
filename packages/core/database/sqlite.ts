@@ -13,7 +13,26 @@
  * We open BEGIN/COMMIT manually instead.
  */
 
-import { Database, type Statement as BunStatement } from "bun:sqlite";
+// `bun:sqlite` is a Bun-only module. We can't reference it (even via
+// `import type` / `import("bun:sqlite")`) because Node's ESM loader rejects
+// the `bun:` URL scheme at resolve time, and tsx leaves these expressions
+// in the emitted JS. We therefore duck-type the Bun shapes the adapter
+// uses; at runtime the Database is constructed only inside `app.ts`'s
+// SQLite branch via `await import("bun:sqlite")`, so the type leakage is
+// purely structural here.
+type BunStatement = {
+  run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
+  get(...params: unknown[]): unknown;
+  all(...params: unknown[]): unknown[];
+  finalize(): void;
+};
+type BunDatabase = {
+  prepare(sql: string): BunStatement;
+
+  exec: any;
+  close(): void;
+};
+
 import type { DatabaseAdapter, PreparedStatement } from "./types.js";
 
 class BunSqliteStatement implements PreparedStatement {
@@ -42,7 +61,7 @@ class BunSqliteStatement implements PreparedStatement {
 }
 
 export class BunSqliteAdapter implements DatabaseAdapter {
-  constructor(private db: Database) {}
+  constructor(private db: BunDatabase) {}
 
   prepare(sql: string): PreparedStatement {
     return new BunSqliteStatement(this.db.prepare(sql));

@@ -42,6 +42,11 @@ import * as m017 from "./017_auth_phase1.js";
 // Migration 018: scoping_overrides backfill for installs that applied 017
 // before its scoping_overrides addition (#549). No-op on fresh installs.
 import * as m018 from "./018_scoping_overrides.js";
+// Migration 019: Temporal workflow_id/workflow_run_id columns.
+import * as m019 from "./019_temporal_columns.js";
+// Migration 020: compute PK swap from (name) to (name, tenant_id) for multi-tenant
+// correctness. Two tenants can now hold rows with the same compute name.
+import * as m020 from "./020_compute_composite_pk.js";
 
 export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m001.VERSION, name: m001.NAME, up: m001.up },
@@ -66,4 +71,6 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m016.VERSION, name: m016.NAME, up: m016.up },
   { version: m017.VERSION, name: m017.NAME, up: m017.up },
   { version: m018.VERSION, name: m018.NAME, up: m018.up },
+  { version: m019.VERSION, name: m019.NAME, up: m019.up },
+  { version: m020.VERSION, name: m020.NAME, up: m020.up },
 ];

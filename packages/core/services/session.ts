@@ -16,6 +16,7 @@ import type { MessageRepository } from "../repositories/message.js";
 import type { AppContext } from "../app.js";
 import { logDebug } from "../observability/structured-log.js";
 import { SessionDispatchListeners, markDispatchFailedShared } from "./session-dispatch-listeners.js";
+import { ValidationError } from "./orchestrator-errors.js";
 
 // ── SessionService ───────────────────────────────────────────────────────────
 
@@ -28,6 +29,13 @@ export class SessionService {
    * without one.
    */
   private readonly dispatchListeners: SessionDispatchListeners;
+
+  /**
+   * Factory for the Temporal client. Overridable in tests (assign a stub
+   * function to `(service as any)._temporalClientFactory`) without needing
+   * to monkey-patch ES module live bindings.
+   */
+  _temporalClientFactory: ((cfg: any) => Promise<any>) | null = null;
 
   constructor(
     private sessions: SessionRepository,
@@ -59,15 +67,27 @@ export class SessionService {
    * no telemetry, no OTLP spans (those belong at the orchestration layer above).
    */
   async start(opts: CreateSessionOpts): Promise<Session> {
+    // RF-5: reject inline attachment bytes -- callers must upload to BlobStore first.
+    if (opts.attachments?.some((a: any) => a.content && !a.locator)) {
+      throw new ValidationError(
+        "startSession: attachment.content is not allowed; upload to BlobStore and pass locator instead",
+      );
+    }
+
     // compute_name fallback: explicit arg > "local". Mirrors the
     // service-level default in `services/session/create.ts` so every
     // path through `sessionService.start` lands in the DB with a
     // non-null compute_name (the compute panel filter relies on this).
     // Tests that need the legacy NULL behaviour go through
     // `app.sessions.create()` directly. See #472.
+    const app = this._app;
+    const usesTemporal =
+      app !== null && app.mode.kind === "hosted" && app.config.features.temporalOrchestration === true;
+
     const session = await this.sessions.create({
       ...opts,
       compute_name: opts.compute_name ?? "local",
+      orchestrator: usesTemporal ? "temporal" : "custom",
     });
 
     // Apply agent override if specified
@@ -85,7 +105,35 @@ export class SessionService {
       },
     });
 
-    this.emitSessionCreated(session.id);
+    if (usesTemporal) {
+      const { getTemporalClient } = await import("../temporal/client.js");
+      const client = await getTemporalClient(app.config.temporal);
+      const wfId = `session-${session.id}`;
+      const handle = await client.workflow.start("sessionWorkflow", {
+        taskQueue: `ark.${app.tenantId ?? "default"}.stages`,
+        workflowId: wfId,
+        // Hard wall-clock cap so a stuck workflow eventually closes itself.
+        // Without this, an orphan (worker crash, stop() that didn't terminate,
+        // signal that never arrives) stays Running until namespace retention.
+        workflowExecutionTimeout: (app.config.temporal?.workflowExecutionTimeout ?? "24h") as any,
+        args: [
+          {
+            sessionId: session.id,
+            tenantId: app.tenantId ?? "default",
+            flowName: (opts as any).flow ?? "default",
+          },
+        ],
+      });
+      await this.sessions.update(session.id, {
+        workflow_id: wfId,
+        workflow_run_id: handle.firstExecutionRunId,
+      } as Partial<Session>);
+    }
+    // Phase 3 cutover: bespoke dispatch only fires when Temporal is OFF.
+    // In Temporal mode the workflow drives every stage via dispatchStageActivity.
+    if (!usesTemporal) {
+      this.emitSessionCreated(session.id);
+    }
     return (await this.sessions.get(session.id))!;
   }
 
@@ -102,6 +150,8 @@ export class SessionService {
     if (!opts?.force && ["stopped", "completed", "failed"].includes(session.status) && !session.session_id) {
       return { ok: true, message: "OK", sessionId: id };
     }
+
+    await this.terminateTemporalWorkflowIfAny(session, "user stopped");
 
     // If there's a running process and AppContext is available, delegate to
     // orchestration for full cleanup (tmux kill, provider cleanup, hooks removal)
@@ -126,6 +176,27 @@ export class SessionService {
     });
 
     return { ok: true, message: "OK", sessionId: id };
+  }
+
+  /**
+   * Terminate the Temporal workflow tied to a session, if any. Best-effort:
+   * swallows "workflow not found / already-terminal" errors. Called on
+   * stop/delete so a session row going to a terminal state takes its
+   * workflow with it instead of leaking a Running execution in Temporal.
+   */
+  private async terminateTemporalWorkflowIfAny(session: Session, reason: string): Promise<void> {
+    if (session.orchestrator !== "temporal" || !session.workflow_id) return;
+    try {
+      const factory = this._temporalClientFactory ?? (await import("../temporal/client.js")).getTemporalClient;
+      const client = await factory(this.app.config.temporal);
+      const handle = client.workflow.getHandle(session.workflow_id);
+      await handle.terminate(reason);
+    } catch (err: any) {
+      const msg = String(err?.message ?? err);
+      // Already-terminal / not-found are expected and harmless.
+      if (/not found|already (?:terminat|complet|cancel|fail)/i.test(msg)) return;
+      logDebug("session", `terminateTemporalWorkflowIfAny: ${session.workflow_id} -- ${msg}`);
+    }
   }
 
   /**
@@ -494,6 +565,7 @@ export class SessionService {
     const session = await this.sessions.get(id);
     if (!session) return { ok: false, message: `Session ${id} not found` };
 
+    await this.terminateTemporalWorkflowIfAny(session, "session deleted");
     await this.sessions.softDelete(id);
 
     await this.events.log(id, "session_deleted", { actor: "user" });
@@ -661,8 +733,25 @@ export class SessionService {
 
   /**
    * Approve a review gate and force-advance past it.
+   *
+   * When the session uses Temporal orchestration, sends an `approveReviewGate`
+   * signal to the running workflow instead of calling the legacy helper.
    */
   async approveReviewGate(id: string): Promise<SessionOpResult> {
+    const session = await this.sessions.get(id);
+    if (!session) return { ok: false, message: `Session ${id} not found` };
+
+    if (session.orchestrator === "temporal") {
+      if (!session.workflow_id) {
+        return { ok: false, message: `Session ${id} has no workflow_id -- cannot send Temporal signal` };
+      }
+      const factory = this._temporalClientFactory ?? (await import("../temporal/client.js")).getTemporalClient;
+      const client = await factory(this.app.config.temporal);
+      const handle = client.workflow.getHandle(session.workflow_id);
+      await handle.signal("approveReviewGate", { sessionId: id });
+      return { ok: true, message: "OK", sessionId: id };
+    }
+
     const { approveReviewGate: legacyApprove } = await import("./review-gate.js");
     return legacyApprove(this.app, id);
   }
@@ -672,8 +761,25 @@ export class SessionService {
    * (with `{{rejection_reason}}` substituted) and appends it to the next
    * dispatch of the current stage. When `on_reject.max_rejections` is
    * exceeded, the session is marked failed instead.
+   *
+   * When the session uses Temporal orchestration, sends a `rejectReviewGate`
+   * signal to the running workflow instead of calling the legacy helper.
    */
   async rejectReviewGate(id: string, reason: string): Promise<SessionOpResult> {
+    const session = await this.sessions.get(id);
+    if (!session) return { ok: false, message: `Session ${id} not found` };
+
+    if (session.orchestrator === "temporal") {
+      if (!session.workflow_id) {
+        return { ok: false, message: `Session ${id} has no workflow_id -- cannot send Temporal signal` };
+      }
+      const factory = this._temporalClientFactory ?? (await import("../temporal/client.js")).getTemporalClient;
+      const client = await factory(this.app.config.temporal);
+      const handle = client.workflow.getHandle(session.workflow_id);
+      await handle.signal("rejectReviewGate", { sessionId: id, reason: reason ?? "" });
+      return { ok: true, message: "OK", sessionId: id };
+    }
+
     const { rejectReviewGate: legacyReject } = await import("./review-gate.js");
     const r = await legacyReject(this.app, id, reason ?? "");
     // review-gate returns { ok, message } without sessionId; widen to SessionOpResult.

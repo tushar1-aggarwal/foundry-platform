@@ -37,6 +37,8 @@ export async function initSchema(db: DatabaseAdapter): Promise<void> {
       tenant_id TEXT NOT NULL DEFAULT 'default',
       workspace_id TEXT,
       orchestrator TEXT NOT NULL DEFAULT 'custom',
+      workflow_id TEXT,
+      workflow_run_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -65,7 +67,7 @@ export async function initSchema(db: DatabaseAdapter): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
 
     CREATE TABLE IF NOT EXISTS compute (
-      name TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
       compute_kind TEXT NOT NULL DEFAULT 'local',
       isolation_kind TEXT NOT NULL DEFAULT 'direct',
       status TEXT NOT NULL DEFAULT 'stopped',
@@ -74,7 +76,8 @@ export async function initSchema(db: DatabaseAdapter): Promise<void> {
       cloned_from TEXT,
       tenant_id TEXT NOT NULL DEFAULT 'default',
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (name, tenant_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_compute_kind ON compute(compute_kind);

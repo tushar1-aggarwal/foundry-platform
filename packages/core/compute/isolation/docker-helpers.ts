@@ -44,6 +44,14 @@ export interface CreateContainerOpts {
   arkSource?: string;
   /** Host port mapped to ARKD_INTERNAL_PORT inside the container. */
   arkdHostPort?: number;
+  /**
+   * Optional docker network for the sidecar to join. When set, the sidecar
+   * sits on the named network instead of the default bridge -- required
+   * when the dispatcher itself runs inside a container (e.g. compose-managed
+   * temporal-worker spawning sidecars via /var/run/docker.sock). Skips the
+   * host-port mapping; the dispatcher reaches arkd by container DNS.
+   */
+  network?: string;
 }
 
 /** Pull a Docker image. 5-min timeout for large images over slow networks. */
@@ -65,18 +73,44 @@ export async function pullImage(image: string): Promise<void> {
  */
 export async function createContainer(name: string, image: string, opts: CreateContainerOpts = {}): Promise<void> {
   const home = homedir();
-  const { extraVolumes = [], arkDir, workdir, arkSource, arkdHostPort } = opts;
+  const { extraVolumes = [], arkDir, workdir, arkSource, arkdHostPort, network } = opts;
 
-  const createArgs = [
-    "create",
-    "--name",
-    name,
-    "-it",
-    "-v",
-    `${join(home, ".ssh")}:/root/.ssh:ro`,
-    "-v",
-    `${join(home, ".claude")}:/root/.claude:ro`,
-  ];
+  const createArgs = ["create", "--name", name, "-it", "-v", `${join(home, ".claude")}:/root/.claude:ro`];
+
+  // ~/.ssh bind-mount: dropped automatically when ARK_BITBUCKET_TOKEN_AVAILABLE=1
+  // (set by the dispatcher when a BITBUCKET_TOKEN tenant secret resolved). The
+  // sidecar then uses HTTPS-token push via the URL-rewrite path in pr.ts and
+  // doesn't need the host's SSH keys at all -- closer to prod's no-host-mounts
+  // posture. Laptop dev without the secret keeps the original SSH bind-mount
+  // so `git@github.com:...` / `git@bitbucket.org:...` URLs still authenticate.
+  if (process.env.ARK_BITBUCKET_TOKEN_AVAILABLE !== "1") {
+    createArgs.push("-v", `${join(home, ".ssh")}:/root/.ssh:ro`);
+  }
+
+  // Network mode: when the dispatcher itself runs inside a container (e.g.
+  // a temporal-worker compose service spawning sidecars via /var/run/
+  // docker.sock), the sidecar must join the same compose network so the
+  // worker can reach arkd by DNS instead of host loopback. Skips the
+  // host-port mapping below -- with a shared network there's nothing to
+  // map; DNS does the routing.
+  if (network) {
+    createArgs.push("--network", network);
+  }
+
+  // host.docker.internal callback. Sidecar-spawned processes (claude-agent,
+  // stub-agent.sh in the T1-T5 docker-isolation path) need to reach the
+  // ark conductor running on the host -- e.g. to post `channel/deliver`
+  // reports back. Docker Desktop on Mac/Windows wires this alias up
+  // automatically; on Linux it must be requested explicitly. The
+  // `host-gateway` magic value asks the daemon to point the alias at the
+  // docker0 bridge IP (= the host as seen from the bridge network), which
+  // is exactly what the sidecar needs. Safe on macOS too: the explicit
+  // alias matches the implicit one and the second declaration is a no-op.
+  // Skipped when joining a named network (the worker reaches arkd by
+  // DNS, and the callback path goes via the same network's gateway).
+  if (!network) {
+    createArgs.push("--add-host", "host.docker.internal:host-gateway");
+  }
 
   const awsDir = join(home, ".aws");
   if (existsSync(awsDir)) {
@@ -101,9 +135,12 @@ export async function createContainer(name: string, image: string, opts: CreateC
     createArgs.push("-v", vol);
   }
 
-  if (typeof arkdHostPort === "number") {
+  if (typeof arkdHostPort === "number" && !network) {
     // Bind only to loopback on the host -- we never want arkd exposed to the
     // outside world. Even the host-to-container traffic stays on 127.0.0.1.
+    // Skipped when a docker network is set: sibling containers on the same
+    // network reach arkd by DNS at <containerName>:19300 with no host
+    // round-trip needed.
     createArgs.push("-p", `127.0.0.1:${arkdHostPort}:${ARKD_INTERNAL_PORT}`);
   }
 
@@ -144,10 +181,24 @@ export async function bootstrapContainer(name: string, opts: BootstrapOpts = {})
 
   const script = buildBootstrapScript({ wantGit, wantBun, wantTmux, wantClaude });
 
-  await execFileAsync("docker", ["exec", "-i", name, "bash", "-c", script], {
-    timeout: 300_000,
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  try {
+    await execFileAsync("docker", ["exec", "-i", name, "bash", "-c", script], {
+      timeout: 300_000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (err: any) {
+    // execFile's default error message omits stderr; surface it so callers
+    // (and the worker log) can see the actual bootstrap failure (apt-get
+    // hanging on Zscaler MITM, missing tool, etc.) instead of a generic
+    // "Command failed: docker exec ...".
+    const stderr = typeof err?.stderr === "string" ? err.stderr.trim() : "";
+    const stdout = typeof err?.stdout === "string" ? err.stdout.trim() : "";
+    const tail = (s: string, n = 400) => (s.length > n ? "..." + s.slice(-n) : s);
+    err.message =
+      `bootstrapContainer failed (code ${err?.code ?? "?"}): ${tail(stderr)}` +
+      (stdout ? ` | stdout tail: ${tail(stdout)}` : "");
+    throw err;
+  }
 }
 
 /**

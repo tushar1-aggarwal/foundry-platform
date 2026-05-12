@@ -44,7 +44,7 @@ export class SessionScheduler {
     // 2. Determine provider
     let provider: string | null = null;
     if (session.compute_name) {
-      provider = await this._resolveProviderFromCompute(session.compute_name);
+      provider = await this._resolveProviderFromCompute(session.compute_name, tid);
     }
     if (!provider && policy) {
       provider = policy.default_provider;
@@ -163,9 +163,15 @@ export class SessionScheduler {
    * still store provider-name strings; until that schema migrates to a
    * two-axis pair we keep this small mapping local rather than reaching
    * back through a deleted adapters/ module.
+   *
+   * Compute PK is (name, tenant_id) -- two tenants can share a compute name,
+   * so the lookup must be tenant-scoped. The hosted scheduler is constructed
+   * with the root AppContext; we pivot to the caller's tenant scope before
+   * reading.
    */
-  private async _resolveProviderFromCompute(computeName: string): Promise<string | null> {
-    const compute = await this.app.computes.get(computeName);
+  private async _resolveProviderFromCompute(computeName: string, tenantId: string): Promise<string | null> {
+    const scoped = tenantId === this.app.tenantId ? this.app : this.app.forTenant(tenantId);
+    const compute = await scoped.computes.get(computeName);
     if (!compute) return null;
     return axesToLegacyProviderName(compute.compute_kind, compute.isolation_kind);
   }

@@ -24,21 +24,31 @@ export class ServiceWiring {
     private readonly pluginRegistry: PluginRegistry,
   ) {}
 
-  start(): void {
+  async start(): Promise<void> {
     for (const ex of builtinExecutors) {
       this.pluginRegistry.register({ kind: "executor", name: ex.name, impl: ex, source: "builtin" });
       registerExecutor(ex);
     }
 
-    // fire-and-forget: plugin loading is best-effort, never blocks boot
-    loadPluginExecutors(this.app.config.dirs.ark, (msg) => logWarn("general", `[plugins] ${msg}`))
-      .then((plugins) => {
-        for (const ex of plugins) {
-          this.pluginRegistry.register({ kind: "executor", name: ex.name, impl: ex, source: "user" });
-          registerExecutor(ex);
-        }
-      })
-      .catch((e: any) => logWarn("general", `[plugins] loadPluginExecutors failed: ${e?.message ?? e}`));
+    // Await plugin loading so executors are registered before the lifecycle
+    // launchers (Temporal worker, conductor, ...) start polling for work. The
+    // old fire-and-forget path raced with dispatchStageActivity: a workflow
+    // task could land in the worker microseconds after boot, before the
+    // plugin's executor was registered, triggering "Executor '<name>' not
+    // registered" failures (T1-T5 stub-runner under high boot pressure).
+    // Plugin import + executor wiring is ~tens of ms, so awaiting here is
+    // cheap and removes the race entirely.
+    try {
+      const plugins = await loadPluginExecutors(this.app.config.dirs.ark, (msg) =>
+        logWarn("general", `[plugins] ${msg}`),
+      );
+      for (const ex of plugins) {
+        this.pluginRegistry.register({ kind: "executor", name: ex.name, impl: ex, source: "user" });
+        registerExecutor(ex);
+      }
+    } catch (e: any) {
+      logWarn("general", `[plugins] loadPluginExecutors failed: ${e?.message ?? e}`);
+    }
 
     // Clear the module-level event bus in case a previous app instance
     // left handlers attached. AppContext.eventBus returns the same

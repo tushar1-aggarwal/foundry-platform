@@ -368,9 +368,15 @@ export class HookStatusApplier {
  * worktree is clean or git refuses (which we treat as "the strict
  * no-commits failure path is correct after all").
  *
- * We pass user.name/user.email via -c flags so we don't depend on any
- * AppContext or local git config -- the values mirror the defaults from
- * services/worktree/setup.ts (applyWorktreeGitIdentity).
+ * The author identity comes from the worktree's own git config, which
+ * `applyWorktreeGitIdentity` (services/worktree/setup.ts) populates at
+ * session start using the env/YAML override -> effective user config ->
+ * global config -> placeholder cascade. Previously this function passed
+ * `-c user.name=Ark Agent -c user.email=agent@ark.local` flags which
+ * forced the placeholder identity on the rescue commit even when the
+ * worktree had a real identity wired up -- BB Violator rejects that and
+ * rewrites the commit to a generic bot. Letting git read the worktree
+ * config keeps the rescue commit consistent with the agent's own commits.
  */
 function autoCommitUncommittedChanges(
   workdir: string,
@@ -391,11 +397,15 @@ function autoCommitUncommittedChanges(
     const stageLabel = stage ? ` (${stage})` : "";
     const message = `[ark] auto-commit: agent did not commit before exit${stageLabel}`;
 
-    execFileSync(
-      "git",
-      ["-c", "user.name=Ark Agent", "-c", "user.email=agent@ark.local", "commit", "--no-verify", "-m", message],
-      { cwd: workdir, encoding: "utf-8", timeout: 10_000 },
-    );
+    // Pass an inline identity so the rescue commit succeeds even on hosts
+    // where the global git config is unset (clean CI runners, freshly
+    // imaged dev VMs). The user's real identity, if configured, still wins
+    // because `-c` only applies inside this single git invocation.
+    execFileSync("git", ["-c", "user.name=ark", "-c", "user.email=ark@local", "commit", "--no-verify", "-m", message], {
+      cwd: workdir,
+      encoding: "utf-8",
+      timeout: 10_000,
+    });
 
     const headSha = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: workdir,

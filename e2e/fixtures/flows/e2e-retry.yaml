@@ -1,0 +1,13 @@
+name: e2e-retry
+description: "T5: plan -> flaky_pr action. Tests retry policy + non-retryable."
+stages:
+  - name: plan
+    agent: stub-planner
+    gate: auto
+  - name: ship
+    action: flaky_pr
+    gate: auto
+    depends_on: [plan]
+    config:
+      fail_times: 1
+      error: "503 service unavailable"

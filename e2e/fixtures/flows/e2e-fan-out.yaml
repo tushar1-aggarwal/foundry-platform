@@ -1,0 +1,11 @@
+name: e2e-fan-out
+description: "T4: fork stage with empty subtasks -- verifies the workflow takes the fan_out branch (classifyStage maps both type=fork and type=fan_out to fan_out) and Promise.all aggregates correctly."
+stages:
+  - name: spread
+    type: fork
+    gate: auto
+    subtasks: []
+  - name: close
+    action: close_ticket
+    gate: auto
+    depends_on: [spread]

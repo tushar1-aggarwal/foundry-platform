@@ -298,7 +298,7 @@ const inlineAgentSchema = z
 const inlineStageSchema = z
   .object({
     name: z.string().min(1),
-    type: z.enum(["agent", "action", "fork"]).optional(),
+    type: z.enum(["agent", "action", "fork", "review_gate"]).optional(),
     agent: z.union([z.string(), inlineAgentSchema]).optional(),
     action: z.string().optional(),
     task: z.string().optional(),
@@ -575,7 +575,7 @@ export type FlowReadRequest = z.infer<typeof flowReadRequest>;
 const stageDefinitionSchema = z
   .object({
     name: z.string(),
-    type: z.enum(["agent", "action", "fork"]).optional(),
+    type: z.enum(["agent", "action", "fork", "review_gate"]).optional(),
     agent: z.string().optional(),
     action: z.string().optional(),
     task: z.string().optional(),

@@ -1,0 +1,13 @@
+name: e2e-retry-nonretryable
+description: "T5b: plan -> flaky_pr with AuthError (non-retryable). Should fail fast."
+stages:
+  - name: plan
+    agent: stub-planner
+    gate: auto
+  - name: ship
+    action: flaky_pr
+    gate: auto
+    depends_on: [plan]
+    config:
+      fail_times: 999
+      error: "AuthError"
