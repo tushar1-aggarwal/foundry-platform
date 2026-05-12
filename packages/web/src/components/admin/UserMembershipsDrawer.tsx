@@ -23,8 +23,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../ui/button.js";
 import { useFocusTrap } from "../../hooks/useFocusTrap.js";
+import { useOptionalAuth } from "../../auth/AuthContext.js";
 import { useAdminApi } from "./adminApi.js";
-import type { MembershipRole, MembershipWithTeamTenant, Team, Tenant, User } from "./types.js";
+import type { MembershipRole, MembershipWithTeamTenant, Team, User } from "./types.js";
 
 const ROLES: MembershipRole[] = ["owner", "admin", "member", "viewer"];
 
@@ -47,6 +48,8 @@ export function UserMembershipsDrawerPanel({
   onToast,
 }: Required<Pick<UserMembershipsDrawerProps, "user" | "onClose">> & Pick<UserMembershipsDrawerProps, "onToast">) {
   const adminApi = useAdminApi();
+  const auth = useOptionalAuth();
+  const callerTenantId = auth?.identity?.tenantId ?? "";
   const panelRef = useRef<HTMLDivElement | null>(null);
   useFocusTrap(true, panelRef, onClose);
 
@@ -54,11 +57,10 @@ export function UserMembershipsDrawerPanel({
   const [loading, setLoading] = useState(true);
 
   // "Add to team" inline form state. Kept local to the drawer so closing
-  // and reopening on a different user starts the form clean.
+  // and reopening on a different user starts the form clean. Tenant is
+  // fixed to caller's under the tenant-admin model -- no tenant picker.
   const [showAdd, setShowAdd] = useState(false);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [teamsInTenant, setTeamsInTenant] = useState<Team[]>([]);
-  const [addTenantId, setAddTenantId] = useState("");
   const [addTeamId, setAddTeamId] = useState("");
   const [addRole, setAddRole] = useState<MembershipRole>("member");
   const [busy, setBusy] = useState(false);
@@ -88,29 +90,15 @@ export function UserMembershipsDrawerPanel({
     void refresh();
   }, [refresh]);
 
-  // Load tenants only when the inline form opens.
+  // Load teams in the caller's tenant when the form opens. Tenant is
+  // fixed (no picker) under the tenant-admin model -- one load.
   useEffect(() => {
-    if (!showAdd) return;
+    if (!showAdd || !callerTenantId) return;
     adminApi
-      .listTenants()
-      .then(setTenants)
-      .catch(() => setTenants([]));
-  }, [showAdd, adminApi]);
-
-  // When the tenant selection in the inline form changes, reload its
-  // teams and reset the team selection.
-  useEffect(() => {
-    if (!addTenantId) {
-      setTeamsInTenant([]);
-      setAddTeamId("");
-      return;
-    }
-    adminApi
-      .listTeams(addTenantId)
+      .listTeams(callerTenantId)
       .then(setTeamsInTenant)
       .catch(() => setTeamsInTenant([]));
-    setAddTeamId("");
-  }, [addTenantId, adminApi]);
+  }, [showAdd, callerTenantId, adminApi]);
 
   async function handleRoleChange(m: MembershipWithTeamTenant, role: MembershipRole) {
     setBusy(true);
@@ -140,14 +128,13 @@ export function UserMembershipsDrawerPanel({
   }
 
   async function handleAdd() {
-    if (!addTenantId || !addTeamId) return;
+    if (!addTeamId) return;
     setBusy(true);
     try {
       await adminApi.addMember(addTeamId, user.email, addRole);
       const team = teamsInTenant.find((t) => t.id === addTeamId);
       onToast?.(`Added to ${team?.name ?? addTeamId} as ${addRole}`, "success");
       setShowAdd(false);
-      setAddTenantId("");
       setAddTeamId("");
       setAddRole("member");
       await refresh();
@@ -191,13 +178,12 @@ export function UserMembershipsDrawerPanel({
           {loading ? (
             <div className="text-[12px] text-[var(--fg-muted)]">Loading memberships...</div>
           ) : memberships.length === 0 ? (
-            // The drawer is tenant-scoped (server filters memberships
-            // to ctx.tenantId). An empty list does NOT mean the user
-            // is a global orphan -- they may exist in other tenants
-            // we deliberately hide. The copy matches the UsersTab
-            // count tooltip so the two surfaces stay consistent.
+            // Under the strict tenant-admin model, admin/user/memberships
+            // 404s for cross-tenant-only users -- so the drawer empty
+            // state can ONLY happen for global orphans (zero live
+            // memberships anywhere). Copy reflects that.
             <div className="text-[12px] text-[var(--fg-muted)]">
-              No memberships in this tenant. This user may exist in other tenants you do not have visibility into.
+              No live memberships. This user cannot log in until added to a team.
             </div>
           ) : (
             <table className="w-full text-sm">
@@ -251,26 +237,16 @@ export function UserMembershipsDrawerPanel({
           {showAdd ? (
             <div className="space-y-2">
               <div className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Add to team</div>
-              <div className="grid grid-cols-3 gap-2">
-                <select
-                  aria-label="Tenant"
-                  className="h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
-                  value={addTenantId}
-                  onChange={(e) => setAddTenantId(e.target.value)}
-                >
-                  <option value="">-- tenant --</option>
-                  {tenants.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
+              {/* Tenant dropdown removed: under the tenant-admin model
+                  the admin can only attach the user to teams in their
+                  own tenant. Team list is pre-loaded from
+                  `callerTenantId`. */}
+              <div className="grid grid-cols-2 gap-2">
                 <select
                   aria-label="Team"
                   className="h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
                   value={addTeamId}
                   onChange={(e) => setAddTeamId(e.target.value)}
-                  disabled={!addTenantId}
                 >
                   <option value="">-- team --</option>
                   {teamsInTenant.map((t) => (
@@ -302,7 +278,6 @@ export function UserMembershipsDrawerPanel({
                   variant="ghost"
                   onClick={() => {
                     setShowAdd(false);
-                    setAddTenantId("");
                     setAddTeamId("");
                     setAddRole("member");
                   }}

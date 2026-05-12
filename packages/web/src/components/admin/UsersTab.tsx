@@ -3,7 +3,7 @@ import { Button } from "../ui/button.js";
 import { useAdminApi } from "./adminApi.js";
 import { useOptionalAuth } from "../../auth/AuthContext.js";
 import { UserMembershipsDrawer } from "./UserMembershipsDrawer.js";
-import type { MembershipRole, Team, Tenant, User } from "./types.js";
+import type { MembershipRole, Team, User } from "./types.js";
 
 interface UsersTabProps {
   onToast?: (msg: string, type: string) => void;
@@ -23,14 +23,15 @@ export function UsersTab({ onToast }: UsersTabProps) {
   // Row-click opens the memberships drawer; null = no drawer open.
   const [drawerUser, setDrawerUser] = useState<User | null>(null);
 
-  // Tenant + team + role are REQUIRED at create time. Orphan users
-  // (no membership) can't log in and don't serve any admin workflow,
-  // so we refuse to mint them from this form. Schema-level orphans
-  // can still arise from cascade soft-deletes or JIT-signup races --
+  // Team + role are REQUIRED at create time. Under the tenant-admin
+  // model the tenant is fixed to the caller's, so we don't pick it;
+  // the form just loads teams in `callerTenantId`. Orphan users (no
+  // membership) can't log in and don't serve any admin workflow, so
+  // we refuse to mint them from this form. Schema-level orphans can
+  // still arise from cascade soft-deletes or JIT-signup races --
   // those are handled by the Users-tab row "Add to team" action.
-  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [teamsInTenant, setTeamsInTenant] = useState<Team[]>([]);
-  const [assignTenantId, setAssignTenantId] = useState<string>("");
+  const assignTenantId = callerTenantId;
   const [assignTeamId, setAssignTeamId] = useState<string>("");
   const [assignRole, setAssignRole] = useState<MembershipRole>("member");
 
@@ -46,48 +47,26 @@ export function UsersTab({ onToast }: UsersTabProps) {
     refresh();
   }, [refresh]);
 
-  // Load the tenant list when the form opens; default to the caller's
-  // own tenant so the most common case (an admin adding a teammate to
-  // their own tenant) is one less click.
+  // Load teams in the caller's tenant when the form opens. The tenant
+  // never changes within a session (tenant-admin model), so a single
+  // load is sufficient.
   useEffect(() => {
-    if (!showNew) return;
-    adminApi
-      .listTenants()
-      .then((ts) => {
-        setTenants(ts);
-        setAssignTenantId((prev) => prev || callerTenantId || "");
-      })
-      .catch(() => setTenants([]));
-  }, [showNew, adminApi, callerTenantId]);
-
-  // Whenever the tenant selection changes, reload its team list and
-  // clear the previously-selected team (which belonged to a different
-  // tenant and would be invalid).
-  useEffect(() => {
-    if (!assignTenantId) {
-      setTeamsInTenant([]);
-      setAssignTeamId("");
-      return;
-    }
+    if (!showNew || !assignTenantId) return;
     adminApi
       .listTeams(assignTenantId)
-      .then((tms) => {
-        setTeamsInTenant(tms);
-      })
+      .then(setTeamsInTenant)
       .catch(() => setTeamsInTenant([]));
-    setAssignTeamId("");
-  }, [assignTenantId, adminApi]);
+  }, [showNew, assignTenantId, adminApi]);
 
-  const canSubmit = useMemo(
-    () => Boolean(email.trim() && assignTenantId && assignTeamId),
-    [email, assignTenantId, assignTeamId],
-  );
+  // `assignTenantId` is `callerTenantId` (const), so it's always
+  // truthy when an admin is signed in -- only `email` and `assignTeamId`
+  // need to gate submit.
+  const canSubmit = useMemo(() => Boolean(email.trim() && assignTeamId), [email, assignTeamId]);
 
   function resetForm() {
     setShowNew(false);
     setEmail("");
     setName("");
-    setAssignTenantId("");
     setAssignTeamId("");
     setAssignRole("member");
   }
@@ -158,26 +137,16 @@ export function UsersTab({ onToast }: UsersTabProps) {
 
           <div className="border-t border-[var(--border)] pt-3 space-y-2">
             <div className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Initial team assignment</div>
-            <div className="grid grid-cols-3 gap-2">
-              <select
-                aria-label="Tenant"
-                className="h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
-                value={assignTenantId}
-                onChange={(e) => setAssignTenantId(e.target.value)}
-              >
-                <option value="">-- tenant --</option>
-                {tenants.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
+            {/* Tenant dropdown removed: the tenant-admin model fixes
+                the tenant to the caller's. The form pre-selects
+                `assignTenantId = callerTenantId` so the existing team
+                dropdown loads correctly. */}
+            <div className="grid grid-cols-2 gap-2">
               <select
                 aria-label="Team"
                 className="h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
                 value={assignTeamId}
                 onChange={(e) => setAssignTeamId(e.target.value)}
-                disabled={!assignTenantId}
               >
                 <option value="">-- team --</option>
                 {teamsInTenant.map((t) => (

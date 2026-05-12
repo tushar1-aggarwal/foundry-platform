@@ -34,28 +34,35 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
 
   // ── Tenants ───────────────────────────────────────────────────────────
 
+  // Tenant-admin model: a tenant admin only sees their own tenant.
+  // The list returns at most one row (or empty if the caller's tenant
+  // somehow doesn't exist -- which would only happen with a stale
+  // bearer token after a tenant delete). System-admin tier deferred.
   router.handle("admin/tenant/list", async (_p, _notify, ctx) => {
     requireAdmin(ctx);
-    return { tenants: await tenants().list() };
+    const tenant = await tenants().get(ctx.tenantId);
+    return { tenants: tenant ? [tenant] : [] };
   });
 
   router.handle("admin/tenant/get", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { id } = extract<{ id: string }>(p, ["id"]);
+    requireSameTenant(ctx, id);
     const tenant = await tenants().get(id);
     if (!tenant) throw new RpcError(`Tenant '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
     return { tenant };
   });
 
-  router.handle("admin/tenant/create", async (p, _notify, ctx) => {
+  // Tenant creation is a system-admin operation. No tenant admin can
+  // mint a new tenant; we keep the route registered so older CLIs get
+  // a useful FORBIDDEN instead of NOT_FOUND, but the operation is
+  // unavailable until a system-admin role exists.
+  router.handle("admin/tenant/create", async (_p, _notify, ctx) => {
     requireAdmin(ctx);
-    const { slug, name, status } = extract<{ slug: string; name: string; status?: TenantStatus }>(p, ["slug", "name"]);
-    try {
-      const tenant = await tenants().create({ slug, name, status });
-      return { tenant };
-    } catch (e: any) {
-      throw new RpcError(e?.message ?? "Failed to create tenant", ErrorCodes.INVALID_PARAMS);
-    }
+    throw new RpcError(
+      "tenant creation requires system-admin role; unavailable in the tenant-admin model",
+      ErrorCodes.FORBIDDEN,
+    );
   });
 
   router.handle("admin/tenant/update", async (p, _notify, ctx) => {
@@ -66,6 +73,7 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
       name?: string;
       status?: TenantStatus;
     }>(p, ["id"]);
+    requireSameTenant(ctx, id);
     const tenant = await tenants().update(id, { slug, name, status });
     if (!tenant) throw new RpcError(`Tenant '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
     return { tenant };
@@ -74,6 +82,7 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
   router.handle("admin/tenant/set-status", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { id, status } = extract<{ id: string; status: TenantStatus }>(p, ["id", "status"]);
+    requireSameTenant(ctx, id);
     const tenant = await tenants().setStatus(id, status);
     if (!tenant) throw new RpcError(`Tenant '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
     return { tenant };
@@ -82,6 +91,7 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
   router.handle("admin/tenant/delete", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { id } = extract<{ id: string }>(p, ["id"]);
+    requireSameTenant(ctx, id);
     const ok = await tenants().delete(id, ctx.userId ?? null);
     return { ok };
   });
@@ -106,6 +116,7 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
   router.handle("admin/team/list", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { tenant_id } = extract<{ tenant_id: string }>(p, ["tenant_id"]);
+    requireSameTenant(ctx, tenant_id);
     return { teams: await teams().listByTenant(tenant_id) };
   });
 
@@ -114,6 +125,7 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
     const { id } = extract<{ id: string }>(p, ["id"]);
     const team = await teams().get(id);
     if (!team) throw new RpcError(`Team '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    requireSameTenant(ctx, team.tenant_id);
     return { team };
   });
 
@@ -125,6 +137,7 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
       name: string;
       description?: string | null;
     }>(p, ["tenant_id", "slug", "name"]);
+    requireSameTenant(ctx, tenant_id);
     const tenant = await tenants().get(tenant_id);
     if (!tenant) throw new RpcError(`Tenant '${tenant_id}' not found`, ErrorCodes.INVALID_PARAMS);
     try {
@@ -143,6 +156,9 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
       name?: string;
       description?: string | null;
     }>(p, ["id"]);
+    const existing = await teams().get(id);
+    if (!existing) throw new RpcError(`Team '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    requireSameTenant(ctx, existing.tenant_id);
     const team = await teams().update(id, { slug, name, description });
     if (!team) throw new RpcError(`Team '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
     return { team };
@@ -151,6 +167,9 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
   router.handle("admin/team/delete", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { id } = extract<{ id: string }>(p, ["id"]);
+    const existing = await teams().get(id);
+    if (!existing) throw new RpcError(`Team '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    requireSameTenant(ctx, existing.tenant_id);
     const ok = await teams().delete(id, ctx.userId ?? null);
     return { ok };
   });
@@ -160,6 +179,9 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
   router.handle("admin/team/members/list", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { team_id } = extract<{ team_id: string }>(p, ["team_id"]);
+    const team = await teams().get(team_id);
+    if (!team) throw new RpcError(`Team '${team_id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    requireSameTenant(ctx, team.tenant_id);
     return { members: await teams().listMembers(team_id) };
   });
 
@@ -191,6 +213,9 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
       email?: string;
       role?: MembershipRole;
     }>(p, ["team_id"]);
+    const team = await teams().get(team_id);
+    if (!team) throw new RpcError(`Team '${team_id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    requireSameTenant(ctx, team.tenant_id);
 
     let resolvedUserId = user_id ?? null;
     if (!resolvedUserId) {
@@ -208,6 +233,9 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
   router.handle("admin/team/members/remove", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { team_id, user_id, email } = extract<{ team_id: string; user_id?: string; email?: string }>(p, ["team_id"]);
+    const team = await teams().get(team_id);
+    if (!team) throw new RpcError(`Team '${team_id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    requireSameTenant(ctx, team.tenant_id);
     let resolvedUserId = user_id ?? null;
     if (!resolvedUserId && email) {
       const user = await users().get(email);
@@ -229,6 +257,9 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
       email?: string;
       role: MembershipRole;
     }>(p, ["team_id", "role"]);
+    const team = await teams().get(team_id);
+    if (!team) throw new RpcError(`Team '${team_id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    requireSameTenant(ctx, team.tenant_id);
     let resolvedUserId = user_id ?? null;
     if (!resolvedUserId && email) {
       const user = await users().get(email);
@@ -245,23 +276,38 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
 
   // ── Users ─────────────────────────────────────────────────────────────
 
-  // Returns every user with a `team_count` annotated against the
-  // caller's tenant. The count is "live teams in ctx.tenantId the
-  // user belongs to". 0 means "no membership in this tenant" -- the
-  // UI surfaces that as the orphan / cross-tenant badge.
+  // Tenant-admin model: returns users in the caller's tenant + global
+  // orphans (zero memberships anywhere). Each row carries `team_count`
+  // scoped to ctx.tenantId. Users that live only in other tenants are
+  // filtered out at the repo so the response never leaks their email
+  // or id across tenants.
   router.handle("admin/user/list", async (_p, _notify, ctx) => {
     requireAdmin(ctx);
-    return { users: await users().listWithTenantTeamCount(ctx.tenantId) };
+    return { users: await users().listInTenantOrOrphanWithTeamCount(ctx.tenantId) };
   });
 
+  // Tenant-admin visibility rule: a user is visible iff (in caller's
+  // tenant) OR (global orphan). Cross-tenant-only users 404 with the
+  // same message as a missing user so existence does not leak.
   router.handle("admin/user/get", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { id } = extract<{ id: string }>(p, ["id"]);
     const user = await users().get(id);
     if (!user) throw new RpcError(`User '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    const stats = await users().tenantMembershipStats(id, ctx.tenantId);
+    const isOrphanGlobal = stats.in_tenant === 0 && stats.out_of_tenant === 0;
+    if (stats.in_tenant === 0 && !isOrphanGlobal) {
+      // Lives only in other tenants -- same 404 shape as missing user.
+      throw new RpcError(`User '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    }
     return { user };
   });
 
+  // Creates a global user identity. Intentionally NOT tenant-gated:
+  // the resulting user has no cross-tenant access by themselves; any
+  // tenant grant happens through admin/team/members/add which IS
+  // gated. The dashboard requires team assignment when creating
+  // through the UI, so the orphan-from-this-path case is rare.
   router.handle("admin/user/create", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { email, name } = extract<{ email: string; name?: string | null }>(p, ["email"]);
@@ -277,30 +323,77 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
   // Joins memberships with teams + tenants so the drawer can render the
   // full (tenant, team, role) shape in one round trip. Live rows only.
   //
-  // Tenant-admin model: results are filtered to ctx.tenantId so an
-  // admin in tenant A never sees tenant-B memberships of the same user
-  // (preserves the consultant pattern at the data layer while keeping
-  // each admin's view scoped to their own tenant). Returning [] for a
-  // user with no membership in the caller's tenant is the safe default;
-  // it does NOT leak whether the user exists elsewhere.
+  // Tenant-admin visibility rule (matches admin/user/get): a user is
+  // visible iff they have ≥1 membership in caller's tenant OR are a
+  // global orphan. Cross-tenant-only users 404 with the same message
+  // as a missing user so the (404, 200+empty) oracle cannot be used
+  // to distinguish "doesn't exist anywhere" from "exists in another
+  // tenant". Results are filtered to ctx.tenantId so a multi-tenant
+  // user's other-tenant rows stay invisible.
   router.handle("admin/user/memberships", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { user_id } = extract<{ user_id: string }>(p, ["user_id"]);
     const user = await users().get(user_id);
     if (!user) throw new RpcError(`User '${user_id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    const stats = await users().tenantMembershipStats(user_id, ctx.tenantId);
+    if (stats.in_tenant === 0 && stats.out_of_tenant > 0) {
+      throw new RpcError(`User '${user_id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    }
     return { memberships: await users().listMemberships(user_id, { tenantId: ctx.tenantId }) };
   });
 
+  // Tenant-admin model: upsert is allowed for new identities and for
+  // identities already visible to the caller (in-tenant + global
+  // orphans). It is NOT allowed to update a cross-tenant-only user's
+  // `name` -- that would graffiti the global identity column visible
+  // to the other tenant's admin. Same 404 mirror as admin/user/get so
+  // existence does not leak.
   router.handle("admin/user/upsert", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { email, name } = extract<{ email: string; name?: string | null }>(p, ["email"]);
+    const existing = await users().get(email);
+    if (existing) {
+      const stats = await users().tenantMembershipStats(existing.id, ctx.tenantId);
+      const isOrphanGlobal = stats.in_tenant === 0 && stats.out_of_tenant === 0;
+      if (stats.in_tenant === 0 && !isOrphanGlobal) {
+        throw new RpcError(`User with email '${email}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+      }
+    }
     const user = await users().upsertByEmail({ email, name });
     return { user };
   });
 
+  // Tenant-admin deletion rule: refuse if the user has memberships in
+  // any tenant outside the caller's. Cascade-soft-delete touches every
+  // membership of the user; letting tenant A's admin trigger that would
+  // damage tenant B's audit trail. To remove a user from THIS tenant
+  // only, the admin should use admin/team/members/remove on each team
+  // membership instead.
+  //
+  // Known TOCTOU window: `tenantMembershipStats` reads at one moment,
+  // `users().delete()` runs later. A tenant-B membership added by tenant-B's
+  // admin in the window between the two would be cascade-soft-deleted by
+  // tenant A's admin. The window is sub-second and requires concurrent
+  // cross-tenant writes; acceptable risk for now. If this becomes a real
+  // concern, gate the cascade on a per-user version column.
   router.handle("admin/user/delete", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { id } = extract<{ id: string }>(p, ["id"]);
+    const user = await users().get(id);
+    if (!user) throw new RpcError(`User '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    const stats = await users().tenantMembershipStats(id, ctx.tenantId);
+    const isOrphanGlobal = stats.in_tenant === 0 && stats.out_of_tenant === 0;
+    if (stats.in_tenant === 0 && !isOrphanGlobal) {
+      // Visibility check first: cross-tenant-only users 404, matching
+      // admin/user/get so existence doesn't leak through the delete path.
+      throw new RpcError(`User '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    }
+    if (stats.out_of_tenant > 0) {
+      throw new RpcError(
+        "user has live memberships in other tenants; remove them from your tenant's teams via admin/team/members/remove instead",
+        ErrorCodes.FORBIDDEN,
+      );
+    }
     const ok = await users().delete(id, ctx.userId ?? null);
     return { ok };
   });

@@ -59,8 +59,11 @@ describe("admin/apikey/* handler gate", () => {
   });
 
   it("admin can create, list, rotate, and revoke an API key end-to-end", async () => {
-    const admin = localAdminContext(null);
+    // Admin context must match the resource's tenant under the
+    // tenant-admin model -- requireSameTenant on every apikey
+    // route now rejects cross-tenant calls.
     const tenantId = `t-apikey-${Date.now()}`;
+    const admin = localAdminContext(tenantId);
 
     // create
     const createRes = (await dispatchAs(
@@ -122,7 +125,9 @@ describe("admin/apikey/* handler gate", () => {
   });
 
   it("create with invalid role throws INVALID_PARAMS", async () => {
-    const admin = localAdminContext(null);
+    // Match tenant so the requireSameTenant guard passes and the role
+    // validation actually runs.
+    const admin = localAdminContext("t-x");
     const res = (await dispatchAs(
       "admin/apikey/create",
       { tenant_id: "t-x", name: "bad", role: "superuser" },

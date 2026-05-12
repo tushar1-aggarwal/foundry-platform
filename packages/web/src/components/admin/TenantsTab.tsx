@@ -17,9 +17,6 @@ export function TenantsTab({ onToast }: TenantsTabProps) {
   const [selected, setSelected] = useState<Tenant | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
   const [tenantUsers, setTenantUsers] = useState<TenantUserRow[]>([]);
-  const [showNew, setShowNew] = useState(false);
-  const [newSlug, setNewSlug] = useState("");
-  const [newName, setNewName] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -51,29 +48,10 @@ export function TenantsTab({ onToast }: TenantsTabProps) {
       .listTenantUsers(selectedId)
       .then(setTenantUsers)
       .catch((e: any) => {
-        // FORBIDDEN here means the admin clicked a tenant they don't
-        // belong to. Until the broader admin/* sweep tightens
-        // `admin/tenant/list`, the left rail shows every tenant; this
-        // toast tells the admin why the panel is empty rather than
-        // silently rendering "no users yet".
         setTenantUsers([]);
         onToast?.(`Failed to load users: ${e?.message ?? e}`, "error");
       });
   }, [adminApi, selectedId, onToast]);
-
-  async function handleCreate() {
-    if (!newSlug.trim() || !newName.trim()) return;
-    try {
-      const t = await adminApi.createTenant({ slug: newSlug.trim(), name: newName.trim() });
-      onToast?.(`Tenant '${t.slug}' created`, "success");
-      setShowNew(false);
-      setNewSlug("");
-      setNewName("");
-      await refresh();
-    } catch (e: any) {
-      onToast?.(`Failed: ${e?.message}`, "error");
-    }
-  }
 
   async function handleStatus(t: Tenant, status: Tenant["status"]) {
     try {
@@ -104,36 +82,14 @@ export function TenantsTab({ onToast }: TenantsTabProps) {
     <div className="flex h-full">
       {/* List */}
       <div className="w-80 border-r border-[var(--border)] overflow-y-auto">
-        <div className="p-3 border-b border-[var(--border)] flex items-center justify-between">
+        <div className="p-3 border-b border-[var(--border)]">
+          {/* Tenant creation is a system-admin operation that the
+              current model does not expose; the tenant-admin model
+              constrains an admin to their own tenant. The rail shows
+              only that tenant. The CLI still surfaces the underlying
+              capability for operators who manage tenants directly. */}
           <div className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Tenants ({tenants.length})</div>
-          <Button size="xs" onClick={() => setShowNew(true)}>
-            + New
-          </Button>
         </div>
-        {showNew && (
-          <div className="p-3 border-b border-[var(--border)] space-y-2 bg-[var(--bg-subtle)]">
-            <input
-              className="w-full h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
-              placeholder="slug (e.g. acme)"
-              value={newSlug}
-              onChange={(e) => setNewSlug(e.target.value)}
-            />
-            <input
-              className="w-full h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
-              placeholder="name"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-            />
-            <div className="flex gap-2">
-              <Button size="xs" onClick={handleCreate}>
-                Create
-              </Button>
-              <Button size="xs" variant="ghost" onClick={() => setShowNew(false)}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
         <div>
           {tenants.map((t) => (
             <button

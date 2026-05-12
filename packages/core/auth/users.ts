@@ -72,13 +72,14 @@ export class UserManager {
   }
 
   /**
-   * List all users with a tenant-scoped team count per row. Used by
-   * the UsersTab Memberships column to surface "N teams" or "no
-   * memberships in this tenant" at a glance.
+   * Tenant-scoped user listing for the UsersTab under the
+   * tenant-admin model: users with ≥1 membership in `tenantId` OR
+   * global orphans. Cross-tenant-only users are filtered out at the
+   * repo. Each row carries a `team_count` scoped to `tenantId`.
    */
-  async listWithTenantTeamCount(tenantId: string): Promise<UserWithTenantTeamCount[]> {
+  async listInTenantOrOrphanWithTeamCount(tenantId: string): Promise<UserWithTenantTeamCount[]> {
     await this.ensureSchema();
-    return this._repo.listWithTenantTeamCount(tenantId);
+    return this._repo.listInTenantOrOrphanWithTeamCount(tenantId);
   }
 
   async get(idOrEmail: string, opts: ListOptions = {}): Promise<User | null> {
@@ -173,5 +174,16 @@ export class UserManager {
   async listTenantUsers(tenantId: string): Promise<TenantUserRow[]> {
     await this.ensureSchema();
     return this._repo.listTenantUsers(tenantId);
+  }
+
+  /**
+   * Counts live memberships for `userId`, split by whether the team's
+   * tenant matches `tenantId`. The tenant-admin handlers for
+   * admin/user/{get,delete} use this to gate visibility + deletion
+   * decisions without two separate queries.
+   */
+  async tenantMembershipStats(userId: string, tenantId: string): Promise<{ in_tenant: number; out_of_tenant: number }> {
+    await this.ensureSchema();
+    return this._memberships.tenantMembershipStats(userId, tenantId);
   }
 }

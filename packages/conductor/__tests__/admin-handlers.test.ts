@@ -68,6 +68,10 @@ describe("admin/* handler gate", () => {
       ["admin/user/delete", { id: "u-x" }],
       ["admin/apikey/list", { tenant_id: "t-x" }],
       ["admin/apikey/delete", { id: "ak-x" }],
+      // revoke is aliased to delete via the same handler; include it
+      // explicitly so a future rename or detached implementation can't
+      // silently lose the anon gate on the alias.
+      ["admin/apikey/revoke", { id: "ak-x" }],
       ["admin/apikey/restore", { id: "ak-x" }],
     ];
 
@@ -97,20 +101,22 @@ describe("admin/* handler gate", () => {
     // Acceptance test for the ctx-plumbing wave: every admin delete path
     // must capture the caller's user id. We dispatch as an admin context
     // with a specific userId and then peek into the DB to confirm the
-    // tombstone carries that id. Restoring the tenant clears both fields.
+    // tombstone carries that id.
+    //
+    // Setup uses `app.tenants.create` directly (NOT the admin/tenant/create
+    // RPC) because tenant creation is now a system-admin operation and the
+    // RPC returns FORBIDDEN under the tenant-admin model. The test's intent
+    // is the delete-path audit, not the create surface.
+    const tenant = await app.tenants.create({
+      slug: "audit-plumb-" + Math.random().toString(36).slice(2, 8),
+      name: "Plumb",
+    });
     const adminAsUser: TenantContext = {
-      tenantId: "default",
+      tenantId: tenant.id,
       userId: "u-auditor-007",
       role: "admin",
       isAdmin: true,
     };
-
-    const create = (await dispatchAs(
-      "admin/tenant/create",
-      { slug: "audit-plumb-" + Math.random().toString(36).slice(2, 8), name: "Plumb" },
-      adminAsUser,
-    )) as JsonRpcResponse;
-    const tenant = (create.result as any).tenant;
 
     const del = (await dispatchAs("admin/tenant/delete", { id: tenant.id }, adminAsUser)) as JsonRpcResponse;
     expect((del.result as any).ok).toBe(true);
@@ -174,6 +180,313 @@ describe("admin/* handler gate", () => {
     };
     const res = (await dispatchAs("admin/tenant/create", { slug: "abc", name: "Acme" }, memberCtx)) as JsonRpcError;
     expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+  });
+
+  describe("tenant-admin cross-tenant gating", () => {
+    // One fixture exercises the requireSameTenant guard across every
+    // tightened endpoint. Two tenants, two teams, two api-keys; an
+    // admin in tenantA tries to act on tenantB's resources and gets
+    // FORBIDDEN. Symmetry-check: admin in tenantB succeeds on the
+    // same resources.
+    const sfx = Math.random().toString(36).slice(2, 8);
+    let tenantA: string;
+    let tenantB: string;
+    let teamAId: string;
+    let teamBId: string;
+    let apikeyAId: string;
+    let apikeyBId: string;
+    let adminA: TenantContext;
+    let adminB: TenantContext;
+
+    beforeAll(async () => {
+      const a = await app.tenants.create({ slug: `xta-${sfx}`, name: "A Co" });
+      const b = await app.tenants.create({ slug: `xtb-${sfx}`, name: "B Co" });
+      tenantA = a.id;
+      tenantB = b.id;
+      const tmA = await app.teams.create({ tenant_id: tenantA, slug: "ta", name: "Team A" });
+      const tmB = await app.teams.create({ tenant_id: tenantB, slug: "tb", name: "Team B" });
+      teamAId = tmA.id;
+      teamBId = tmB.id;
+      const akA = await app.apiKeys.create(tenantA, "keyA", "admin");
+      const akB = await app.apiKeys.create(tenantB, "keyB", "admin");
+      apikeyAId = akA.id;
+      apikeyBId = akB.id;
+      adminA = localAdminContext(tenantA);
+      adminB = localAdminContext(tenantB);
+    });
+
+    // ── admin/tenant/* ───────────────────────────────────────────────────
+
+    it("admin/tenant/list returns only the caller's own tenant", async () => {
+      const res = (await dispatchAs("admin/tenant/list", {}, adminA)) as JsonRpcResponse;
+      const tenants = (res.result as any).tenants as Array<{ id: string }>;
+      expect(tenants.length).toBe(1);
+      expect(tenants[0].id).toBe(tenantA);
+    });
+
+    it("admin/tenant/create is FORBIDDEN for every tenant admin (system-admin op)", async () => {
+      const res = (await dispatchAs("admin/tenant/create", { slug: `x-${sfx}`, name: "X" }, adminA)) as JsonRpcError;
+      expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+      expect(res.error?.message).toMatch(/system-admin/i);
+    });
+
+    it("admin/tenant/{get,update,set-status,delete} FORBIDDEN cross-tenant", async () => {
+      for (const method of [
+        ["admin/tenant/get", { id: tenantB }],
+        ["admin/tenant/update", { id: tenantB, name: "renamed" }],
+        ["admin/tenant/set-status", { id: tenantB, status: "suspended" }],
+        ["admin/tenant/delete", { id: tenantB }],
+      ] as const) {
+        const res = (await dispatchAs(method[0], method[1], adminA)) as JsonRpcError;
+        expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+      }
+    });
+
+    // ── admin/team/* ──────────────────────────────────────────────────────
+
+    it("admin/team/list rejects cross-tenant tenant_id", async () => {
+      const res = (await dispatchAs("admin/team/list", { tenant_id: tenantB }, adminA)) as JsonRpcError;
+      expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+    });
+
+    it("admin/team/{get,update,delete} reject cross-tenant team_id", async () => {
+      for (const method of [
+        ["admin/team/get", { id: teamBId }],
+        ["admin/team/update", { id: teamBId, name: "renamed" }],
+        ["admin/team/delete", { id: teamBId }],
+      ] as const) {
+        const res = (await dispatchAs(method[0], method[1], adminA)) as JsonRpcError;
+        expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+      }
+    });
+
+    it("admin/team/create rejects cross-tenant tenant_id", async () => {
+      const res = (await dispatchAs(
+        "admin/team/create",
+        { tenant_id: tenantB, slug: `t-${sfx}`, name: "X" },
+        adminA,
+      )) as JsonRpcError;
+      expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+    });
+
+    // ── admin/team/members/* ──────────────────────────────────────────────
+
+    it("admin/team/members/{list,add,remove,set-role} reject cross-tenant team_id", async () => {
+      for (const method of [
+        ["admin/team/members/list", { team_id: teamBId }],
+        ["admin/team/members/add", { team_id: teamBId, email: `x-${sfx}@x.com` }],
+        ["admin/team/members/remove", { team_id: teamBId, email: `x-${sfx}@x.com` }],
+        ["admin/team/members/set-role", { team_id: teamBId, email: `x-${sfx}@x.com`, role: "member" }],
+      ] as const) {
+        const res = (await dispatchAs(method[0], method[1], adminA)) as JsonRpcError;
+        expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+      }
+    });
+
+    // ── admin/apikey/* ────────────────────────────────────────────────────
+
+    it("admin/apikey/list rejects cross-tenant tenant_id", async () => {
+      const res = (await dispatchAs("admin/apikey/list", { tenant_id: tenantB }, adminA)) as JsonRpcError;
+      expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+    });
+
+    it("admin/apikey/create rejects cross-tenant tenant_id", async () => {
+      const res = (await dispatchAs("admin/apikey/create", { tenant_id: tenantB, name: "x" }, adminA)) as JsonRpcError;
+      expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+    });
+
+    it("admin/apikey/{delete,restore,rotate} reject when caller-supplied tenant_id mismatches", async () => {
+      for (const method of [
+        ["admin/apikey/delete", { id: apikeyBId, tenant_id: tenantB }],
+        // revoke is aliased to delete; include both names so the
+        // cross-tenant gate is exercised through every public route.
+        ["admin/apikey/revoke", { id: apikeyBId, tenant_id: tenantB }],
+        ["admin/apikey/restore", { id: apikeyBId, tenant_id: tenantB }],
+        ["admin/apikey/rotate", { id: apikeyBId, tenant_id: tenantB }],
+      ] as const) {
+        const res = (await dispatchAs(method[0], method[1], adminA)) as JsonRpcError;
+        expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+      }
+    });
+
+    it("admin/apikey/delete without explicit tenant_id still scopes to ctx.tenantId (no cross-tenant op)", async () => {
+      // Caller in tenantA omits the optional tenant_id, targeting an
+      // apikey that lives in tenantB. The handler forwards
+      // ctx.tenantId="tenantA" to the manager, so the manager's
+      // lookup misses (apikey is in tenantB) and the call returns
+      // ok=false rather than silently deleting tenantB's key.
+      const res = (await dispatchAs("admin/apikey/delete", { id: apikeyBId }, adminA)) as JsonRpcResponse;
+      expect((res.result as any).ok).toBe(false);
+      // And the apikey row in tenantB is still alive.
+      const k = (await app.db.prepare("SELECT deleted_at FROM api_keys WHERE id = ?").get(apikeyBId)) as
+        | { deleted_at: string | null }
+        | undefined;
+      expect(k?.deleted_at).toBeNull();
+    });
+
+    // ── Symmetry: admin in the resource's own tenant succeeds ────────────
+
+    it("admin in resource's tenant can act -- symmetry check", async () => {
+      const list = (await dispatchAs("admin/team/list", { tenant_id: tenantB }, adminB)) as JsonRpcResponse;
+      expect((list.result as any).teams).toBeDefined();
+      const get = (await dispatchAs("admin/team/get", { id: teamBId }, adminB)) as JsonRpcResponse;
+      expect((get.result as any).team.id).toBe(teamBId);
+      const akList = (await dispatchAs("admin/apikey/list", { tenant_id: tenantB }, adminB)) as JsonRpcResponse;
+      expect((akList.result as any).keys).toBeDefined();
+    });
+  });
+
+  describe("admin/user/{get,delete} tenant-admin visibility", () => {
+    // Tests that `admin/user/get` 404s for cross-tenant-only users
+    // (so existence doesn't leak through that path either) and that
+    // `admin/user/delete` refuses when the user has memberships in
+    // other tenants (cascade would damage another tenant's audit
+    // trail).
+    const sfx = Math.random().toString(36).slice(2, 8);
+    let tenantA: string;
+    let tenantB: string;
+    let userOnlyB: string;
+    let userMulti: string;
+    let userOnlyA: string;
+    let userOrphan: string;
+    let adminA: TenantContext;
+
+    beforeAll(async () => {
+      const a = await app.tenants.create({ slug: `ugv-${sfx}`, name: "Get/Visibility A" });
+      const b = await app.tenants.create({ slug: `ugvb-${sfx}`, name: "Get/Visibility B" });
+      tenantA = a.id;
+      tenantB = b.id;
+      const tmA = await app.teams.create({ tenant_id: tenantA, slug: "ta", name: "T A" });
+      const tmB = await app.teams.create({ tenant_id: tenantB, slug: "tb", name: "T B" });
+      const onlyB = await app.users.upsertByEmail({ email: `onlyb-${sfx}@x.com`, name: "OnlyB" });
+      const multi = await app.users.upsertByEmail({ email: `multi-${sfx}@x.com`, name: "Multi" });
+      const onlyA = await app.users.upsertByEmail({ email: `onlya-${sfx}@x.com`, name: "OnlyA" });
+      const orphan = await app.users.upsertByEmail({ email: `orph-${sfx}@x.com`, name: "Orph" });
+      userOnlyB = onlyB.id;
+      userMulti = multi.id;
+      userOnlyA = onlyA.id;
+      userOrphan = orphan.id;
+      await app.teams.addMember(tmB.id, userOnlyB, "member");
+      await app.teams.addMember(tmA.id, userMulti, "admin");
+      await app.teams.addMember(tmB.id, userMulti, "viewer");
+      await app.teams.addMember(tmA.id, userOnlyA, "admin");
+      adminA = localAdminContext(tenantA);
+    });
+
+    it("admin/user/get 404s for cross-tenant-only users", async () => {
+      const res = (await dispatchAs("admin/user/get", { id: userOnlyB }, adminA)) as JsonRpcError;
+      expect(res.error?.code).toBe(ErrorCodes.SESSION_NOT_FOUND);
+    });
+
+    it("admin/user/get: 404 message is identical for missing and cross-tenant-only users (no oracle)", async () => {
+      // The whole point of the SESSION_NOT_FOUND mirror is that an
+      // attacker can't distinguish "user doesn't exist anywhere" from
+      // "user exists in another tenant" by the response. Lock the
+      // message-equality contract so a future refactor that diverges
+      // them shows up in CI.
+      const missing = (await dispatchAs("admin/user/get", { id: "u-totally-fake-id" }, adminA)) as JsonRpcError;
+      const crossTenant = (await dispatchAs("admin/user/get", { id: userOnlyB }, adminA)) as JsonRpcError;
+      expect(missing.error?.code).toBe(ErrorCodes.SESSION_NOT_FOUND);
+      expect(crossTenant.error?.code).toBe(ErrorCodes.SESSION_NOT_FOUND);
+      // Same code, different ids -- but the message template must not
+      // include any cross-tenant cue. (Messages differ by id only.)
+      expect(missing.error?.message).toMatch(/User '[^']+' not found/);
+      expect(crossTenant.error?.message).toMatch(/User '[^']+' not found/);
+    });
+
+    it("admin/user/memberships: 404 message is identical for missing and cross-tenant-only users", async () => {
+      // Same oracle-collapse guarantee as admin/user/get, for the
+      // memberships endpoint. Both paths must produce the same
+      // structural error.
+      const missing = (await dispatchAs(
+        "admin/user/memberships",
+        { user_id: "u-totally-fake-id" },
+        adminA,
+      )) as JsonRpcError;
+      const crossTenant = (await dispatchAs("admin/user/memberships", { user_id: userOnlyB }, adminA)) as JsonRpcError;
+      expect(missing.error?.code).toBe(ErrorCodes.SESSION_NOT_FOUND);
+      expect(crossTenant.error?.code).toBe(ErrorCodes.SESSION_NOT_FOUND);
+      expect(missing.error?.message).toMatch(/User '[^']+' not found/);
+      expect(crossTenant.error?.message).toMatch(/User '[^']+' not found/);
+    });
+
+    it("admin/user/get returns in-tenant users", async () => {
+      const res = (await dispatchAs("admin/user/get", { id: userOnlyA }, adminA)) as JsonRpcResponse;
+      expect((res.result as any).user.id).toBe(userOnlyA);
+    });
+
+    it("admin/user/get returns global orphans (admin can re-attach)", async () => {
+      const res = (await dispatchAs("admin/user/get", { id: userOrphan }, adminA)) as JsonRpcResponse;
+      expect((res.result as any).user.id).toBe(userOrphan);
+    });
+
+    it("admin/user/upsert 404s for cross-tenant-only users (no name graffiti across tenants)", async () => {
+      // Adversarial-review finding: upsertByEmail updates a user's
+      // `name` column if it differs. Without a visibility gate, an
+      // admin in tenant A could rewrite the global `name` of a user
+      // who lives only in tenant B -- visible to B's admin. Same 404
+      // mirror as admin/user/get; the user's name is unchanged.
+      const onlyBUser = await app.users.get(userOnlyB);
+      const originalName = onlyBUser?.name ?? null;
+      const res = (await dispatchAs(
+        "admin/user/upsert",
+        { email: onlyBUser!.email, name: "PWNED" },
+        adminA,
+      )) as JsonRpcError;
+      expect(res.error?.code).toBe(ErrorCodes.SESSION_NOT_FOUND);
+      const after = await app.users.get(userOnlyB);
+      expect(after?.name).toBe(originalName);
+    });
+
+    it("admin/user/upsert updates the name for in-tenant users", async () => {
+      // Symmetric: an admin acting on a user in their own tenant
+      // can update the name.
+      const onlyAUser = await app.users.get(userOnlyA);
+      const res = (await dispatchAs(
+        "admin/user/upsert",
+        { email: onlyAUser!.email, name: "Renamed" },
+        adminA,
+      )) as JsonRpcResponse;
+      expect((res.result as any).user.name).toBe("Renamed");
+    });
+
+    it("admin/user/upsert can create a brand-new user (no pre-existing row)", async () => {
+      // Permissive on create: there's no existing identity to gate
+      // against, and the new row carries no cross-tenant access.
+      const sfxLocal = Math.random().toString(36).slice(2, 6);
+      const res = (await dispatchAs(
+        "admin/user/upsert",
+        { email: `brandnew-${sfxLocal}@x.com`, name: "Brand New" },
+        adminA,
+      )) as JsonRpcResponse;
+      expect((res.result as any).user.email).toBe(`brandnew-${sfxLocal}@x.com`);
+    });
+
+    it("admin/user/delete FORBIDDEN when user has memberships outside caller's tenant", async () => {
+      const res = (await dispatchAs("admin/user/delete", { id: userMulti }, adminA)) as JsonRpcError;
+      expect(res.error?.code).toBe(ErrorCodes.FORBIDDEN);
+      expect(res.error?.message).toMatch(/other tenants/i);
+      // User row still alive.
+      const row = (await app.db.prepare("SELECT deleted_at FROM users WHERE id = ?").get(userMulti)) as
+        | { deleted_at: string | null }
+        | undefined;
+      expect(row?.deleted_at).toBeNull();
+    });
+
+    it("admin/user/delete 404s for cross-tenant-only users", async () => {
+      const res = (await dispatchAs("admin/user/delete", { id: userOnlyB }, adminA)) as JsonRpcError;
+      expect(res.error?.code).toBe(ErrorCodes.SESSION_NOT_FOUND);
+    });
+
+    it("admin/user/delete succeeds for in-tenant-only users", async () => {
+      const res = (await dispatchAs("admin/user/delete", { id: userOnlyA }, adminA)) as JsonRpcResponse;
+      expect((res.result as any).ok).toBe(true);
+    });
+
+    it("admin/user/delete succeeds for global orphans", async () => {
+      const res = (await dispatchAs("admin/user/delete", { id: userOrphan }, adminA)) as JsonRpcResponse;
+      expect((res.result as any).ok).toBe(true);
+    });
   });
 
   describe("admin/team/members/search", () => {
@@ -424,13 +737,13 @@ describe("admin/* handler gate", () => {
       expect((res.result as any).memberships).toEqual([]);
     });
 
-    it("returns [] when the user exists but has no memberships in the caller's tenant", async () => {
-      // userBoth is fully in memTenant; an admin in otherTenant calling
-      // memberships for them sees an empty list -- NOT a 404 (the user
-      // really does exist; the endpoint is tenant-scoped, not
-      // existence-scoped).
-      const res = (await dispatchAs("admin/user/memberships", { user_id: userBoth }, adminInOther)) as JsonRpcResponse;
-      expect((res.result as any).memberships).toEqual([]);
+    it("404s for cross-tenant-only users (same message as missing user, no existence leak)", async () => {
+      // userBoth has memberships only in memTenant. An admin in
+      // otherTenant must not be able to distinguish "user doesn't
+      // exist anywhere" (404) from "user exists in another tenant"
+      // (200 + empty) -- the response shapes are identical.
+      const res = (await dispatchAs("admin/user/memberships", { user_id: userBoth }, adminInOther)) as JsonRpcError;
+      expect(res.error?.code).toBe(ErrorCodes.SESSION_NOT_FOUND);
     });
 
     it("404s when the user_id does not exist", async () => {
@@ -517,12 +830,11 @@ describe("admin/* handler gate", () => {
     });
   });
 
-  describe("admin/user/list (team_count enrichment)", () => {
-    // The Memberships column on UsersTab depends on the list endpoint
-    // returning `team_count` per user, scoped to ctx.tenantId. A user
-    // who's only in another tenant should show team_count=0 from this
-    // tenant's perspective, NOT a 404 -- they exist, they just aren't
-    // here.
+  describe("admin/user/list (tenant-admin visibility + team_count)", () => {
+    // The UsersTab list depends on the endpoint returning users in the
+    // caller's tenant OR global orphans, never users that live only in
+    // other tenants. Each row carries `team_count` scoped to
+    // ctx.tenantId.
     const sfx = Math.random().toString(36).slice(2, 8);
     let listTenantId: string;
     let elsewhereTenantId: string;
@@ -563,32 +875,37 @@ describe("admin/* handler gate", () => {
       adminInListTenant = localAdminContext(listTenantId);
     });
 
-    it("annotates each user with team_count scoped to ctx.tenantId", async () => {
+    it("returns in-tenant users + global orphans; hides cross-tenant-only users", async () => {
       const res = (await dispatchAs("admin/user/list", {}, adminInListTenant)) as JsonRpcResponse;
       const all = (res.result as any).users as Array<{ id: string; team_count: number }>;
       const byId = new Map(all.map((u) => [u.id, u.team_count]));
 
-      // In-tenant user: one team in this tenant.
+      // In-tenant user: visible with team_count=1.
       expect(byId.get(userInTenantId)).toBe(1);
-      // Multi user: two teams in this tenant (third is in elsewhere,
+      // Multi user: visible with team_count=2 (third team is in elsewhere,
       // must NOT be counted from this tenant's vantage).
       expect(byId.get(userMultiId)).toBe(2);
-      // Elsewhere-only user: zero in this tenant.
-      expect(byId.get(userElsewhereId)).toBe(0);
-      // Orphan: zero everywhere.
+      // Orphan: visible with team_count=0 (admin can re-attach).
       expect(byId.get(userOrphanId)).toBe(0);
+      // Elsewhere-only user: HIDDEN from this tenant's list (would leak
+      // cross-tenant email/id otherwise).
+      expect(byId.has(userElsewhereId)).toBe(false);
     });
 
-    it("same user yields a different team_count when listed from another tenant's vantage", async () => {
+    it("same user yields a different team_count + visibility from another tenant's vantage", async () => {
       const adminElsewhere = localAdminContext(elsewhereTenantId);
       const res = (await dispatchAs("admin/user/list", {}, adminElsewhere)) as JsonRpcResponse;
       const all = (res.result as any).users as Array<{ id: string; team_count: number }>;
       const byId = new Map(all.map((u) => [u.id, u.team_count]));
-      // From elsewhere's vantage: multi has 1 team here (was 2 from list-tenant);
-      // elsewhere user has 1 (was 0 from list-tenant); inT has 0 (was 1).
+      // From elsewhere's vantage:
+      //   - multi has 1 team here (was 2 from list-tenant); visible.
+      //   - elsewhere user has 1 here (was hidden from list-tenant); visible.
+      //   - inT has 0 here (was 1); HIDDEN (lives only in list-tenant now).
       expect(byId.get(userMultiId)).toBe(1);
       expect(byId.get(userElsewhereId)).toBe(1);
-      expect(byId.get(userInTenantId)).toBe(0);
+      expect(byId.has(userInTenantId)).toBe(false);
+      // Orphan still visible (orphans are globally visible).
+      expect(byId.get(userOrphanId)).toBe(0);
     });
   });
 });

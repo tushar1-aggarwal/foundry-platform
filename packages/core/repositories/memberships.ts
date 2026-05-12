@@ -180,6 +180,37 @@ export class MembershipRepository {
   }
 
   /**
+   * Counts live memberships for `userId`, split by whether the team's
+   * tenant matches `tenantId`. Used by tenant-admin gating on the user
+   * surface:
+   *   - admin/user/get is visible iff `in_tenant > 0 || total === 0`
+   *     (in-tenant OR global orphan; cross-tenant-only users 404 to
+   *     prevent existence leaks).
+   *   - admin/user/delete is allowed iff `out_of_tenant === 0` (no
+   *     memberships outside the caller's tenant; otherwise we'd
+   *     cascade-soft-delete rows belonging to other tenants).
+   *
+   * One JOIN, no LIMIT -- the table is small per user (handful of teams).
+   */
+  async tenantMembershipStats(userId: string, tenantId: string): Promise<{ in_tenant: number; out_of_tenant: number }> {
+    const d = this.d();
+    const m = d.schema.memberships;
+    const t = d.schema.teams;
+    const rows = (await (d.db as any)
+      .select({ tenantId: t.tenantId })
+      .from(m)
+      .innerJoin(t, eq(t.id, m.teamId))
+      .where(and(eq(m.userId, userId), isNull(m.deletedAt), isNull(t.deletedAt)))) as Array<{ tenantId: string }>;
+    let in_tenant = 0;
+    let out_of_tenant = 0;
+    for (const r of rows) {
+      if (r.tenantId === tenantId) in_tenant++;
+      else out_of_tenant++;
+    }
+    return { in_tenant, out_of_tenant };
+  }
+
+  /**
    * Cheap tenant-membership check: returns true iff the user has at
    * least one live membership in a live team belonging to `tenantId`.
    * One JOIN, LIMIT 1 -- the only callers are admin write paths

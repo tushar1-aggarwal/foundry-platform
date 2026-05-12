@@ -32,7 +32,7 @@ import type { Router } from "../router.js";
 import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
-import { requireAdmin } from "../../core/auth/context.js";
+import { requireAdmin, requireSameTenant } from "../../core/auth/context.js";
 import type { ApiKey } from "../../types/index.js";
 
 type ApiKeyRole = "admin" | "member" | "viewer";
@@ -70,6 +70,7 @@ export function registerAdminApiKeyHandlers(router: Router, app: AppContext): vo
   router.handle("admin/apikey/list", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { tenant_id, include_deleted } = extract<{ tenant_id: string; include_deleted?: boolean }>(p, ["tenant_id"]);
+    requireSameTenant(ctx, tenant_id);
     const keys = await app.apiKeys.list(tenant_id, { includeDeleted: !!include_deleted });
     return { keys: keys.map(projectKey) };
   });
@@ -83,6 +84,7 @@ export function registerAdminApiKeyHandlers(router: Router, app: AppContext): vo
       role?: string;
       expires_at?: string;
     }>(p, ["tenant_id", "name"]);
+    requireSameTenant(ctx, tenant_id);
     const r = assertRole(role);
     try {
       const { id, key } = await app.apiKeys.create(tenant_id, name, r, expires_at);
@@ -101,10 +103,16 @@ export function registerAdminApiKeyHandlers(router: Router, app: AppContext): vo
   // `doDelete` matches the Handler shape (params, notify, ctx) so both
   // `admin/apikey/delete` and the back-compat `admin/apikey/revoke` alias
   // can share the body.
+  // Tenant-admin gate: if the caller supplied `tenant_id` explicitly,
+  // it must match `ctx.tenantId`. Either way we forward `ctx.tenantId`
+  // to the manager so the operation is always tenant-scoped --
+  // callers cannot widen the action to a missing-tenantId global by
+  // omitting the param.
   const doDelete: import("../router.js").Handler = async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { id, tenant_id } = extract<{ id: string; tenant_id?: string }>(p, ["id"]);
-    const ok = await app.apiKeys.revoke(id, tenant_id, ctx.userId ?? null);
+    if (tenant_id) requireSameTenant(ctx, tenant_id);
+    const ok = await app.apiKeys.revoke(id, ctx.tenantId, ctx.userId ?? null);
     return { ok };
   };
 
@@ -116,7 +124,8 @@ export function registerAdminApiKeyHandlers(router: Router, app: AppContext): vo
   router.handle("admin/apikey/restore", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { id, tenant_id } = extract<{ id: string; tenant_id?: string }>(p, ["id"]);
-    const ok = await app.apiKeys.restore(id, tenant_id);
+    if (tenant_id) requireSameTenant(ctx, tenant_id);
+    const ok = await app.apiKeys.restore(id, ctx.tenantId);
     return { ok };
   });
 
@@ -124,7 +133,8 @@ export function registerAdminApiKeyHandlers(router: Router, app: AppContext): vo
   router.handle("admin/apikey/rotate", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { id, tenant_id } = extract<{ id: string; tenant_id?: string }>(p, ["id"]);
-    const result = await app.apiKeys.rotate(id, tenant_id);
+    if (tenant_id) requireSameTenant(ctx, tenant_id);
+    const result = await app.apiKeys.rotate(id, ctx.tenantId);
     if (!result) {
       throw new RpcError(`API key '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
     }

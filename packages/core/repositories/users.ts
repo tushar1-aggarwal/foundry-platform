@@ -39,12 +39,12 @@ export interface TenantUserRow {
 }
 
 /**
- * Row returned by `listWithTenantTeamCount` -- the user row plus a
- * count of how many DISTINCT live teams in `tenantId` the user
- * currently belongs to. `team_count === 0` means "no memberships in
- * this tenant" (either an orphan globally OR a member of another
- * tenant only -- the UI doesn't distinguish, to avoid cross-tenant
- * existence leaks).
+ * Row returned by `listInTenantOrOrphanWithTeamCount` -- the user row
+ * plus a count of how many DISTINCT live teams in `tenantId` the user
+ * currently belongs to. `team_count === 0` only appears on global
+ * orphans (zero live memberships anywhere); users whose only
+ * memberships live in other tenants are filtered out of the result
+ * so cross-tenant emails / ids don't leak.
  */
 export interface UserWithTenantTeamCount extends UserRow {
   team_count: number;
@@ -195,17 +195,24 @@ export class UserRepository {
   }
 
   /**
-   * Full user list annotated with a tenant-scoped team count per row.
-   * The count is the number of DISTINCT live teams in `tenantId` the
-   * user currently belongs to (live membership + live team). Used by
-   * the UsersTab `Memberships` column so admins can spot orphans at
-   * a glance without opening the drawer.
+   * Tenant-scoped user listing for the UsersTab under the
+   * tenant-admin model. Returns live users matching the visibility
+   * rule:
+   *   - users with ≥1 live membership in `tenantId` (annotated with
+   *     a non-zero `team_count`), OR
+   *   - global orphans (zero live memberships anywhere; `team_count`
+   *     is 0; still surfaced so admins can re-attach cascade-orphans).
    *
-   * Two queries: one for users (sorted by email), one GROUP BY for
-   * counts. Merged in JS. Avoids drizzle's subquery JOIN gymnastics
-   * and matches the two-query style used by `searchByTenant`.
+   * Users that exist only in OTHER tenants are filtered out -- a
+   * tenant admin must not see emails / ids outside their tenant.
+   *
+   * Three queries: one for users sorted by email, one GROUP BY for the
+   * tenant-scoped count, one GROUP BY (id-only) for a global-membership
+   * existence check. Merged in JS. Mirrors `searchByTenant`'s
+   * orphan-admission logic; the extra query is the cheapest way to
+   * separate "no memberships anywhere" from "lives only elsewhere".
    */
-  async listWithTenantTeamCount(tenantId: string): Promise<UserWithTenantTeamCount[]> {
+  async listInTenantOrOrphanWithTeamCount(tenantId: string): Promise<UserWithTenantTeamCount[]> {
     const d = this.d();
     const u = d.schema.users;
     const m = d.schema.memberships;
@@ -217,18 +224,39 @@ export class UserRepository {
       .orderBy(asc(u.email))) as DrizzleSelectUser[];
     if (userRows.length === 0) return [];
     const userIds = userRows.map((r) => r.id);
-    // COUNT(DISTINCT team_id) per user. SQLite's count(DISTINCT) is
+    // Tenant-scoped team count per user. SQLite's count(DISTINCT) is
     // expressed via sql template since drizzle's count() helper doesn't
     // accept the DISTINCT modifier as of the version pinned here.
-    const counts = (await (d.db as any)
+    const tenantCounts = (await (d.db as any)
       .select({ userId: m.userId, count: sql<number>`COUNT(DISTINCT ${m.teamId})` })
       .from(m)
       .innerJoin(t, eq(t.id, m.teamId))
       .where(and(inArray(m.userId, userIds), isNull(m.deletedAt), isNull(t.deletedAt), eq(t.tenantId, tenantId)))
       .groupBy(m.userId)) as Array<{ userId: string; count: number }>;
-    const countByUser = new Map<string, number>();
-    for (const c of counts) countByUser.set(c.userId, Number(c.count));
-    return userRows.map((row) => ({ ...toPublic(row), team_count: countByUser.get(row.id) ?? 0 }));
+    const tenantCountByUser = new Map<string, number>();
+    for (const c of tenantCounts) tenantCountByUser.set(c.userId, Number(c.count));
+    // Existence check for ANY live membership -- to admit global
+    // orphans. Join `teams` and filter on `team.deleted_at IS NULL`
+    // too: a membership pointing at a soft-deleted team is a data
+    // integrity violation (the cascade prevents it), but belt-and-
+    // braces protects against silently hiding such a user if it ever
+    // happens. Without the join the user would get
+    // hasAnyMembership=true && team_count=0 and be excluded.
+    const anyMemRows = (await (d.db as any)
+      .select({ userId: m.userId })
+      .from(m)
+      .innerJoin(t, eq(t.id, m.teamId))
+      .where(and(inArray(m.userId, userIds), isNull(m.deletedAt), isNull(t.deletedAt)))) as Array<{ userId: string }>;
+    const hasAnyMembership = new Set<string>();
+    for (const r of anyMemRows) hasAnyMembership.add(r.userId);
+    const out: UserWithTenantTeamCount[] = [];
+    for (const row of userRows) {
+      const team_count = tenantCountByUser.get(row.id) ?? 0;
+      const isOrphanGlobal = !hasAnyMembership.has(row.id);
+      if (team_count === 0 && !isOrphanGlobal) continue; // lives only in other tenants
+      out.push({ ...toPublic(row), team_count });
+    }
+    return out;
   }
 
   /**

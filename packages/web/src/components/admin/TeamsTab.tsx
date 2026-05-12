@@ -48,12 +48,12 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
     [adminApi, onToast],
   );
 
-  // Selection-clearing on tenant switch is driven by the dropdown
-  // handler, NOT this effect. Earlier we did `setSelected(null)` here,
-  // which fired whenever `refreshTeams`'s identity changed -- and that
-  // identity tracks `onToast`, which flips on every App re-render
-  // (daemon poll, theme toggle, etc.). The result was the detail panel
-  // closing mid-click. Keep this effect data-only.
+  // Data-only effect. Earlier this also did `setSelected(null)`,
+  // which fired whenever `refreshTeams`'s identity changed -- and
+  // that identity tracks `onToast`, which flips on every App
+  // re-render (daemon poll, theme toggle, etc.). The result was the
+  // detail panel closing mid-click. Selection clearing now happens
+  // explicitly on the user-action paths.
   useEffect(() => {
     refreshTeams(tenantId);
   }, [tenantId, refreshTeams]);
@@ -76,11 +76,14 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
   }, [refreshMembers]);
 
   async function handleCreate() {
-    const targetTenant = newTenantId || tenantId;
-    if (!targetTenant || !newSlug.trim() || !newName.trim()) return;
+    // Under the tenant-admin model the form's tenant is fixed to the
+    // caller's tenant (the dropdown collapsed to a static row), so
+    // `newTenantId === tenantId` always. No cross-tenant-targeted
+    // create path remains; we just refresh the team list in place.
+    if (!tenantId || !newSlug.trim() || !newName.trim()) return;
     try {
       const team = await adminApi.createTeam({
-        tenant_id: targetTenant,
+        tenant_id: tenantId,
         slug: newSlug.trim(),
         name: newName.trim(),
         description: newDesc.trim() || null,
@@ -91,13 +94,7 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
       setNewSlug("");
       setNewName("");
       setNewDesc("");
-      // Switch the visible tenant filter to wherever the team landed,
-      // so the freshly-created team appears in the list immediately.
-      if (targetTenant !== tenantId) {
-        setTenantId(targetTenant);
-      } else {
-        await refreshTeams(tenantId);
-      }
+      await refreshTeams(tenantId);
     } catch (e: any) {
       onToast?.(`Failed: ${e?.message}`, "error");
     }
@@ -142,25 +139,14 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
     <div className="flex h-full">
       <div className="w-80 border-r border-[var(--border)] overflow-y-auto">
         <div className="p-3 border-b border-[var(--border)] space-y-2">
+          {/* Under the tenant-admin model the admin only sees their
+              own tenant, so the previous tenant dropdown collapses to
+              a static label showing which tenant the rail is anchored
+              on. The selected `tenantId` still drives the team query. */}
           <label className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Tenant</label>
-          <select
-            className="w-full h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
-            value={tenantId}
-            onChange={(e) => {
-              setTenantId(e.target.value);
-              // User-driven tenant change invalidates the current team
-              // selection (which belongs to the previous tenant). Reset
-              // here, not in the data-load effect, so unrelated re-renders
-              // don't wipe the selection.
-              setSelected(null);
-            }}
-          >
-            {tenants.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.slug})
-              </option>
-            ))}
-          </select>
+          <div className="h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg-subtle)] flex items-center">
+            {tenants.find((t) => t.id === tenantId)?.name ?? <span className="text-[var(--fg-muted)]">Loading...</span>}
+          </div>
           <div className="flex items-center justify-between">
             <div className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Teams ({teams.length})</div>
             <Button
@@ -177,20 +163,14 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
         </div>
         {showNew && (
           <div className="p-3 border-b border-[var(--border)] space-y-2 bg-[var(--bg-subtle)]">
+            {/* `newTenantId` is set when the form opens (defaults to the
+                caller's tenant). We render a static row instead of a
+                dropdown since under the tenant-admin model there is only
+                one tenant to pick. */}
             <label className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Tenant</label>
-            <select
-              aria-label="Tenant for new team"
-              className="w-full h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
-              value={newTenantId}
-              onChange={(e) => setNewTenantId(e.target.value)}
-            >
-              <option value="">-- pick a tenant --</option>
-              {tenants.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.slug})
-                </option>
-              ))}
-            </select>
+            <div className="h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)] flex items-center">
+              {tenants.find((t) => t.id === newTenantId)?.name ?? newTenantId}
+            </div>
             <input
               className="w-full h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
               placeholder="slug"

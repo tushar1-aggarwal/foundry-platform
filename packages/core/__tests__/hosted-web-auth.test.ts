@@ -70,9 +70,12 @@ describe("hosted/web: TenantContext threading", () => {
   });
 
   it("admin-role token succeeds on admin/tenant/list", async () => {
-    // t-admins does not exist as a tenant row, but the handler list method
-    // returns every tenant regardless of the admin's tenant_id -- only the
-    // admin gate matters for authZ.
+    // Under the tenant-admin model the handler returns only the
+    // caller's own tenant (one row, or empty if that tenant doesn't
+    // exist in the tenants table -- as is the case here, since
+    // `t-admins` is an apikey-row tenant_id without a backing
+    // tenants row). The point of this test is that the admin gate
+    // passes and the call resolves rather than throws.
     const data = await rpc("admin/tenant/list", {}, adminKey);
     expect(data.error).toBeUndefined();
     expect(data.result).toBeDefined();
