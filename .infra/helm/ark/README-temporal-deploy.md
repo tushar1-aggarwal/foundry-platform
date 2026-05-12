@@ -57,6 +57,23 @@ kubectl -n ark exec deploy/temporal-server -- temporal operator namespace list
 
 Expected: all pods Running, namespace list includes the configured namespaces.
 
+## Accessing the Temporal UI
+
+The chart deploys the Temporal UI Deployment + ClusterIP Service (`temporal-ui:8080`)
+but does NOT route it through the main ingress by default. Reason: the UI image
+serves at `/` and the prod ingress would forward `/temporal/...` to the backend
+unchanged (404). Two ways to expose it safely:
+
+- **Port-forward** (operator/dev access):
+  ```bash
+  kubectl -n ark port-forward svc/temporal-ui 8088:8080
+  # Open http://localhost:8088
+  ```
+- **Dedicated subdomain** (team access): create a separate Ingress resource with
+  `host: temporal.<your-domain>` and a single `path: /` rule pointing at
+  `temporal-ui:8080`. Not yet wired in the chart -- add a per-account values file
+  or a custom manifest.
+
 ## Rollback
 
 ```bash

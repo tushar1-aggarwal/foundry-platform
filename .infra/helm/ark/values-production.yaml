@@ -81,8 +81,14 @@ temporal:
     enabled: true
   ui:
     enabled: true
+    # The UI is exposed in-cluster on Service temporal-ui:8080. Path-based
+    # ingress routing at /temporal needs either a TEMPORAL_UI_PUBLIC_PATH env
+    # var on the UI container or an nginx rewrite-target annotation; neither
+    # is wired yet. Until then, access the UI via:
+    #   kubectl -n ark port-forward svc/temporal-ui 8088:8080
+    # or expose it on a dedicated subdomain (separate ingress).
     ingress:
-      enabled: true
+      enabled: false
       path: /temporal
   worker:
     replicaCount: 3
