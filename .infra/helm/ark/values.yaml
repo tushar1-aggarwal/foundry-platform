@@ -152,6 +152,26 @@ temporal:
     # ExternalSecret. Leave empty to manage that K8s Secret out-of-band.
     secretManagerKey: ""
 
+  # Optional: bootstrap Job to create the `temporal` role + temporal/
+  # temporal_visibility databases on RDS. Runs as pre-install,pre-upgrade
+  # hook (weight -25, before schema migration at -10). Uses master DB
+  # credentials from `masterSecretName` (defaults to <release>-secrets, which
+  # holds the RDS-managed rotated master from ExternalSecret).
+  #
+  # When enabled, the chart manages `temporal-db-credentials` directly: a
+  # random password is generated on first install and preserved across
+  # upgrades via `lookup`. Mutually exclusive with persistence.secretManagerKey
+  # (which would have ExternalSecrets manage the same K8s Secret instead).
+  dbBootstrap:
+    enabled: false
+    masterSecretName: ""
+    masterSecretKeys:
+      username: DB_USERNAME
+      password: DB_PASSWORD
+    image:
+      repository: postgres
+      tag: "16-alpine"
+
   # Helm Job: temporal-sql-tool setup-schema + update-schema.
   # Runs on pre-install AND pre-upgrade. Idempotent.
   schemaJob:

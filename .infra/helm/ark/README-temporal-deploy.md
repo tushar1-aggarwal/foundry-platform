@@ -6,7 +6,12 @@ with Temporal Phase 3 orchestration to a fresh AWS account.
 ## Prerequisites (Ops, out of Helm)
 
 1. **EKS cluster** with nginx-ingress and External Secrets Operator installed.
-2. **RDS Postgres 16** instance with two logical databases:
+2. **RDS Postgres 16** instance with the `ark` database. The temporal role +
+   databases can be created either manually OR by enabling
+   `temporal.dbBootstrap.enabled=true` so the chart provisions them on first
+   install (see "Database bootstrap modes" below).
+
+   Manual mode (when bootstrap is off):
    ```sql
    CREATE DATABASE ark;
    CREATE DATABASE temporal;
@@ -19,13 +24,34 @@ with Temporal Phase 3 orchestration to a fresh AWS account.
    sized per `docs/temporal.md:218`.
 4. **Secrets Manager** entries:
    - `ark-db-credentials` -- DB_USERNAME, DB_PASSWORD for the `ark` DB
-   - `temporal-db-credentials` -- POSTGRES_USER, POSTGRES_PWD for the `temporal` role
+   - `temporal-db-credentials` -- POSTGRES_USER, POSTGRES_PWD for the `temporal`
+     role (skip when `dbBootstrap.enabled=true`; chart manages this Secret)
    - App keys (ANTHROPIC_API_KEY, etc.)
 5. **IRSA** role bound to the chart's ServiceAccount with S3 + Secrets Manager
    permissions.
 6. **Container images** pushed:
    - `ark:<tag>` from main Dockerfile
    - `ark-temporal-worker:<tag>` from `.infra/Dockerfile.temporal-worker`
+
+## Database bootstrap modes
+
+`temporal.dbBootstrap.enabled` chooses how the `temporal` role and databases
+get created on RDS:
+
+- **`false` (default)** -- you provision the role + databases manually before
+  `helm install`, and either pre-create the `temporal-db-credentials` K8s
+  Secret OR set `temporal.persistence.secretManagerKey` to have ExternalSecrets
+  pull from AWS Secrets Manager. Pick this when SM is the source of truth.
+
+- **`true`** -- the chart runs a pre-install Job (weight `-25`, before the
+  schema migration at `-10`) that connects to RDS with master credentials
+  (from `<release>-secrets.DB_USERNAME/DB_PASSWORD` by default) and runs
+  idempotent `CREATE ROLE/DATABASE IF NOT EXISTS`. The chart also manages the
+  `temporal-db-credentials` K8s Secret directly, generating a random password
+  on first install and preserving it across upgrades via `lookup`. Pick this
+  for fresh-account bootstraps where SM-managed temporal creds aren't required.
+
+  Mutually exclusive with `temporal.persistence.secretManagerKey`.
 
 ## Helm install
 
