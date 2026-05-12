@@ -35,6 +35,7 @@ import { loadRepoConfig } from "../../repo-config.js";
 import { logDebug, logInfo, logWarn } from "../../observability/structured-log.js";
 import { rebaseOntoBase } from "./git-ops.js";
 import { createPullRequest, mergePullRequest, parseGithubOwnerRepoFromUrl, type GithubDeps } from "../github/rest.js";
+import { buildAuthedHttpsUrl, resolveBitbucketToken, resolveGithubToken } from "../git/auth-url.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -289,60 +290,6 @@ export function isGithubPrUrl(url: string | null | undefined): boolean {
 }
 
 /**
- * Resolve the GitHub token for this session's tenant.
- *
- * Resolution order:
- *   1. Tenant-scoped `GITHUB_TOKEN` in the secrets store. The right place
- *      for a credential -- it's per-tenant, never logged, redacted at
- *      every boundary.
- *   2. `process.env.GITHUB_TOKEN`. Conductor-process fallback for legacy
- *      deployments that pass the token via env at daemon startup.
- *   3. null. The action stage falls back to the legacy `gh` CLI path
- *      (local dispatch only) and surfaces a clear error elsewhere.
- *
- * This helper centralises the lookup so the three call sites in this
- * file (push origin auth, REST createPullRequest, REST mergePullRequest)
- * stay consistent. Adding gh-app or fine-grained-PAT support later
- * means one function change instead of three.
- */
-async function resolveGithubToken(app: AppContext, session: Session): Promise<string | undefined> {
-  try {
-    const fromStore = await app.secrets.get(session.tenant_id, "GITHUB_TOKEN");
-    if (fromStore) return fromStore;
-  } catch {
-    // Secret store unavailable -- fall through to env fallback.
-  }
-  return process.env.GITHUB_TOKEN || undefined;
-}
-
-/**
- * Resolve the Bitbucket token (Bitbucket Cloud HTTP access token / app
- * password) for this session's tenant. Mirrors `resolveGithubToken` exactly
- * so the auth surface is uniform across hosts.
- *
- * Resolution order:
- *   1. Tenant-scoped `BITBUCKET_TOKEN` in the secrets store.
- *   2. `process.env.BITBUCKET_TOKEN`. Conductor-process fallback.
- *   3. undefined. Falls back to the existing SSH path (sidecar's
- *      `/root/.ssh` bind-mount in DockerIsolation, or whatever credential
- *      helper the remote host has otherwise).
- *
- * Token format: Bitbucket Cloud HTTP access tokens use the username
- * `x-token-auth` in HTTPS basic-auth. App passwords (legacy) work with
- * `<username>:<app-password>`. We standardise on `x-token-auth` in the URL
- * rewrite below; that form is what Bitbucket recommends for headless usage.
- */
-async function resolveBitbucketToken(app: AppContext, session: Session): Promise<string | undefined> {
-  try {
-    const fromStore = await app.secrets.get(session.tenant_id, "BITBUCKET_TOKEN");
-    if (fromStore) return fromStore;
-  } catch {
-    // Secret store unavailable -- fall through to env fallback.
-  }
-  return process.env.BITBUCKET_TOKEN || undefined;
-}
-
-/**
  * Read the `origin` remote URL via the same dispatcher used for push/rebase.
  * Returns null on any error (not a git repo, no origin, network failure on
  * remote, etc.).
@@ -453,34 +400,29 @@ export async function createWorktreePR(
   try {
     // For remote-dispatch push over HTTPS the worker has no git credential
     // helper -- `git push https://<host>/...` then hangs prompting for a
-    // username. Inject the tenant-scoped token into the origin URL before
-    // push so HTTPS basic-auth carries it. Idempotent: only runs on
-    // remote+matching-host+https; the cleanup at the end restores the
-    // original URL so we don't leak the token into the worker's git config.
+    // username. Rewrite the origin URL with tenant-scoped basic-auth before
+    // push so HTTPS auth carries through. The cleanup at the end restores
+    // the original URL so the token doesn't persist in the worker's git
+    // config. `buildAuthedHttpsUrl` returns the URL unchanged when no token
+    // is configured or the host has no rewrite rule -- the inequality check
+    // below skips the set-url step in that case.
     //
-    // GitHub uses username `x-access-token`; Bitbucket Cloud uses
-    // `x-token-auth`. Both are documented per-host conventions for
-    // headless HTTPS access via personal-access / app tokens.
-    // Resolve both tokens up front -- outer scope so the redaction calls
-    // later in this function (replaceAll(githubToken, "***")) and the REST
-    // API path for PR creation can reuse them.
+    // Raw tokens are also resolved here for log-redaction (`replaceAll`
+    // below) and for the REST API path that creates the GitHub PR.
     let originalOriginUrl: string | null = null;
     const githubToken = await resolveGithubToken(app, session);
     const bitbucketToken = await resolveBitbucketToken(app, session);
     if (routing.remote) {
       const probe = await readOriginUrl(app, session);
-      let authedUrl: string | null = null;
-      if (probe?.startsWith("https://github.com/") && githubToken) {
-        authedUrl = probe.replace("https://", `https://x-access-token:${githubToken}@`);
-      } else if (probe?.startsWith("https://bitbucket.org/") && bitbucketToken) {
-        authedUrl = probe.replace("https://", `https://x-token-auth:${bitbucketToken}@`);
-      }
-      if (authedUrl && probe) {
-        originalOriginUrl = probe;
-        try {
-          await runGit(app, session, ["remote", "set-url", "origin", authedUrl], { timeout: 15_000 });
-        } catch (err: any) {
-          logWarn("session", `createWorktreePR: failed to set authed origin url: ${err?.message ?? err}`);
+      if (probe) {
+        const authedUrl = await buildAuthedHttpsUrl(app, session, probe);
+        if (authedUrl !== probe) {
+          originalOriginUrl = probe;
+          try {
+            await runGit(app, session, ["remote", "set-url", "origin", authedUrl], { timeout: 15_000 });
+          } catch (err: any) {
+            logWarn("session", `createWorktreePR: failed to set authed origin url: ${err?.message ?? err}`);
+          }
         }
       }
     }
@@ -536,6 +478,7 @@ export async function createWorktreePR(
       // Strip the embedded token from the error text before surfacing.
       let reason = e?.stderr || e?.message || String(e);
       if (githubToken) reason = reason.replaceAll(githubToken, "***");
+      if (bitbucketToken) reason = reason.replaceAll(bitbucketToken, "***");
 
       // Recoverable: the remote already has commits on this branch from a
       // prior session/agent that diverge from ours. The whole flow just ran
@@ -587,6 +530,7 @@ export async function createWorktreePR(
         } catch (retryErr: any) {
           let retryReason = retryErr?.stderr || retryErr?.message || String(retryErr);
           if (githubToken) retryReason = retryReason.replaceAll(githubToken, "***");
+          if (bitbucketToken) retryReason = retryReason.replaceAll(bitbucketToken, "***");
           return {
             ok: false,
             message: `git push failed (also failed retry on session-suffixed branch): ${reason} | retry: ${retryReason}`,
