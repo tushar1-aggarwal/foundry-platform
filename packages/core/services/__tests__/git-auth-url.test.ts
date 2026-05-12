@@ -46,17 +46,28 @@ describe("buildAuthedHttpsUrl", () => {
     expect(result).toBe("https://x-access-token:ghp_abc123@github.com/owner/repo.git");
   });
 
-  it("rewrites bitbucket.org URLs with username:token when BITBUCKET_USERNAME is set (Atlassian API token form)", async () => {
+  it("rewrites bitbucket.org URLs with x-bitbucket-api-token-auth for ATATT* tokens (regardless of BITBUCKET_USERNAME)", async () => {
+    // Atlassian API tokens only authenticate against git-over-HTTPS with the
+    // x-bitbucket-api-token-auth sentinel; the email form (which works for
+    // the REST API) returns HTTP 401 on git. BITBUCKET_USERNAME is ignored
+    // for this token flavour.
     await app.secrets.set(TENANT, "BITBUCKET_TOKEN", "ATATT_xyz", { type: "env-var" });
     await app.secrets.set(TENANT, "BITBUCKET_USERNAME", "user@example.com", { type: "env-var" });
     const result = await buildAuthedHttpsUrl(app, stubSession(), "https://bitbucket.org/team/repo.git");
-    expect(result).toBe("https://user%40example.com:ATATT_xyz@bitbucket.org/team/repo.git");
+    expect(result).toBe("https://x-bitbucket-api-token-auth:ATATT_xyz@bitbucket.org/team/repo.git");
   });
 
-  it("falls back to x-token-auth on bitbucket.org when no username is configured", async () => {
-    await app.secrets.set(TENANT, "BITBUCKET_TOKEN", "ATATT_xyz", { type: "env-var" });
+  it("rewrites bitbucket.org URLs with <username>:<token> for legacy app passwords (non-ATATT) when BITBUCKET_USERNAME is set", async () => {
+    await app.secrets.set(TENANT, "BITBUCKET_TOKEN", "legacy_app_pwd_value", { type: "env-var" });
+    await app.secrets.set(TENANT, "BITBUCKET_USERNAME", "bb-user", { type: "env-var" });
     const result = await buildAuthedHttpsUrl(app, stubSession(), "https://bitbucket.org/team/repo.git");
-    expect(result).toBe("https://x-token-auth:ATATT_xyz@bitbucket.org/team/repo.git");
+    expect(result).toBe("https://bb-user:legacy_app_pwd_value@bitbucket.org/team/repo.git");
+  });
+
+  it("falls back to x-token-auth on bitbucket.org for non-ATATT token when no username is configured (workspace HTTP access token)", async () => {
+    await app.secrets.set(TENANT, "BITBUCKET_TOKEN", "workspace_http_token", { type: "env-var" });
+    const result = await buildAuthedHttpsUrl(app, stubSession(), "https://bitbucket.org/team/repo.git");
+    expect(result).toBe("https://x-token-auth:workspace_http_token@bitbucket.org/team/repo.git");
   });
 
   it("passes through when no token is configured", async () => {

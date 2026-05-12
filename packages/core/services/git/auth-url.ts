@@ -68,13 +68,30 @@ export async function buildAuthedHttpsUrl(app: AppContext, session: Session, url
   if (url.startsWith("https://bitbucket.org/")) {
     const token = await resolveBitbucketToken(app, session);
     if (!token) return url;
+    const host = url.slice("https://".length);
+
+    // Bitbucket Cloud has three credential flavours, each with a different
+    // username sentinel for HTTPS basic-auth on git operations:
+    //
+    //   - Atlassian API tokens (`ATATT*`): username MUST be
+    //     `x-bitbucket-api-token-auth`. The REST API accepts `<email>:<token>`
+    //     too, but git-over-HTTPS only accepts the sentinel form -- the same
+    //     token returns HTTP 401 when paired with the user's email.
+    //   - Legacy Bitbucket app passwords: `<bitbucket-username>:<password>`
+    //     (the username here is the user's Bitbucket handle, NOT email).
+    //   - Workspace/repo HTTP access tokens: `x-token-auth:<token>`.
+    //
+    // BITBUCKET_USERNAME is a legacy-app-password signal: if it's set, the
+    // operator is using flavour 2 and the username should be passed through.
+    // For ATATT tokens we ignore BITBUCKET_USERNAME and use the sentinel.
+    if (token.startsWith("ATATT")) {
+      return `https://x-bitbucket-api-token-auth:${token}@${host}`;
+    }
     const username = await resolveBitbucketUsername(app, session);
     if (username && username.length > 0) {
-      // Atlassian API tokens require `<email>:<token>` basic auth. URL-encode
-      // the username so emails (`user@host`) don't break the URL parser.
-      return `https://${encodeURIComponent(username)}:${token}@${url.slice("https://".length)}`;
+      return `https://${encodeURIComponent(username)}:${token}@${host}`;
     }
-    return `https://x-token-auth:${token}@${url.slice("https://".length)}`;
+    return `https://x-token-auth:${token}@${host}`;
   }
 
   return url;
