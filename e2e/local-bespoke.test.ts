@@ -1,31 +1,27 @@
 /**
- * Hosted-mode docs-flow e2e. Boots `ark server start --hosted` against the
- * Docker compose stack (Postgres + Redis + Temporal + temporal-worker) with
- * docker-isolation sidecar agents. Runs:
- *   1. Compound test: plan -> implement -> review_gate -> pr with stop/resume
- *   2. Restart-then-fail: server killed mid-implement, resumes the same
- *      Temporal workflow and surfaces AuthError as status=failed
+ * Local-mode docs-flow e2e. Boots `ark server start` (default profile, no
+ * --hosted, SQLite, single tenant) and runs:
+ *   1. Compound test: plan -> implement -> review_gate -> pr (happy path + gate + stop/resume)
+ *   2. Restart-then-fail: server killed mid-implement, restarted with FAIL env, session ends failed
  *
  * Mode-agnostic test bodies live in e2e/helpers/docs-flow-spec.ts.
- *
- * Run via: make test-e2e-control-plane
  */
 
 import { describe, test, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, existsSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, copyFileSync, chmodSync, existsSync } from "fs";
 import { tmpdir } from "os";
-import { join, resolve } from "path";
+import { join, resolve as resolvePath } from "path";
 import { execFileSync } from "child_process";
 
-import { spawnServer, killServer, type ServerHandle } from "./helpers/server-process.js";
-import { up as stackUp, down as stackDown } from "./helpers/docker-stack.js";
+import { startLocalServer, killServer } from "./helpers/server-process.js";
 import { startGitHttpServer, type GitHttpServerHandle } from "./helpers/git-http-server.js";
 import { compoundDocsFlowSpec, restartThenFailSpec } from "./helpers/docs-flow-spec.js";
 import { RpcClient } from "./helpers/rpc-client.js";
 
-const REPO_ROOT = resolve(import.meta.dir, "..");
-const ENV_FILE = join(REPO_ROOT, ".env.e2e");
+const REPO_ROOT = resolvePath(import.meta.dir, "..");
+const FAKE_CLAUDE_SRC = join(REPO_ROOT, "e2e/fixtures/fake-claude.sh");
 const EXPECTED_TOKEN = "test-fake-token-XYZ";
+const WEB_PORT = 8420;
 
 function initBareRepoWithSeed(parent: string): string {
   const bare = join(parent, "fake-bitbucket.git");
@@ -41,140 +37,114 @@ function initBareRepoWithSeed(parent: string): string {
   return bare;
 }
 
-/** Translate the git server's loopback URL to a docker-reachable one for sidecars. */
-function dockerReachable(url: string): string {
-  return url.replace(/127\.0\.0\.1/, "host.docker.internal");
+function installFakeClaude(arkDir: string): string {
+  const binDir = join(arkDir, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const dst = join(binDir, "claude");
+  copyFileSync(FAKE_CLAUDE_SRC, dst);
+  chmodSync(dst, 0o755);
+  return binDir;
 }
 
-const TEMPORAL_EXTRA_ENV = {
-  ARK_TEMPORAL_ORCHESTRATION: "true",
-  ARK_TEMPORAL_SERVER_URL: "localhost:7234",
-  ARK_TEMPORAL_NAMESPACE: "default",
-  ARK_CONDUCTOR_HOSTNAME: "0.0.0.0",
-  ARK_ENABLE_TEST_ACTIONS: "1",
-};
-
-describe("docs-flow e2e -- hosted (Temporal + docker isolation)", () => {
-  // ── Test 1: Compound (happy path + manual gate + stop/resume) ──────────
+describe("docs-flow e2e -- local bespoke", () => {
+  // ── Test 1: Compound (happy path + manual gate + stop/resume) ─────────
   describe("compound", () => {
     let arkDir: string;
     let bareRepoParent: string;
     let bareRepoPath: string;
     let gitServer: GitHttpServerHandle;
-    let server: ServerHandle;
+    let server: Awaited<ReturnType<typeof startLocalServer>>;
     let rpc: RpcClient;
 
     beforeAll(async () => {
-      arkDir = mkdtempSync(join(tmpdir(), "ark-hosted-compound-"));
-      bareRepoParent = mkdtempSync(join(tmpdir(), "ark-hosted-compound-repo-"));
+      arkDir = mkdtempSync(join(tmpdir(), "ark-local-compound-"));
+      bareRepoParent = mkdtempSync(join(tmpdir(), "ark-local-compound-repo-"));
       bareRepoPath = initBareRepoWithSeed(bareRepoParent);
+      const pathPrefix = installFakeClaude(arkDir);
 
-      await stackUp();
-
-      // Bind to 0.0.0.0 so the docker sidecar can reach us via host.docker.internal.
       gitServer = await startGitHttpServer({
         repoPath: bareRepoPath,
         expectedToken: EXPECTED_TOKEN,
         logFile: join(arkDir, "git-auth-log.txt"),
-        bindAddr: "0.0.0.0",
+        bindAddr: "127.0.0.1",
       });
 
-      server = await spawnServer({
-        arkDir,
-        envFile: ENV_FILE,
-        startupTimeoutMs: 60_000,
-        extraEnv: TEMPORAL_EXTRA_ENV,
-      });
+      server = await startLocalServer({ arkDir, pathPrefix, webPort: WEB_PORT });
       rpc = new RpcClient(server.webUrl);
-    }, 120_000);
+    });
 
     afterAll(async () => {
       try { await killServer(server); } catch {}
       try { await gitServer?.kill(); } catch {}
-      try { await stackDown(); } catch {}
       if (arkDir && existsSync(arkDir)) rmSync(arkDir, { recursive: true, force: true });
       if (bareRepoParent && existsSync(bareRepoParent)) rmSync(bareRepoParent, { recursive: true, force: true });
-    }, 60_000);
+    });
 
     test("plan -> implement -> review_gate -> pr completes after stop/resume + approve", async () => {
       await compoundDocsFlowSpec({
         rpc,
-        repoUrl: dockerReachable(gitServer.url),
+        repoUrl: gitServer.url,
         bareRepoPath,
         arkDir,
         expectedToken: EXPECTED_TOKEN,
-        isHosted: true,
+        isHosted: false,
       });
-    }, 180_000);
+    }, 120_000);
   });
 
-  // ── Test 2: Restart-then-fail (Temporal durability + AuthError) ─────────
+  // ── Test 2: Restart-then-fail (durable persistence + AuthError) ────────
   describe("restart-then-fail", () => {
     let arkDir: string;
     let bareRepoParent: string;
     let bareRepoPath: string;
     let gitServer: GitHttpServerHandle;
-    let server: ServerHandle;
+    let server: Awaited<ReturnType<typeof startLocalServer>>;
     let rpc: RpcClient;
+    let pathPrefix: string;
 
-    const FAIL_ENV = {
-      ...TEMPORAL_EXTRA_ENV,
-      ARK_FAKE_CLAUDE_FAIL_STAGE: "implement",
-    };
+    const FAIL_ENV = { ARK_FAKE_CLAUDE_FAIL_STAGE: "implement" };
 
     beforeAll(async () => {
-      arkDir = mkdtempSync(join(tmpdir(), "ark-hosted-restartfail-"));
-      bareRepoParent = mkdtempSync(join(tmpdir(), "ark-hosted-restartfail-repo-"));
+      arkDir = mkdtempSync(join(tmpdir(), "ark-local-restartfail-"));
+      bareRepoParent = mkdtempSync(join(tmpdir(), "ark-local-restartfail-repo-"));
       bareRepoPath = initBareRepoWithSeed(bareRepoParent);
-
-      await stackUp();
+      pathPrefix = installFakeClaude(arkDir);
 
       gitServer = await startGitHttpServer({
         repoPath: bareRepoPath,
         expectedToken: EXPECTED_TOKEN,
         logFile: join(arkDir, "git-auth-log.txt"),
-        bindAddr: "0.0.0.0",
+        bindAddr: "127.0.0.1",
       });
 
-      server = await spawnServer({
-        arkDir,
-        envFile: ENV_FILE,
-        startupTimeoutMs: 60_000,
-        extraEnv: FAIL_ENV,
-      });
+      server = await startLocalServer({ arkDir, pathPrefix, webPort: WEB_PORT + 1, extraEnv: FAIL_ENV });
       rpc = new RpcClient(server.webUrl);
-    }, 120_000);
+    });
 
     afterAll(async () => {
       try { await killServer(server); } catch {}
       try { await gitServer?.kill(); } catch {}
-      try { await stackDown(); } catch {}
       if (arkDir && existsSync(arkDir)) rmSync(arkDir, { recursive: true, force: true });
       if (bareRepoParent && existsSync(bareRepoParent)) rmSync(bareRepoParent, { recursive: true, force: true });
-    }, 60_000);
+    });
 
-    test("session resumes after server restart and surfaces AuthError as status=failed", async () => {
+    test("session resumes after restart and surfaces AuthError as status=failed", async () => {
       await restartThenFailSpec({
         rpc,
-        repoUrl: dockerReachable(gitServer.url),
+        repoUrl: gitServer.url,
         bareRepoPath,
         arkDir,
         expectedToken: EXPECTED_TOKEN,
-        isHosted: true,
+        isHosted: false,
         killServer: async () => {
           server.proc.kill("SIGKILL");
           await new Promise((r) => setTimeout(r, 500));
         },
         restartServer: async () => {
-          server = await spawnServer({
-            arkDir,
-            envFile: ENV_FILE,
-            startupTimeoutMs: 60_000,
-            extraEnv: FAIL_ENV,
-          });
+          server = await startLocalServer({ arkDir, pathPrefix, webPort: WEB_PORT + 1, extraEnv: FAIL_ENV });
           rpc = new RpcClient(server.webUrl);
         },
       });
-    }, 240_000);
+    }, 180_000);
   });
 });

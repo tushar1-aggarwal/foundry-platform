@@ -158,6 +158,10 @@ services:
       # host.docker.internal reaches the test process on the docker host
       # (Mac/Windows), and via the gateway on Linux.
       ARK_CONDUCTOR_URL: "http://host.docker.internal:8422"
+    volumes:
+      # Fake claude binary for e2e tests -- replaces the real claude so agents
+      # complete stages without an Anthropic API key or real LLM calls.
+      - ../e2e/fixtures/fake-claude.sh:/usr/local/bin/claude:ro
     # Note (T6 worker-in-container): an earlier iteration mounted the host's
     # docker.sock + arkDir + source tree here so this worker could dispatch
     # T6 sidecars from inside compose. Reverted because we can't currently

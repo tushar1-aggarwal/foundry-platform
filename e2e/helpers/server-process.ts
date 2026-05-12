@@ -155,6 +155,87 @@ export async function spawnServer(opts: SpawnOptions): Promise<ServerHandle> {
   throw new Error(`ark server DB-ready probe failed at ${webUrl}/api/rpc session/list within budget`);
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// LOCAL MODE BOOT
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface LocalSpawnOptions {
+  /** Absolute path to a temp arkDir. */
+  arkDir: string;
+  /** Optional: directory to prepend to PATH (for fake-claude.sh override). */
+  pathPrefix?: string;
+  /** Optional: extra env. Set ARK_FAKE_CLAUDE_FAIL_STAGE here for failure test. */
+  extraEnv?: Record<string, string>;
+  /** Web/API port. Default 8420. */
+  webPort?: number;
+}
+
+/**
+ * Spawn `ark server start` (default profile, no --hosted) and wait for
+ * /api/health + a session/list RPC to succeed. Returns a handle the caller
+ * uses to send RPC and to kill the subprocess.
+ *
+ * Local mode runs on SQLite + file blob store; no Docker needed.
+ */
+export async function startLocalServer(opts: LocalSpawnOptions): Promise<ServerHandle> {
+  const webPort = opts.webPort ?? 8420;
+  await clearStalePorts([webPort]);
+
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    ARK_PROFILE: "local",
+    ARK_DIR: opts.arkDir,
+    ARK_AUTH_REQUIRE_TOKEN: "false",
+    ARK_DEV_FORCE_DIRECT: "1",
+    ARK_WEB_PORT: String(webPort),
+    ...(opts.extraEnv ?? {}),
+  };
+
+  if (opts.pathPrefix) {
+    env.PATH = `${opts.pathPrefix}:${process.env.PATH ?? ""}`;
+  }
+
+  const repoRoot = resolve(import.meta.dir, "../..");
+  const proc = Bun.spawn(["bun", "packages/cli/index.ts", "server", "start"], {
+    cwd: repoRoot,
+    env,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+
+  const webUrl = `http://localhost:${webPort}`;
+
+  const deadline = Date.now() + 30_000;
+  let healthy = false;
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch(`${webUrl}/api/health`);
+      if (r.status === 200) { healthy = true; break; }
+    } catch { /* not up yet */ }
+    await Bun.sleep(200);
+  }
+  if (!healthy) {
+    proc.kill();
+    throw new Error(`startLocalServer: /api/health never returned 200 within 30s`);
+  }
+
+  const rpcDeadline = Date.now() + 30_000;
+  while (Date.now() < rpcDeadline) {
+    try {
+      const r = await fetch(`${webUrl}/api/rpc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "boot", method: "session/list", params: {} }),
+      });
+      const json = await r.json() as { error?: unknown; result?: unknown };
+      if (!json.error) return { proc, webUrl };
+    } catch { /* migrations still running */ }
+    await Bun.sleep(200);
+  }
+  proc.kill();
+  throw new Error(`startLocalServer: session/list RPC never succeeded within 30s`);
+}
+
 export async function killServer(handle: ServerHandle): Promise<void> {
   // SIGTERM first -- gives the server a chance to clear timers, drain
   // SSE clients, and disconnect the postgres pool cleanly. The hosted
