@@ -1,6 +1,0 @@
-name: e2e-smoke
-description: "T0: single-stage flow with close_ticket action -- smoke test for stack bring-up."
-stages:
-  - name: smoke
-    action: close_ticket
-    gate: auto

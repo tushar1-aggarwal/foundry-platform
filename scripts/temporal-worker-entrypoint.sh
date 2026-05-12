@@ -4,8 +4,6 @@ ARK_DIR="${ARK_DIR:-/root/.ark}"
 PLUGIN_DIR="$ARK_DIR/plugins/executors"
 FLOW_DIR="$ARK_DIR/flows"
 mkdir -p "$PLUGIN_DIR" "$FLOW_DIR"
-# Install stub-runner plugin (e2e only -- harmless in prod since it's only invoked when flow uses stub-runner runtime)
-[ -f /app/e2e/fixtures/stub-runner-executor.mjs ] && cp /app/e2e/fixtures/stub-runner-executor.mjs "$PLUGIN_DIR/stub-runner.mjs"
 # Install fake claude-code plugin -- overrides the real claude-code executor
 # in this worker container with an in-process stub so the heavy tmux+launch
 # pipeline doesn't blow past the 60s heartbeat timeout on dispatchStageActivity.

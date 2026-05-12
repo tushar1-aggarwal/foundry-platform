@@ -196,7 +196,6 @@ export async function restartThenFailSpec(opts: CompoundSpecOpts & {
   restartServer: () => Promise<void>;
 }): Promise<void> {
   const { rpc, repoUrl, isHosted, expectedToken } = opts;
-  console.error("[probe] restartThenFailSpec: entered");
 
   await rpc.call("secret/set", {
     tenant: "default",
@@ -204,14 +203,12 @@ export async function restartThenFailSpec(opts: CompoundSpecOpts & {
     value: expectedToken,
     type: "env-var",
   });
-  console.error("[probe] secret/set ok");
 
   const startResp = await rpc.call<{ session: SessionRead["session"] }>("session/start", {
     flow: "e2e-docs-review",
     summary: "docs-flow e2e: restart-then-fail",
     repo: repoUrl,
   });
-  console.error(`[probe] session/start ok: id=${startResp.session.id} status=${startResp.session.status} stage=${startResp.session.stage}`);
   expect(startResp.session.id).toMatch(/^s-/);
   if (isHosted) {
     expect(startResp.session.orchestrator).toBe("temporal");
@@ -226,15 +223,12 @@ export async function restartThenFailSpec(opts: CompoundSpecOpts & {
     (v) => v.session.stage === "implement",
     { timeoutMs: 20_000, description: "plan completes, stage advances to implement" },
   );
-  console.error("[probe] plan->implement transition ok");
 
   // Kill the server.
   await opts.killServer();
-  console.error("[probe] killServer ok");
 
   // Restart with same env (FAIL flag still set).
   await opts.restartServer();
-  console.error("[probe] restartServer ok");
 
   // For hosted: workflow_id must be unchanged (workflow continues, not a new one).
   if (isHosted) {
