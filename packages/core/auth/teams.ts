@@ -117,6 +117,12 @@ export class TeamManager {
 
   async update(teamId: string, fields: Partial<Pick<Team, "slug" | "name" | "description">>): Promise<Team | null> {
     await this.ensureSchema();
+    // Mirror the deletion guard: 'default-team' is hardcoded as the
+    // JIT-membership target in auth/login.ts. A slug rename would
+    // silently mismatch the hardcoded id the login flow depends on.
+    if (teamId === "default-team") {
+      throw new Error("Cannot update the 'default-team' team: it is the seeded landing destination for new sign-ups.");
+    }
     if (fields.slug) assertSlug(fields.slug);
     return this._teams.update(teamId, fields);
   }

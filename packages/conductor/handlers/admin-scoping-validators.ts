@@ -42,12 +42,6 @@ const MAX_KNOWN_OPTIONS_IN_ERROR = 20;
  * error messages across the validator. Pure function -- exported so a
  * unit test can exercise the truncation branch with a small `max`
  * instead of having to seed >20 items into a real store.
- *
- * Note on disclosure: the validator is invoked only from
- * `admin/scoping/set`, which gates on `requireAdmin(ctx)` (handler
- * layer). The catalog hints are therefore admin-only by construction.
- * If a future PR exposes a member self-service write path that reuses
- * these validators, gate the hints on `ctx.isAdmin` before listing.
  */
 export function formatKnownOptionsHint(known: string[], max: number): string {
   const sorted = [...known].sort();

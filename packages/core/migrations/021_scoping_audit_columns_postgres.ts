@@ -1,5 +1,5 @@
 /**
- * Migration 019 (Postgres) -- audit columns on `scoping_overrides`.
+ * Migration 021 (Postgres) -- audit columns on `scoping_overrides`.
  *
  * Mirrors the SQLite half. Postgres ADD COLUMN IF NOT EXISTS does
  * the duplicate-column defense natively.

@@ -33,6 +33,19 @@ export interface MembershipWithUser extends MembershipRow {
   name: string | null;
 }
 
+/**
+ * Per-user listing of memberships annotated with team + tenant identity.
+ * The UsersTab memberships drawer renders this directly: one row per
+ * membership, showing where the user lives and as what.
+ */
+export interface MembershipWithTeamTenant extends MembershipRow {
+  team_slug: string;
+  team_name: string;
+  tenant_id: string;
+  tenant_slug: string;
+  tenant_name: string;
+}
+
 export interface ListOptions {
   includeDeleted?: boolean;
 }
@@ -105,6 +118,65 @@ export class MembershipRepository {
     const where = opts.includeDeleted ? eq(m.userId, userId) : and(eq(m.userId, userId), isNull(m.deletedAt));
     const rows = await (d.db as any).select().from(m).where(where).orderBy(asc(m.createdAt));
     return (rows as DrizzleSelectMembership[]).map(toPublic);
+  }
+
+  /**
+   * Per-user listing joined with team and tenant identity. Live rows
+   * only (live membership, live team, live tenant). Used by the
+   * UsersTab memberships drawer to render where each user lives.
+   *
+   * Optional `tenantId` narrows the result to memberships in that tenant
+   * only. Callers running under the tenant-admin model pass their own
+   * `ctx.tenantId` so the drawer doesn't surface cross-tenant rows.
+   */
+  async listByUserWithTeamTenant(
+    userId: string,
+    opts: { tenantId?: string } = {},
+  ): Promise<MembershipWithTeamTenant[]> {
+    const d = this.d();
+    const m = d.schema.memberships;
+    const t = d.schema.teams;
+    const tn = d.schema.tenants;
+    const conditions = [eq(m.userId, userId), isNull(m.deletedAt), isNull(t.deletedAt), isNull(tn.deletedAt)];
+    if (opts.tenantId) conditions.push(eq(tn.id, opts.tenantId));
+    const rows = await (d.db as any)
+      .select({
+        id: m.id,
+        userId: m.userId,
+        teamId: m.teamId,
+        role: m.role,
+        deletedAt: m.deletedAt,
+        deletedBy: m.deletedBy,
+        createdAt: m.createdAt,
+        teamSlug: t.slug,
+        teamName: t.name,
+        tenantId: tn.id,
+        tenantSlug: tn.slug,
+        tenantName: tn.name,
+      })
+      .from(m)
+      .innerJoin(t, eq(t.id, m.teamId))
+      .innerJoin(tn, eq(tn.id, t.tenantId))
+      .where(and(...conditions))
+      .orderBy(asc(tn.name), asc(t.name));
+    return (
+      rows as Array<
+        DrizzleSelectMembership & {
+          teamSlug: string;
+          teamName: string;
+          tenantId: string;
+          tenantSlug: string;
+          tenantName: string;
+        }
+      >
+    ).map((r) => ({
+      ...toPublic(r),
+      team_slug: r.teamSlug,
+      team_name: r.teamName,
+      tenant_id: r.tenantId,
+      tenant_slug: r.tenantSlug,
+      tenant_name: r.tenantName,
+    }));
   }
 
   /**

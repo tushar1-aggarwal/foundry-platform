@@ -1,5 +1,5 @@
 /**
- * Migration 019 (SQLite) -- audit columns on `scoping_overrides`.
+ * Migration 021 (SQLite) -- audit columns on `scoping_overrides`.
  *
  * Adds `set_by` and `deleted_by` (both nullable). Each ADD COLUMN is
  * wrapped in try/catch on "duplicate column name" so the migration is

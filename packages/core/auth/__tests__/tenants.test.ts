@@ -213,6 +213,52 @@ describe("TenantManager seeded-row protection", () => {
     expect((await tm.get(t.id, { includeDeleted: true }))?.deleted_at).not.toBeNull();
     await db.close();
   });
+
+  it("refuses to update the seeded 'default' tenant and leaves the row unchanged", async () => {
+    // Same intent as the delete guard: a slug rename or any field
+    // change on 'default' would silently mismatch the hardcoded id the
+    // login flow depends on.
+    const db = await freshDb();
+    const tm = new TenantManager(db);
+
+    const before = await tm.get("default");
+    expect(before?.slug).toBe("default");
+
+    await expect(tm.update("default", { slug: "renamed-default" })).rejects.toThrow(/'default' tenant/);
+    await expect(tm.update("default", { name: "Default 2" })).rejects.toThrow(/'default' tenant/);
+
+    const after = await tm.get("default");
+    expect(after?.slug).toBe("default");
+    expect(after?.name).toBe(before?.name);
+    await db.close();
+  });
+
+  it("refuses to setStatus on the seeded 'default' tenant", async () => {
+    // If a future hardening pass starts gating logins on
+    // `tenant.status === "active"`, an archived 'default' would
+    // break the JIT-membership path. Symmetric with delete + update.
+    const db = await freshDb();
+    const tm = new TenantManager(db);
+
+    await expect(tm.setStatus("default", "archived")).rejects.toThrow(/'default' tenant/);
+    await expect(tm.setStatus("default", "suspended")).rejects.toThrow(/'default' tenant/);
+
+    const after = await tm.get("default");
+    expect(after?.status).toBe("active");
+    await db.close();
+  });
+
+  it("still allows update + setStatus of non-default tenants", async () => {
+    // Regression guard: only exact id === "default" is locked.
+    const db = await freshDb();
+    const tm = new TenantManager(db);
+    const t = await tm.create({ slug: "not-default", name: "Not Default" });
+    const renamed = await tm.update(t.id, { slug: "renamed" });
+    expect(renamed?.slug).toBe("renamed");
+    const archived = await tm.setStatus(t.id, "archived");
+    expect(archived?.status).toBe("archived");
+    await db.close();
+  });
 });
 
 describe("TenantManager cascade delete", () => {

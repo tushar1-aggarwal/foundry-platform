@@ -28,7 +28,13 @@ export interface AuthContextValue {
   signOut: () => void;
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+/**
+ * Exported so unit tests can wrap renders with `<AuthContext.Provider
+ * value={...}>` and synthesize a logged-in identity without going
+ * through the real whoami round-trip (which uses `useEffect`, which
+ * doesn't fire under SSR `renderToString`).
+ */
+export const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const transport = useTransport();

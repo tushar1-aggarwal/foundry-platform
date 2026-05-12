@@ -1,5 +1,5 @@
 /**
- * Migration 019 -- audit metadata columns on `scoping_overrides`.
+ * Migration 021 -- audit metadata columns on `scoping_overrides`.
  *
  * Adds `set_by` and `deleted_by` (both nullable TEXT) so the admin
  * write RPCs (`admin/scoping/*`, Phase 2) can record who created /

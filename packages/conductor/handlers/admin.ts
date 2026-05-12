@@ -22,7 +22,7 @@ import type { Router } from "../router.js";
 import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
-import { requireAdmin } from "../../core/auth/context.js";
+import { requireAdmin, requireSameTenant } from "../../core/auth/context.js";
 import type { MembershipRole, TenantStatus } from "../../core/auth/index.js";
 
 export function registerAdminHandlers(router: Router, app: AppContext): void {
@@ -84,6 +84,21 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
     const { id } = extract<{ id: string }>(p, ["id"]);
     const ok = await tenants().delete(id, ctx.userId ?? null);
     return { ok };
+  });
+
+  // Tenant-anchored user roll-up for the TenantsTab. Read-only --
+  // mutation surface stays on TeamsTab + UsersTab. Returns distinct
+  // users with ≥1 live membership in any live team of the tenant.
+  router.handle("admin/tenant/users", async (p, _notify, ctx) => {
+    requireAdmin(ctx);
+    const { tenant_id } = extract<{ tenant_id: string }>(p, ["tenant_id"]);
+    // Tenant-admin model: an admin in tenant A cannot roll-up users in
+    // tenant B. The check fires before the resource fetch so we don't
+    // leak existence ("not found" vs "forbidden") of cross-tenant ids.
+    requireSameTenant(ctx, tenant_id);
+    const tenant = await tenants().get(tenant_id);
+    if (!tenant) throw new RpcError(`Tenant '${tenant_id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    return { users: await users().listTenantUsers(tenant_id) };
   });
 
   // ── Teams ─────────────────────────────────────────────────────────────
@@ -148,6 +163,26 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
     return { members: await teams().listMembers(team_id) };
   });
 
+  // Tenant-scoped autocomplete used by the TeamsTab "Add member" combobox.
+  // The team_id anchors the search to a tenant (we resolve team -> tenant
+  // here so the client doesn't have to track tenant_id separately) and the
+  // result rows carry each user's existing role in this team (if any) so
+  // the UI can tag "already member (admin)" and flip its Add/Update-role
+  // button. Min-length (3 chars) and hard limit (50) are enforced in the
+  // UserManager; the handler is a thin wrapper.
+  router.handle("admin/team/members/search", async (p, _notify, ctx) => {
+    requireAdmin(ctx);
+    const { team_id, q, limit } = extract<{ team_id: string; q: string; limit?: number }>(p, ["team_id", "q"]);
+    const team = await teams().get(team_id);
+    if (!team) throw new RpcError(`Team '${team_id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    // Tenant-admin model: the team being searched must belong to the
+    // caller's tenant. This blocks an admin in tenant A from
+    // autocompleting tenant B's user emails by guessing a team_id.
+    requireSameTenant(ctx, team.tenant_id);
+    const results = await users().searchByTenant(team.tenant_id, q, { contextTeamId: team_id, limit });
+    return { results };
+  });
+
   router.handle("admin/team/members/add", async (p, _notify, ctx) => {
     requireAdmin(ctx);
     const { team_id, user_id, email, role } = extract<{
@@ -210,9 +245,13 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
 
   // ── Users ─────────────────────────────────────────────────────────────
 
+  // Returns every user with a `team_count` annotated against the
+  // caller's tenant. The count is "live teams in ctx.tenantId the
+  // user belongs to". 0 means "no membership in this tenant" -- the
+  // UI surfaces that as the orphan / cross-tenant badge.
   router.handle("admin/user/list", async (_p, _notify, ctx) => {
     requireAdmin(ctx);
-    return { users: await users().list() };
+    return { users: await users().listWithTenantTeamCount(ctx.tenantId) };
   });
 
   router.handle("admin/user/get", async (p, _notify, ctx) => {
@@ -232,6 +271,24 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
     } catch (e: any) {
       throw new RpcError(e?.message ?? "Failed to create user", ErrorCodes.INVALID_PARAMS);
     }
+  });
+
+  // Per-user membership listing for the UsersTab memberships drawer.
+  // Joins memberships with teams + tenants so the drawer can render the
+  // full (tenant, team, role) shape in one round trip. Live rows only.
+  //
+  // Tenant-admin model: results are filtered to ctx.tenantId so an
+  // admin in tenant A never sees tenant-B memberships of the same user
+  // (preserves the consultant pattern at the data layer while keeping
+  // each admin's view scoped to their own tenant). Returning [] for a
+  // user with no membership in the caller's tenant is the safe default;
+  // it does NOT leak whether the user exists elsewhere.
+  router.handle("admin/user/memberships", async (p, _notify, ctx) => {
+    requireAdmin(ctx);
+    const { user_id } = extract<{ user_id: string }>(p, ["user_id"]);
+    const user = await users().get(user_id);
+    if (!user) throw new RpcError(`User '${user_id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
+    return { memberships: await users().listMemberships(user_id, { tenantId: ctx.tenantId }) };
   });
 
   router.handle("admin/user/upsert", async (p, _notify, ctx) => {

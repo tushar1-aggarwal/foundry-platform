@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "../ui/button.js";
 import { useAdminApi } from "./adminApi.js";
-import type { Tenant, Team } from "./types.js";
+import type { Tenant, Team, TenantUserRow } from "./types.js";
 
 interface TenantsTabProps {
   onToast?: (msg: string, type: string) => void;
@@ -16,6 +16,7 @@ export function TenantsTab({ onToast }: TenantsTabProps) {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selected, setSelected] = useState<Tenant | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [tenantUsers, setTenantUsers] = useState<TenantUserRow[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [newSlug, setNewSlug] = useState("");
   const [newName, setNewName] = useState("");
@@ -36,13 +37,29 @@ export function TenantsTab({ onToast }: TenantsTabProps) {
   useEffect(() => {
     if (!selectedId) {
       setTeams([]);
+      setTenantUsers([]);
       return;
     }
     adminApi
       .listTeams(selectedId)
       .then(setTeams)
-      .catch(() => setTeams([]));
-  }, [adminApi, selectedId]);
+      .catch((e: any) => {
+        setTeams([]);
+        onToast?.(`Failed to load teams: ${e?.message ?? e}`, "error");
+      });
+    adminApi
+      .listTenantUsers(selectedId)
+      .then(setTenantUsers)
+      .catch((e: any) => {
+        // FORBIDDEN here means the admin clicked a tenant they don't
+        // belong to. Until the broader admin/* sweep tightens
+        // `admin/tenant/list`, the left rail shows every tenant; this
+        // toast tells the admin why the panel is empty rather than
+        // silently rendering "no users yet".
+        setTenantUsers([]);
+        onToast?.(`Failed to load users: ${e?.message ?? e}`, "error");
+      });
+  }, [adminApi, selectedId, onToast]);
 
   async function handleCreate() {
     if (!newSlug.trim() || !newName.trim()) return;
@@ -145,32 +162,55 @@ export function TenantsTab({ onToast }: TenantsTabProps) {
           <div className="space-y-6">
             <div>
               <div className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Tenant</div>
-              <h2 className="text-xl font-semibold mt-1">{selected.name}</h2>
+              <div className="flex items-center gap-2 mt-1">
+                <h2 className="text-xl font-semibold">{selected.name}</h2>
+                {selected.id === "default" && (
+                  <span
+                    title="System tenant -- protected from rename, status change, and delete because new sign-ups land here."
+                    className="rounded border border-[var(--border)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-[var(--fg-muted)]"
+                  >
+                    🔒 system
+                  </span>
+                )}
+              </div>
               <div className="text-sm text-[var(--fg-muted)]">slug: {selected.slug}</div>
               <div className="text-sm text-[var(--fg-muted)]">id: {selected.id}</div>
               <div className="text-sm text-[var(--fg-muted)]">status: {selected.status}</div>
               <div className="text-sm text-[var(--fg-muted)]">created: {selected.created_at}</div>
             </div>
-            <div className="flex gap-2">
-              {selected.status !== "suspended" && (
-                <Button size="sm" variant="warning" onClick={() => handleStatus(selected, "suspended")}>
-                  Suspend
+            {selected.id === "default" ? (
+              // The seeded `default` tenant is the JIT-membership landing
+              // target for new sign-ups (see TenantManager.delete/update/
+              // setStatus guards). Render destructive actions as
+              // disabled-with-explanation rather than hidden, so an admin
+              // who clicks Delete on default gets immediate UI feedback
+              // instead of a server round-trip + toast.
+              <p className="text-[12px] text-[var(--fg-muted)]">
+                Suspend / Archive / Delete are disabled on the <code className="font-mono">default</code> tenant - it is
+                the seeded landing target for new sign-ups and is protected at the server.
+              </p>
+            ) : (
+              <div className="flex gap-2">
+                {selected.status !== "suspended" && (
+                  <Button size="sm" variant="warning" onClick={() => handleStatus(selected, "suspended")}>
+                    Suspend
+                  </Button>
+                )}
+                {selected.status !== "active" && (
+                  <Button size="sm" variant="success" onClick={() => handleStatus(selected, "active")}>
+                    Activate
+                  </Button>
+                )}
+                {selected.status !== "archived" && (
+                  <Button size="sm" variant="outline" onClick={() => handleStatus(selected, "archived")}>
+                    Archive
+                  </Button>
+                )}
+                <Button size="sm" variant="destructive" onClick={() => handleDelete(selected)}>
+                  Delete
                 </Button>
-              )}
-              {selected.status !== "active" && (
-                <Button size="sm" variant="success" onClick={() => handleStatus(selected, "active")}>
-                  Activate
-                </Button>
-              )}
-              {selected.status !== "archived" && (
-                <Button size="sm" variant="outline" onClick={() => handleStatus(selected, "archived")}>
-                  Archive
-                </Button>
-              )}
-              <Button size="sm" variant="destructive" onClick={() => handleDelete(selected)}>
-                Delete
-              </Button>
-            </div>
+              </div>
+            )}
             <div>
               <div className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)] mb-2">
                 Teams in this tenant ({teams.length})
@@ -196,6 +236,35 @@ export function TenantsTab({ onToast }: TenantsTabProps) {
                 </table>
               ) : (
                 <div className="text-[12px] text-[var(--fg-muted)]">No teams yet.</div>
+              )}
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)] mb-2">
+                Users in this tenant ({tenantUsers.length})
+              </div>
+              {tenantUsers.length ? (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-[11px] text-[var(--fg-muted)] text-left">
+                      <th className="py-1">Email</th>
+                      <th className="py-1">Name</th>
+                      <th className="py-1">Teams in this tenant</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tenantUsers.map((u) => (
+                      <tr key={u.id} className="border-t border-[var(--border)]">
+                        <td className="py-2">{u.email}</td>
+                        <td className="py-2">{u.name ?? ""}</td>
+                        <td className="py-2 text-[var(--fg-muted)]">
+                          {u.memberships.map((m) => `${m.team_name} (${m.role})`).join(", ")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="text-[12px] text-[var(--fg-muted)]">No users in this tenant yet.</div>
               )}
             </div>
           </div>
