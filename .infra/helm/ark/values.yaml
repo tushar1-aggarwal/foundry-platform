@@ -24,6 +24,11 @@ controlPlane:
   router:
     enabled: true
     policy: balanced
+  # Hosted mode rejects FsSnapshotStore at boot and demands an S3SnapshotStore
+  # impl that is still TODO upstream. Setting this to true bypasses the check.
+  # Safe ONLY at replicaCount=1 (single-pod snapshots don't need cross-pod
+  # visibility). Flip off the day the S3 snapshot store implementation lands.
+  devAllowLocalHostedStorage: false
 
 # -- Workers
 workers:
@@ -71,6 +76,15 @@ redis:
     host: ""
     port: 6379
     existingSecret: ""
+
+# -- S3 backend for ark blob storage (hosted mode). When `bucket` is set,
+# control-plane and temporal-worker get ARK_BLOB_BACKEND=s3 + ARK_S3_BUCKET/
+# REGION/PREFIX env vars. Leave bucket empty to opt out (boot will then fail
+# in hosted mode unless controlPlane.devAllowLocalHostedStorage=true).
+s3:
+  bucket: ""
+  region: ""
+  prefix: ""
 
 # -- Ingress
 ingress:

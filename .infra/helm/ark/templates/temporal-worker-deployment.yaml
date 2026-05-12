@@ -44,6 +44,24 @@ spec:
             - name: DB_NAME
               value: {{ .Values.postgresql.external.database | quote }}
             {{- end }}
+            {{- if .Values.s3.bucket }}
+            # Temporal worker boots AppContext (hosted mode) and hits the same
+            # storage.blobBackend check as the control-plane Deployment.
+            - name: ARK_BLOB_BACKEND
+              value: "s3"
+            - name: ARK_S3_BUCKET
+              value: {{ .Values.s3.bucket | quote }}
+            - name: ARK_S3_REGION
+              value: {{ .Values.s3.region | quote }}
+            {{- if .Values.s3.prefix }}
+            - name: ARK_S3_PREFIX
+              value: {{ .Values.s3.prefix | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.controlPlane.devAllowLocalHostedStorage }}
+            - name: ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE
+              value: "1"
+            {{- end }}
             # LLM keys -- Temporal activities (dispatch-stage, run-verification)
             # exec agent runtimes that read these directly from process.env.
             {{- if or .Values.llm.anthropicApiKey .Values.llm.existingSecret }}
