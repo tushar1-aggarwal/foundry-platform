@@ -11,12 +11,15 @@ dist/
 packages/desktop/out/
 packages/desktop/node_modules/
 docs/
-# Test artifacts. The temporal-worker entrypoint installs anything found in
+# E2E fixtures. The temporal-worker entrypoint installs anything found in
 # /app/e2e/fixtures/ as a plugin (when ARK_E2E_MODE=1); leaving them out of
 # prod build contexts is defense-in-depth so an image built without the
 # ARK_E2E_MODE gate still can't shadow the real claude-code executor.
 # The e2e docker-compose bind-mounts ../e2e/fixtures into the container at
 # runtime so tests still see them.
+#
+# NB: NOT excluding **/__tests__/ or *.test.ts -- packages/core/services/
+# actions/index.ts imports ./__tests__/flaky-pr-fixture.js as part of the
+# ARK_ENABLE_TEST_ACTIONS=1 path. Pre-rolled images saw `Cannot find
+# module './__tests__/flaky-pr-fixture.js'` and crashlooped.
 e2e/
-**/__tests__/
-**/*.test.ts
