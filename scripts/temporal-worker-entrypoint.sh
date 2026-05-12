@@ -6,6 +6,12 @@ FLOW_DIR="$ARK_DIR/flows"
 mkdir -p "$PLUGIN_DIR" "$FLOW_DIR"
 # Install stub-runner plugin (e2e only -- harmless in prod since it's only invoked when flow uses stub-runner runtime)
 [ -f /app/e2e/fixtures/stub-runner-executor.mjs ] && cp /app/e2e/fixtures/stub-runner-executor.mjs "$PLUGIN_DIR/stub-runner.mjs"
+# Install fake claude-code plugin -- overrides the real claude-code executor
+# in this worker container with an in-process stub so the heavy tmux+launch
+# pipeline doesn't blow past the 60s heartbeat timeout on dispatchStageActivity.
+# Only loaded when the file is present, so prod images that don't ship e2e/
+# fixtures won't shadow the real claude-code executor.
+[ -f /app/e2e/fixtures/fake-claude-code-executor.mjs ] && cp /app/e2e/fixtures/fake-claude-code-executor.mjs "$PLUGIN_DIR/claude-code.mjs"
 # Install e2e flow fixtures if present
 if [ -d /app/e2e/fixtures/flows ]; then
   cp /app/e2e/fixtures/flows/*.yaml "$FLOW_DIR/" 2>/dev/null || true

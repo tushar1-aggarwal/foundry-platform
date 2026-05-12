@@ -45,11 +45,16 @@ export async function sessionWorkflow(input: SessionWorkflowInput): Promise<void
     const kind = classifyStage(stage);
 
     // Review gate: park on signal -- durable across worker / server restart.
+    // Use status="ready" while parked (matches the local bespoke behavior --
+    // bespoke leaves the row at status=ready when the agent for the new
+    // review_gate stage has nothing to dispatch). External callers tell the
+    // gate state apart by `stage.type === "review_gate"` (or `gate === "manual"`)
+    // rather than a status flag.
     if (kind === "review_gate") {
       await projectStageActivity({
         sessionId: input.sessionId,
         stageIdx,
-        patch: { status: "awaiting_review" },
+        patch: { status: "ready" },
       });
       await condition(() => approved || rejected !== null);
       if (rejected !== null) {

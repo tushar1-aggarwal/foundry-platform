@@ -50,7 +50,10 @@ export async function dispatchStageActivity(input: {
     const targetStage = flowDef?.stages?.[input.stageIdx]?.name;
     if (targetStage && session.stage !== targetStage) {
       await d.sessions.update(input.sessionId, { stage: targetStage, status: "ready", error: null });
-    } else if (session.status === "failed") {
+    } else if (session.status === "failed" || session.status === "dispatching") {
+      // "dispatching" is set by the workflow's projectStageActivity right
+      // before this activity. Reset to "ready" so the dispatch guard
+      // (which only accepts status=ready) doesn't reject the launch.
       await d.sessions.update(input.sessionId, { status: "ready", error: null });
     }
   }
