@@ -107,8 +107,12 @@ tensorZero:
 # Shipped as part of the main chart, not a sub-chart. The persistence layer
 # (RDS + pgbouncer) is provisioned by Ops outside Helm; see
 # `docs/superpowers/specs/2026-05-12-temporal-helm-gap-design.md`.
+#
+# Off by default so `helm lint` / `helm template` succeed without an account
+# overlay. The production overlay (`values-production.yaml`) flips this on
+# and each account values file must supply `temporal.persistence.host`.
 temporal:
-  enabled: true
+  enabled: false
   # Default namespace passed to Ark control plane / worker.
   namespace: ark-prod
   # All namespaces created by the post-install Job. The default namespace
@@ -179,7 +183,10 @@ temporal:
     image:
       repository: temporalio/admin-tools
       tag: "1.27"
-    backoffLimit: 1
+    # 3 retries to absorb transient RDS connection drops mid-migration. Job
+    # is idempotent (setup is gated on schema_version absence, update-schema
+    # is a no-op when current), so retries are safe.
+    backoffLimit: 3
 
   # Helm Job: post-install, creates namespaces idempotently.
   namespaceJob:

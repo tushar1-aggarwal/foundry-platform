@@ -29,10 +29,16 @@ spec:
           env:
             - name: SQL_PLUGIN
               value: postgres12
+            # DDL (CREATE TABLE / CREATE INDEX) breaks under pgbouncer
+            # transaction-pool mode, so the schema tool MUST connect directly to
+            # the RDS endpoint, not via the runtime pgbouncer host that the
+            # server uses. For pilots without pgbouncer the two values are the
+            # same -- but this isolation makes the chart correct for any account
+            # that adds pgbouncer later.
             - name: SQL_HOST
-              value: {{ .Values.temporal.persistence.host | quote }}
+              value: {{ .Values.postgresql.external.host | quote }}
             - name: SQL_PORT
-              value: {{ .Values.temporal.persistence.port | quote }}
+              value: {{ .Values.postgresql.external.port | quote }}
             - name: SQL_USER
               valueFrom:
                 secretKeyRef:
@@ -50,10 +56,32 @@ spec:
               set -e
               DB={{ .Values.temporal.persistence.database }}
               VDB={{ .Values.temporal.persistence.visibilityDatabase }}
-              # Setup is no-op if schema_version table already exists at v0.0.
-              temporal-sql-tool --db "$DB" setup-schema -v 0.0 || true
+
+              # Idempotent setup helper: succeed cleanly if the schema_version
+              # table already exists; surface any other error (perms,
+              # connectivity, syntax) loudly so the Job fails for a real cause
+              # rather than silently swallowing it.
+              run_setup() {
+                local db="$1"
+                local out
+                if out=$(temporal-sql-tool --db "$db" setup-schema -v 0.0 2>&1); then
+                  echo "$out"
+                  return 0
+                fi
+                # `setup-schema` errors with `relation "schema_version" already exists`
+                # (or close variants) on already-initialized databases.
+                if echo "$out" | grep -qiE 'already exists|already initialized'; then
+                  echo "Schema for $db already initialized, skipping setup."
+                  return 0
+                fi
+                echo "ERROR: setup-schema failed for $db:" >&2
+                echo "$out" >&2
+                return 1
+              }
+
+              run_setup "$DB"
               temporal-sql-tool --db "$DB" update-schema --schema-dir schema/postgresql/v12/temporal/versioned
-              temporal-sql-tool --db "$VDB" setup-schema -v 0.0 || true
+              run_setup "$VDB"
               temporal-sql-tool --db "$VDB" update-schema --schema-dir schema/postgresql/v12/visibility/versioned
               echo "Schema setup + update complete for $DB and $VDB."
 {{- end }}

@@ -12,6 +12,11 @@
   {{- $pwd = randAlphaNum 32 }}
 {{- end }}
 {{- $masterSecret := .Values.temporal.dbBootstrap.masterSecretName | default (printf "%s-secrets" (include "ark.fullname" .)) }}
+{{- if not $existing }}
+# Conditionally rendered: only created on first install (when lookup returns nil).
+# On upgrades the existing Secret is preserved untouched, so the password stays
+# stable and running server pods keep working. To force rotation, manually delete
+# this Secret in the cluster and re-run `helm upgrade`.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -29,6 +34,7 @@ stringData:
   {{ $userKey }}: temporal
   {{ $pwdKey }}: {{ $pwd | quote }}
 ---
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -88,11 +94,11 @@ spec:
                 DO \$do\$
                 BEGIN
                   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname='temporal') THEN
-                    EXECUTE 'CREATE ROLE temporal LOGIN PASSWORD ' || quote_literal('$TEMPORAL_PWD') || ' CONNECTION LIMIT 50';
+                    EXECUTE 'CREATE ROLE temporal LOGIN PASSWORD ' || quote_literal('$TEMPORAL_PWD') || ' CONNECTION LIMIT 100';
                     RAISE NOTICE 'Created role temporal';
                   ELSE
-                    EXECUTE 'ALTER ROLE temporal WITH PASSWORD ' || quote_literal('$TEMPORAL_PWD');
-                    RAISE NOTICE 'Reset password for role temporal';
+                    EXECUTE 'ALTER ROLE temporal WITH PASSWORD ' || quote_literal('$TEMPORAL_PWD') || ' CONNECTION LIMIT 100';
+                    RAISE NOTICE 'Reset password + connection limit for role temporal';
                   END IF;
                 END
                 \$do\$;
