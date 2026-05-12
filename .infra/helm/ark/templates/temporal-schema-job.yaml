@@ -14,6 +14,9 @@ metadata:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PreSync
+    "argocd.argoproj.io/sync-wave": "-10"
+    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
 spec:
   backoffLimit: {{ .Values.temporal.schemaJob.backoffLimit }}
   template:
@@ -29,6 +32,12 @@ spec:
           env:
             - name: SQL_PLUGIN
               value: postgres12
+            {{- if .Values.temporal.server.tls.enabled }}
+            - name: SQL_TLS_ENABLED
+              value: "true"
+            - name: SQL_TLS_DISABLE_HOST_VERIFICATION
+              value: "true"
+            {{- end }}
             # DDL (CREATE TABLE / CREATE INDEX) breaks under pgbouncer
             # transaction-pool mode, so the schema tool MUST connect directly to
             # the RDS endpoint, not via the runtime pgbouncer host that the
@@ -56,6 +65,7 @@ spec:
               set -e
               DB={{ .Values.temporal.persistence.database }}
               VDB={{ .Values.temporal.persistence.visibilityDatabase }}
+              {{ if .Values.temporal.server.tls.enabled }}# RDS requires SSL: --tls --tls-disable-host-verification passed to every sql-tool call below.{{ end }}
 
               # Idempotent setup helper: succeed cleanly if the schema_version
               # table already exists; surface any other error (perms,
@@ -64,7 +74,7 @@ spec:
               run_setup() {
                 local db="$1"
                 local out
-                if out=$(temporal-sql-tool --db "$db" setup-schema -v 0.0 2>&1); then
+                if out=$(temporal-sql-tool {{ if .Values.temporal.server.tls.enabled }}--tls --tls-disable-host-verification {{ end }}--db "$db" setup-schema -v 0.0 2>&1); then
                   echo "$out"
                   return 0
                 fi
@@ -80,8 +90,8 @@ spec:
               }
 
               run_setup "$DB"
-              temporal-sql-tool --db "$DB" update-schema --schema-dir schema/postgresql/v12/temporal/versioned
+              temporal-sql-tool {{ if .Values.temporal.server.tls.enabled }}--tls --tls-disable-host-verification {{ end }}--db "$DB" update-schema --schema-dir schema/postgresql/v12/temporal/versioned
               run_setup "$VDB"
-              temporal-sql-tool --db "$VDB" update-schema --schema-dir schema/postgresql/v12/visibility/versioned
+              temporal-sql-tool {{ if .Values.temporal.server.tls.enabled }}--tls --tls-disable-host-verification {{ end }}--db "$VDB" update-schema --schema-dir schema/postgresql/v12/visibility/versioned
               echo "Schema setup + update complete for $DB and $VDB."
 {{- end }}

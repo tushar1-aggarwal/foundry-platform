@@ -52,6 +52,12 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.temporal.persistence.existingSecret }}
                   key: {{ .Values.temporal.persistence.secretKeys.password }}
+            {{- if .Values.temporal.server.tls.enabled }}
+            - name: SQL_TLS_ENABLED
+              value: "true"
+            - name: SQL_TLS_DISABLE_HOST_VERIFICATION
+              value: "true"
+            {{- end }}
             # Multi-replica clusters need each pod to advertise its own IP for
             # membership ring discovery. 0.0.0.0 silently breaks ring formation
             # when replicaCount > 1 (prod default is 2).

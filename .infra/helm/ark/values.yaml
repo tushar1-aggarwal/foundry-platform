@@ -139,6 +139,8 @@ temporal:
       limits:
         cpu: 2000m
         memory: 4Gi
+    tls:
+      enabled: true             # RDS requires SSL; set false only for local/dev clusters without TLS
 
   # Persistence -- shared RDS via Ops-provisioned pgbouncer.
   persistence:
