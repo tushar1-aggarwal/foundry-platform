@@ -1,0 +1,59 @@
+{{- if and .Values.temporal.enabled .Values.temporal.schemaJob.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-schema
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-schema
+  annotations:
+    # Run before any server pods come up, on every install and upgrade.
+    # update-schema is a no-op when schema is already current, so re-runs
+    # are cheap and safe.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.temporal.schemaJob.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "ark.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal-schema
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: schema
+          image: "{{ .Values.temporal.schemaJob.image.repository }}:{{ .Values.temporal.schemaJob.image.tag }}"
+          env:
+            - name: SQL_PLUGIN
+              value: postgres12
+            - name: SQL_HOST
+              value: {{ .Values.temporal.persistence.host | quote }}
+            - name: SQL_PORT
+              value: {{ .Values.temporal.persistence.port | quote }}
+            - name: SQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ .Values.temporal.persistence.secretKeys.username }}
+            - name: SQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ .Values.temporal.persistence.secretKeys.password }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              DB={{ .Values.temporal.persistence.database }}
+              VDB={{ .Values.temporal.persistence.visibilityDatabase }}
+              # Setup is no-op if schema_version table already exists at v0.0.
+              temporal-sql-tool --db "$DB" setup-schema -v 0.0 || true
+              temporal-sql-tool --db "$DB" update-schema --schema-dir schema/postgresql/v12/temporal/versioned
+              temporal-sql-tool --db "$VDB" setup-schema -v 0.0 || true
+              temporal-sql-tool --db "$VDB" update-schema --schema-dir schema/postgresql/v12/visibility/versioned
+              echo "Schema setup + update complete for $DB and $VDB."
+{{- end }}
