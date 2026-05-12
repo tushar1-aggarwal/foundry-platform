@@ -203,7 +203,11 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     // the URL is never used as a filesystem path.
     let normalizedOpts = opts;
     if (opts.repo && isRepoUrl(opts.repo)) {
-      const basename = opts.repo.match(/\/([^/]+?)(?:\.git)?$/)?.[1] ?? opts.repo;
+      // Trailing slash is tolerated -- `https://host/owner/repo/` should
+      // resolve to "repo" the same as the un-slashed form. Without the
+      // optional `\/?` the regex misses and we fall back to the full URL,
+      // re-triggering the very bug this normaliser exists to prevent.
+      const basename = opts.repo.match(/\/([^/]+?)(?:\.git)?\/?$/)?.[1] ?? opts.repo;
       normalizedOpts = {
         ...opts,
         repo: basename,
