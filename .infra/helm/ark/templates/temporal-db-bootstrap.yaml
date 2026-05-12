@@ -1,0 +1,129 @@
+{{- if and .Values.temporal.enabled .Values.temporal.dbBootstrap.enabled }}
+{{- if .Values.temporal.persistence.secretManagerKey -}}
+{{- fail "temporal.dbBootstrap.enabled is mutually exclusive with temporal.persistence.secretManagerKey. With dbBootstrap the chart manages the K8s Secret directly (random password preserved via lookup); with secretManagerKey ExternalSecrets pulls it from AWS Secrets Manager. Pick one." -}}
+{{- end }}
+{{- $pwdKey := .Values.temporal.persistence.secretKeys.password }}
+{{- $userKey := .Values.temporal.persistence.secretKeys.username }}
+{{- $existing := lookup "v1" "Secret" .Values.namespace .Values.temporal.persistence.existingSecret }}
+{{- $pwd := "" }}
+{{- if and $existing $existing.data (hasKey $existing.data $pwdKey) }}
+  {{- $pwd = index $existing.data $pwdKey | b64dec }}
+{{- else }}
+  {{- $pwd = randAlphaNum 32 }}
+{{- end }}
+{{- $masterSecret := .Values.temporal.dbBootstrap.masterSecretName | default (printf "%s-secrets" (include "ark.fullname" .)) }}
+{{- if not $existing }}
+# Conditionally rendered: only created on first install (when lookup returns nil).
+# On upgrades the existing Secret is preserved untouched, so the password stays
+# stable and running server pods keep working. To force rotation, manually delete
+# this Secret in the cluster and re-run `helm upgrade`.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.temporal.persistence.existingSecret }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-db-credentials
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "argocd.argoproj.io/hook": PreSync
+    "argocd.argoproj.io/sync-wave": "-30"
+    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation
+type: Opaque
+stringData:
+  {{ $userKey }}: temporal
+  {{ $pwdKey }}: {{ $pwd | quote }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-db-bootstrap
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-db-bootstrap
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-25"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PreSync
+    "argocd.argoproj.io/sync-wave": "-25"
+    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "ark.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal-db-bootstrap
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.temporal.dbBootstrap.image.repository }}:{{ .Values.temporal.dbBootstrap.image.tag }}"
+          env:
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $masterSecret }}
+                  key: {{ .Values.temporal.dbBootstrap.masterSecretKeys.username }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $masterSecret }}
+                  key: {{ .Values.temporal.dbBootstrap.masterSecretKeys.password }}
+            - name: PGHOST
+              value: {{ .Values.postgresql.external.host | quote }}
+            - name: PGPORT
+              value: {{ .Values.postgresql.external.port | quote }}
+            - name: TEMPORAL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ $pwdKey }}
+            - name: TEMPORAL_DB
+              value: {{ .Values.temporal.persistence.database | quote }}
+            - name: VISIBILITY_DB
+              value: {{ .Values.temporal.persistence.visibilityDatabase | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eo pipefail
+              # Create or reset password for the temporal role (idempotent).
+              psql -v ON_ERROR_STOP=1 -d postgres -c "
+                DO \$do\$
+                BEGIN
+                  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname='temporal') THEN
+                    EXECUTE 'CREATE ROLE temporal LOGIN PASSWORD ' || quote_literal('$TEMPORAL_PWD') || ' CONNECTION LIMIT 100';
+                    RAISE NOTICE 'Created role temporal';
+                  ELSE
+                    EXECUTE 'ALTER ROLE temporal WITH PASSWORD ' || quote_literal('$TEMPORAL_PWD') || ' CONNECTION LIMIT 100';
+                    RAISE NOTICE 'Reset password + connection limit for role temporal';
+                  END IF;
+                END
+                \$do\$;
+              "
+              # CREATE DATABASE cannot run in a transaction; shell-level idempotency.
+              if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$TEMPORAL_DB'" | grep -q 1; then
+                psql -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$TEMPORAL_DB\" OWNER temporal"
+                echo "Created database $TEMPORAL_DB"
+              else
+                echo "Database $TEMPORAL_DB already exists"
+              fi
+              if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$VISIBILITY_DB'" | grep -q 1; then
+                psql -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$VISIBILITY_DB\" OWNER temporal"
+                echo "Created database $VISIBILITY_DB"
+              else
+                echo "Database $VISIBILITY_DB already exists"
+              fi
+              # Grants are idempotent.
+              psql -v ON_ERROR_STOP=1 -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE \"$TEMPORAL_DB\" TO temporal;"
+              psql -v ON_ERROR_STOP=1 -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE \"$VISIBILITY_DB\" TO temporal;"
+              echo "temporal-db-bootstrap complete"
+{{- end }}

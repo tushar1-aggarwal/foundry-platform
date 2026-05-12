@@ -1,0 +1,116 @@
+name: publish-temporal-worker-image
+
+# Builds .infra/Dockerfile.temporal-worker and publishes to:
+#   1. GHCR (always) -- ghcr.io/<owner>/ark-temporal-worker
+#   2. AWS ECR (conditional, per-account) -- when AWS_ECR_PUSH_ROLE_ARN repo
+#      variable is set.
+#
+# Enabling ECR dual-push for an account (one-time setup):
+#   1. Create OIDC provider in the target AWS account:
+#        aws iam create-open-id-connect-provider \
+#          --url https://token.actions.githubusercontent.com \
+#          --client-id-list sts.amazonaws.com \
+#          --thumbprint-list <github-oidc-thumbprint>
+#   2. Create IAM role (`gha-temporal-worker-push`) with trust:
+#        Federated: <oidc-provider-arn>
+#        Condition: token.actions.githubusercontent.com:sub equals
+#          repo:<org>/<repo>:ref:refs/heads/main (and refs/tags/v*)
+#      and policy granting `ecr:GetAuthorizationToken`,
+#      `ecr:BatchCheckLayerAvailability`, `ecr:PutImage`,
+#      `ecr:InitiateLayerUpload`, `ecr:UploadLayerPart`,
+#      `ecr:CompleteLayerUpload` on the target ECR repo.
+#   3. Set GitHub repo variables (Settings -> Variables -> Actions):
+#        AWS_ECR_PUSH_ROLE_ARN  = arn:aws:iam::<acct>:role/gha-temporal-worker-push
+#        AWS_ECR_REGION         = ap-south-1
+#        AWS_ECR_ACCOUNT_ID     = <acct>
+#        AWS_ECR_REPO_PREFIX    = pai-mlops-platform
+#
+# Until these variables are set the AWS steps no-op and only GHCR receives
+# the image. No workflow edit required to switch accounts on/off.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - ".infra/Dockerfile.temporal-worker"
+      - "package.json"
+      - "bun.lock"
+      - "packages/**"
+      - ".github/workflows/publish-temporal-worker-image.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag override (default: short SHA)"
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write    # required for AWS OIDC federation
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      INPUT_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # GHCR login -- always; this is the primary public artifact.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ECR auth via OIDC -- skipped when the role variable is unset.
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_ECR_REGION }}
+
+      - name: Login to Amazon ECR
+        if: ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' }}
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - id: tag-suffix
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          if [ -n "${TAG_INPUT}" ]; then
+            printf "value=%s\n" "${TAG_INPUT}" >> "$GITHUB_OUTPUT"
+          else
+            printf "value=\n" >> "$GITHUB_OUTPUT"
+          fi
+
+      # metadata-action generates tags for both registries. The ECR image
+      # name is included only when the account vars are set; otherwise the
+      # second image line is the empty string and is filtered out.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/ark-temporal-worker
+            ${{ vars.AWS_ECR_PUSH_ROLE_ARN != '' && format('{0}.dkr.ecr.{1}.amazonaws.com/{2}/ark-temporal-worker', vars.AWS_ECR_ACCOUNT_ID, vars.AWS_ECR_REGION, vars.AWS_ECR_REPO_PREFIX) || '' }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.tag-suffix.outputs.value }},enable=${{ steps.tag-suffix.outputs.value != '' }}
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: .infra/Dockerfile.temporal-worker
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64

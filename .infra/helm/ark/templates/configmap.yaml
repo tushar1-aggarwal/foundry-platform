@@ -18,3 +18,12 @@ data:
   {{- if $redisUrl }}
   REDIS_URL: {{ $redisUrl | quote }}
   {{- end }}
+  {{- if .Values.temporal.enabled }}
+  ARK_TEMPORAL_ORCHESTRATION: "true"
+  ARK_TEMPORAL_SERVER_URL: "{{ .Values.temporal.serverServiceName }}:7233"
+  ARK_TEMPORAL_NAMESPACE: {{ .Values.temporal.namespace | quote }}
+  ARK_TEMPORAL_TASK_QUEUE: {{ .Values.temporal.taskQueue | quote }}
+  {{- if .Values.temporal.taskQueueAssignments }}
+  ARK_TEMPORAL_TASK_QUEUE_ASSIGNMENTS: {{ .Values.temporal.taskQueueAssignments | quote }}
+  {{- end }}
+  {{- end }}

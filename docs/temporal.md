@@ -245,6 +245,8 @@ Recommendation:
 - Local dev: run worker under Bun (consistent with the rest of Ark).
 - Production: start on Bun. If we lose the `workflow stack` debugging surface during an incident, or if a future SDK upgrade regresses on Bun, switch the worker process to Node. The worker is a separate process -- dual-process deployment is cheap.
 
+> **Production runtime decision (UPDATED 2026-05-12, reflecting commit `a681409d`):** The Temporal worker ships under Node 20 + tsx (not Bun). The Bun base image is retained for fast dependency installs, but the runtime process is Node. Reason: the Temporal worker SDK requires `v8.promiseHooks.createHook`, which Bun's V8 build does not expose; workflow tasks otherwise TIMED_OUT at 10s on Apple Silicon. The Helm chart (`temporal-worker-deployment.yaml`) uses the image built from `.infra/Dockerfile.temporal-worker`. The "switch to Node if needed" criterion no longer applies -- we already shipped Node.
+
 Decision criteria (when to switch to Node):
 1. A Bun-specific crash or memory leak we can reproduce on Node-hosted worker cannot.
 2. Upstream Temporal releases a Bun-incompatible worker version we cannot skip.
@@ -278,6 +280,9 @@ Tracked in GH meta-issue **#374** (Temporal orchestration rollout).
 | **2: Client wrapper + shadow projector** | #369 | Add `packages/core/temporal/` with a client wrapper, a minimal `sessionWorkflow`, the first two activities (`startSessionActivity`, `awaitStageCompletionActivity`). New sessions in `test` profile can opt into shadow mode. | Shadow projector diff is 0 over a 24-hour run on staging. |
 | **3: Activity catalog buildout** | #370 | Port every stage kind to activities. Unit + integration tests per activity. Compensation activities for cancellation paths. | All stage kinds covered; flow tests pass on both legacy and temporal paths. |
 | **4: Helm sub-chart + RDS coordination** | #371 | Ship the worker as a sub-chart. Ops provisions the shared RDS logical DB, pgbouncer, IAM roles. Load-test at 2x expected throughput. | Staging runs Temporal-backed sessions for 1 tenant for 7 days, zero orchestration-related incidents. |
+
+> **Implementation note (UPDATED 2026-05-12):** Phase 4 shipped the entire Temporal stack (server + UI + worker + schema/namespace Jobs) as templates in the main `.infra/helm/ark/` chart, not a sub-chart. Reason: self-hosting the Temporal server in-cluster meant we'd be shipping both server and worker pieces -- at that point a sub-chart's overhead (separate Chart.yaml, values plumbing, parent-child sync) doesn't pay off. The chart can be refactored into a sub-chart later if Ops decides to move Temporal server out-of-cluster. See `docs/superpowers/specs/2026-05-12-temporal-helm-gap-design.md` decision D5.
+
 | **5: Projector to real tables + flag flip for new sessions** | #372 | Flip `features.temporalOrchestration=on` per-tenant. Legacy drains naturally. Per-tenant override in `tenant_features` table. Reads unified behind `SessionService`. | Two early-access tenants on Temporal for 30 days; parity with legacy on all SLOs. |
 | **6: Retire legacy** | #373 | Delete `packages/core/services/stage-orchestrator.ts` (and its siblings) and `packages/core/state/flow.ts`. `sessions.orchestrator` column fixed to `'temporal'`. Migration script archives anything `orchestrator='legacy'`. | No references to legacy orchestrator in tree; docs updated; `features.temporalOrchestration` removed. |
 

@@ -25,18 +25,20 @@ spec:
         - name: ark
           image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
           imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
-          # Ark assembles DATABASE_URL from DB_HOST/DB_PORT/DB_USERNAME/
-          # DB_PASSWORD/DB_NAME when DATABASE_URL itself isn't set, with
-          # proper URL-encoding (see `assembleDatabaseUrlFromParts`).
-          # No shell wrapper needed.
+          # Hosted mode boots the web server in-process but does NOT spawn the
+          # conductor (the daemon that serves :19100/health, which the kubelet
+          # probes target). Spawn the daemon detached first, then exec the web
+          # server so the daemon survives the parent replace and PID 1 is the
+          # foreground process kubelet monitors.
           command:
-            - bun
-            - packages/cli/index.ts
-            - server
-            - start
-            - --hosted
-            - --port
-            - {{ .Values.controlPlane.ports.web | quote }}
+            - sh
+            - -c
+            - >
+              bun packages/cli/index.ts server daemon start
+              --port {{ .Values.controlPlane.ports.conductor }}
+              --detach
+              && exec bun packages/cli/index.ts server start
+              --hosted --port {{ .Values.controlPlane.ports.web }}
           ports:
             - name: web
               containerPort: {{ .Values.controlPlane.ports.web }}
@@ -83,6 +85,34 @@ spec:
               value: "http://localhost:3000"
             - name: ARK_TENSORZERO_ENABLED
               value: "1"
+            # Conductor daemon defaults to 127.0.0.1; kubelet probes target the
+            # pod IP, so we have to bind on all interfaces. Same shape as the
+            # temporal-server BIND_ON_IP fix in temporal-server-deployment.yaml.
+            - name: ARK_CONDUCTOR_HOSTNAME
+              value: "0.0.0.0"
+            {{- if .Values.s3.bucket }}
+            # Hosted mode requires storage.blobBackend=s3 (LocalDiskBlobStore
+            # is pod-ephemeral and rejected at boot in di/storage.ts). Plumbed
+            # from .Values.s3 so chart consumers don't have to duplicate it.
+            - name: ARK_BLOB_BACKEND
+              value: "s3"
+            - name: ARK_S3_BUCKET
+              value: {{ .Values.s3.bucket | quote }}
+            - name: ARK_S3_REGION
+              value: {{ .Values.s3.region | quote }}
+            {{- if .Values.s3.prefix }}
+            - name: ARK_S3_PREFIX
+              value: {{ .Values.s3.prefix | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.controlPlane.devAllowLocalHostedStorage }}
+            # Hosted mode also requires an S3SnapshotStore implementation; the
+            # only documented bypass is this dev flag. Acceptable today only
+            # for replicaCount=1; revisit when the S3 snapshot store impl
+            # lands upstream and flip this off for multi-replica.
+            - name: ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE
+              value: "1"
+            {{- end }}
           {{- if or .Values.llm.anthropicApiKey .Values.llm.existingSecret }}
             - name: ANTHROPIC_API_KEY
               valueFrom:

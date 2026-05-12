@@ -59,3 +59,43 @@ ingress:
 
 llm:
   existingSecret: ark-llm-keys
+
+# -- Temporal (production overrides)
+# The persistence.host MUST be set per AWS account in the account-specific
+# values file (e.g., values-<account>.yaml). It is intentionally blank here.
+temporal:
+  enabled: true
+  # Each environment overrides namespace + namespaces in its own values file.
+  server:
+    replicaCount: 2
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+  schemaJob:
+    enabled: true
+  namespaceJob:
+    enabled: true
+  ui:
+    enabled: true
+    # The UI is exposed in-cluster on Service temporal-ui:8080. Path-based
+    # ingress routing at /temporal needs either a TEMPORAL_UI_PUBLIC_PATH env
+    # var on the UI container or an nginx rewrite-target annotation; neither
+    # is wired yet. Until then, access the UI via:
+    #   kubectl -n ark port-forward svc/temporal-ui 8088:8080
+    # or expose it on a dedicated subdomain (separate ingress).
+    ingress:
+      enabled: false
+      path: /temporal
+  worker:
+    replicaCount: 3
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
