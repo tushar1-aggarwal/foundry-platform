@@ -146,6 +146,11 @@ temporal:
     secretKeys:
       username: POSTGRES_USER
       password: POSTGRES_PWD
+    # AWS Secrets Manager key (path or ARN) holding POSTGRES_USER/PWD for the
+    # temporal role. When set AND externalSecret.enabled=true, the chart
+    # materializes the K8s Secret named in `existingSecret` via an
+    # ExternalSecret. Leave empty to manage that K8s Secret out-of-band.
+    secretManagerKey: ""
 
   # Helm Job: temporal-sql-tool setup-schema + update-schema.
   # Runs on pre-install AND pre-upgrade. Idempotent.
