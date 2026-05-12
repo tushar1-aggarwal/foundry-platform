@@ -198,6 +198,7 @@ export function registerServices(
           flowStates: c.flowStates,
           flows: c.flows,
           runtimes: c.runtimes,
+          agents: c.app.agents,
           models: new ModelService(c.models),
           computeService: c.computeService,
           pluginRegistry: c.pluginRegistry,

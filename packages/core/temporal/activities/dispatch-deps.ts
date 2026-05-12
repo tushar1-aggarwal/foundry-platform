@@ -155,6 +155,7 @@ export function buildDispatchDeps(orchDeps: OrchestrationDeps): TemporalDispatch
 
     // ── Phase 3.5 ports: real repos/stores from widened OrchestrationDeps ────
     runtimes: orchDeps.runtimes,
+    agents: orchDeps.agents,
     flowStates: orchDeps.flowStates,
     pluginRegistry: orchDeps.pluginRegistry,
     statusPollers: orchDeps.statusPollers,
