@@ -163,16 +163,17 @@ dev-control-plane: dev-docker dev-temporal ## Boot full laptop dev stack -- dock
 	  echo "  arkd:              http://localhost:$$ARK_ARKD_PORT" && \
 	  echo "  Temporal UI:       http://localhost:8088" && \
 	  echo "  Temporal gRPC:     $$ARK_TEMPORAL_SERVER_URL  ns=$$ARK_TEMPORAL_NAMESPACE" && \
+	  echo "  Temporal worker:   docker (image ark-temporal-worker:dev)" && \
 	  echo "  Postgres:          localhost:15433" && \
 	  echo "  Redis:             localhost:6379" && \
 	  echo "" && \
 	  echo "  One-time after first boot:  make dev-control-plane-bootstrap" && \
 	  echo "  Stop everything:            make dev-control-plane-down" && \
 	  echo ""
+	@$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d temporal-worker
 	@set -a ; . ./.env.control-plane ; set +a ; \
 	  trap 'kill 0' EXIT ; \
 	  $(BUN) --watch packages/cli/index.ts arkd 2>&1 | sed 's/^/[arkd]    /' & \
-	  sleep 2 && tsx packages/core/temporal/worker.ts 2>&1 | sed 's/^/[worker]  /' & \
 	  sleep 1 && $(BUN) packages/cli/index.ts server start --hosted --port $$ARK_WEB_PORT 2>&1 | sed 's/^/[server]  /' & \
 	  sleep 2 && $(BUN) packages/cli/index.ts server daemon start --port $$ARK_CONDUCTOR_PORT 2>&1 | sed 's/^/[daemon]  /' & \
 	  wait

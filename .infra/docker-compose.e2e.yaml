@@ -78,7 +78,7 @@ services:
       retries: 30
 
   temporal:
-    image: temporalio/auto-setup:1.26
+    image: temporalio/auto-setup:1.27
     container_name: ark-e2e-temporal
     restart: "no"
     depends_on:
@@ -100,7 +100,7 @@ services:
       start_period: 30s
 
   temporal-ui:
-    image: temporalio/ui:2.31.2
+    image: temporalio/ui:2.34.0
     container_name: ark-e2e-temporal-ui
     restart: "no"
     depends_on:
