@@ -22,6 +22,7 @@ import { up as stackUp, down as stackDown } from "./helpers/docker-stack.js";
 import { startGitHttpServer, type GitHttpServerHandle } from "./helpers/git-http-server.js";
 import { compoundDocsFlowSpec, restartThenFailSpec } from "./helpers/docs-flow-spec.js";
 import { RpcClient } from "./helpers/rpc-client.js";
+import { registerE2eFixtures } from "./helpers/register-fixtures.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const ENV_FILE = join(REPO_ROOT, ".env.e2e");
@@ -86,6 +87,10 @@ describe("docs-flow e2e -- hosted (Temporal + docker isolation)", () => {
         extraEnv: TEMPORAL_EXTRA_ENV,
       });
       rpc = new RpcClient(server.webUrl);
+      // Hosted server seeds builtins from flows/definitions/, which does not
+      // include e2e fixtures. Register them via RPC so session/start can find
+      // the flow and resolve its first stage.
+      await registerE2eFixtures(rpc);
     }, 120_000);
 
     afterAll(async () => {
@@ -99,7 +104,7 @@ describe("docs-flow e2e -- hosted (Temporal + docker isolation)", () => {
     test("plan -> implement -> review_gate -> pr completes after stop/resume + approve", async () => {
       await compoundDocsFlowSpec({
         rpc,
-        repoUrl: dockerReachable(gitServer.url),
+        repoUrl: dockerReachable(gitServer.url).replace("http://", `http://user:${EXPECTED_TOKEN}@`),
         bareRepoPath,
         arkDir,
         expectedToken: EXPECTED_TOKEN,
@@ -143,6 +148,7 @@ describe("docs-flow e2e -- hosted (Temporal + docker isolation)", () => {
         extraEnv: FAIL_ENV,
       });
       rpc = new RpcClient(server.webUrl);
+      await registerE2eFixtures(rpc);
     }, 120_000);
 
     afterAll(async () => {
@@ -156,7 +162,7 @@ describe("docs-flow e2e -- hosted (Temporal + docker isolation)", () => {
     test("session resumes after server restart and surfaces AuthError as status=failed", async () => {
       await restartThenFailSpec({
         rpc,
-        repoUrl: dockerReachable(gitServer.url),
+        repoUrl: dockerReachable(gitServer.url).replace("http://", `http://user:${EXPECTED_TOKEN}@`),
         bareRepoPath,
         arkDir,
         expectedToken: EXPECTED_TOKEN,

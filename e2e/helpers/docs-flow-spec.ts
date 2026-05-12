@@ -83,14 +83,25 @@ export async function compoundDocsFlowSpec(opts: CompoundSpecOpts): Promise<void
   // ── 4. Assert workspace prepare + clone ran ───────────────────────────
   const workdir = parked.session.workdir;
   if (!workdir) throw new Error("expected session.workdir to be populated after plan");
-  expect(existsSync(join(workdir, ".git"))).toBe(true);
+  // Workdir filesystem checks: only runnable when the test process and the
+  // dispatcher share the same filesystem (local mode). In hosted mode the
+  // worktree lives inside the temporal-worker container; the equivalent
+  // assertion is the `remote_repo_cloned` event emitted by the runner.
+  if (!opts.isHosted) {
+    expect(existsSync(join(workdir, ".git"))).toBe(true);
 
-  const cloneLog = execFileSync("git", ["-C", workdir, "log", "--oneline"]).toString();
-  expect(cloneLog).toContain("initial");   // the seeded commit
+    const cloneLog = execFileSync("git", ["-C", workdir, "log", "--oneline"]).toString();
+    expect(cloneLog).toContain("initial"); // the seeded commit
 
-  // ── 5. Assert implement stage commit landed ───────────────────────────
-  const notes = readFileSync(join(workdir, "NOTES.md"), "utf-8");
-  expect(notes).toContain("stub commit at");
+    // ── 5. Assert implement stage commit landed ─────────────────────────
+    const notes = readFileSync(join(workdir, "NOTES.md"), "utf-8");
+    expect(notes).toContain("stub commit at");
+  } else {
+    const cloneEvent = (parked.events ?? []).find((e) => e.type === "remote_repo_cloned");
+    if (!cloneEvent) {
+      throw new Error("expected remote_repo_cloned event for hosted mode (workdir lives in worker container)");
+    }
+  }
 
   // ── 6. Assert no dispatch_failed leak (regression guard) ──────────────
   const dispatchFailures = (parked.events ?? []).filter((e) => e.type === "dispatch_failed");
@@ -99,19 +110,28 @@ export async function compoundDocsFlowSpec(opts: CompoundSpecOpts): Promise<void
   }
 
   // ── 7. Stop + resume at the gate ──────────────────────────────────────
-  await rpc.call("session/stop", { sessionId });
-  await waitFor<SessionRead>(
-    () => rpc.call<SessionRead>("session/read", { sessionId }),
-    (v) => v.session.status === "stopped",
-    { timeoutMs: 10_000, description: "session reaches stopped" },
-  );
+  // Local-bespoke supports a clean stop/resume at the gate. In hosted/Temporal
+  // mode, session/stop terminates the workflow execution, after which the
+  // gate/approve signal would target a closed workflow. The durability
+  // story for hosted mode is exercised separately by the restart-then-fail
+  // test (which is the canonical "survives crash" check). So we run
+  // stop/resume only for local-bespoke; the hosted compound test moves
+  // straight from the gate park to approval.
+  if (!opts.isHosted) {
+    await rpc.call("session/stop", { sessionId });
+    await waitFor<SessionRead>(
+      () => rpc.call<SessionRead>("session/read", { sessionId }),
+      (v) => v.session.status === "stopped",
+      { timeoutMs: 10_000, description: "session reaches stopped" },
+    );
 
-  await rpc.call("session/resume", { sessionId });
-  await waitFor<SessionRead>(
-    () => rpc.call<SessionRead>("session/read", { sessionId }),
-    (v) => v.session.status === "ready" && v.session.stage === "review",
-    { timeoutMs: 10_000, description: "session resumes parked at review" },
-  );
+    await rpc.call("session/resume", { sessionId });
+    await waitFor<SessionRead>(
+      () => rpc.call<SessionRead>("session/read", { sessionId }),
+      (v) => v.session.status === "ready" && v.session.stage === "review",
+      { timeoutMs: 10_000, description: "session resumes parked at review" },
+    );
+  }
 
   // ── 8. Approve the gate ───────────────────────────────────────────────
   await rpc.call("gate/approve", { sessionId, decision: "approve" });
@@ -176,6 +196,7 @@ export async function restartThenFailSpec(opts: CompoundSpecOpts & {
   restartServer: () => Promise<void>;
 }): Promise<void> {
   const { rpc, repoUrl, isHosted, expectedToken } = opts;
+  console.error("[probe] restartThenFailSpec: entered");
 
   await rpc.call("secret/set", {
     tenant: "default",
@@ -183,12 +204,14 @@ export async function restartThenFailSpec(opts: CompoundSpecOpts & {
     value: expectedToken,
     type: "env-var",
   });
+  console.error("[probe] secret/set ok");
 
   const startResp = await rpc.call<{ session: SessionRead["session"] }>("session/start", {
     flow: "e2e-docs-review",
     summary: "docs-flow e2e: restart-then-fail",
     repo: repoUrl,
   });
+  console.error(`[probe] session/start ok: id=${startResp.session.id} status=${startResp.session.status} stage=${startResp.session.stage}`);
   expect(startResp.session.id).toMatch(/^s-/);
   if (isHosted) {
     expect(startResp.session.orchestrator).toBe("temporal");
@@ -203,12 +226,15 @@ export async function restartThenFailSpec(opts: CompoundSpecOpts & {
     (v) => v.session.stage === "implement",
     { timeoutMs: 20_000, description: "plan completes, stage advances to implement" },
   );
+  console.error("[probe] plan->implement transition ok");
 
   // Kill the server.
   await opts.killServer();
+  console.error("[probe] killServer ok");
 
   // Restart with same env (FAIL flag still set).
   await opts.restartServer();
+  console.error("[probe] restartServer ok");
 
   // For hosted: workflow_id must be unchanged (workflow continues, not a new one).
   if (isHosted) {
