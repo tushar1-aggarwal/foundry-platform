@@ -13,7 +13,7 @@
 #   make package       Package everything for distribution
 
 .PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-temporal-worker dev-docker dev-control-plane dev-control-plane-down dev-control-plane-bootstrap claude-tfy pi-tfy web desktop \
-        test test-file test-e2e test-e2e-fast test-e2e-web test-e2e-web-dev test-install test-watch test-e2e-local-bespoke test-e2e-control-plane test-e2e-control-plane-up test-e2e-control-plane-down test-e2e-t6-docker lint lint-fix \
+        test test-file test-e2e test-e2e-fast test-e2e-web test-e2e-web-dev test-install test-watch test-e2e-local-bespoke test-e2e-control-plane test-e2e-control-plane-up test-e2e-control-plane-down test-e2e-t6-docker test-laptop-real-llm lint lint-fix \
         format format-check \
         docs-cli \
         build build-cli build-web build-desktop \
@@ -381,6 +381,19 @@ test-e2e-control-plane-down: ## Tear down the e2e Docker stack and volumes
 #   tsx temporal/worker.ts (host process, points at e2e Temporal :7234)
 #
 # Cleanup: `make test-e2e-control-plane-down` tears the docker stack down.
+test-laptop-real-llm: ## Run the laptop real-LLM docs flow (T6 direct mode) against the running dev-control-plane stack
+	@command -v tmux >/dev/null 2>&1 || { echo "tmux required."; exit 1; }
+	@curl -sf http://localhost:8421/api/health >/dev/null 2>&1 || { \
+	  echo ""; \
+	  echo "  Dev stack not reachable on :8421."; \
+	  echo "  Boot it first in another terminal:  make dev-control-plane"; \
+	  echo "  One-time after first boot:          make dev-control-plane-bootstrap"; \
+	  echo ""; \
+	  exit 1; \
+	}
+	@echo "\033[1mRunning laptop real-LLM docs flow (direct mode, real Claude, real Bitbucket)...\033[0m"
+	@ARK_REAL_LLM_E2E=1 $(BUN) test e2e/laptop-docs-real-llm.test.ts --timeout 720000
+
 test-e2e-t6-docker: test-e2e-control-plane-up ## Run T6 (real claude in docker sidecar) end-to-end
 	@command -v tmux >/dev/null 2>&1 || { echo "tmux required (host side, for ark server)."; exit 1; }
 	@# Migration lock cleanup (same trick the bespoke target uses) -- prior
