@@ -47,6 +47,10 @@ import * as m019 from "./019_temporal_columns.js";
 // Migration 020: compute PK swap from (name) to (name, tenant_id) for multi-tenant
 // correctness. Two tenants can now hold rows with the same compute name.
 import * as m020 from "./020_compute_composite_pk.js";
+// Migration 021: set_by / deleted_by audit columns on scoping_overrides
+// for the admin write RPCs (Phase 2). Renumbered from 019 during the
+// Temporal Phase 3 merge so versions stay monotonic.
+import * as m021 from "./021_scoping_audit_columns.js";
 
 export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m001.VERSION, name: m001.NAME, up: m001.up },
@@ -73,4 +77,5 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m018.VERSION, name: m018.NAME, up: m018.up },
   { version: m019.VERSION, name: m019.NAME, up: m019.up },
   { version: m020.VERSION, name: m020.NAME, up: m020.up },
+  { version: m021.VERSION, name: m021.NAME, up: m021.up },
 ];

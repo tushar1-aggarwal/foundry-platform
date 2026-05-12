@@ -179,6 +179,42 @@ describe("TenantManager deleted_by audit", () => {
   });
 });
 
+describe("TenantManager seeded-row protection", () => {
+  it("refuses to delete the seeded 'default' tenant and leaves the row live", async () => {
+    // The 'default' tenant is the JIT-membership target for new Google-OIDC
+    // signups (auth/login.ts). Deleting it breaks the login flow silently
+    // hours later when a new user tries to sign in. Protection lives at
+    // the manager layer so every entry point (handler, CLI, direct repo)
+    // inherits.
+    const db = await freshDb();
+    const tm = new TenantManager(db);
+
+    // Migration 017 seeds the default tenant; verify it's present.
+    const before = await tm.get("default");
+    expect(before).not.toBeNull();
+    expect(before?.deleted_at).toBeNull();
+
+    await expect(tm.delete("default")).rejects.toThrow(/'default' tenant.*landing target/);
+
+    // Row remains live -- no partial write.
+    const after = await tm.get("default");
+    expect(after?.deleted_at).toBeNull();
+    await db.close();
+  });
+
+  it("still allows delete of non-default tenants after the protection lands", async () => {
+    // Regression guard: the hardcoded check must not catch tenants whose
+    // slug merely contains 'default'. Only exact id === "default".
+    const db = await freshDb();
+    const tm = new TenantManager(db);
+    const t = await tm.create({ slug: "not-default", name: "Not Default" });
+    expect(t.id).not.toBe("default");
+    expect(await tm.delete(t.id)).toBe(true);
+    expect((await tm.get(t.id, { includeDeleted: true }))?.deleted_at).not.toBeNull();
+    await db.close();
+  });
+});
+
 describe("TenantManager cascade delete", () => {
   it("soft-cascades to teams and memberships on delete in one txn", async () => {
     const db = await freshDb();

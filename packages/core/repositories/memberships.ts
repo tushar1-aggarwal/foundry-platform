@@ -107,6 +107,25 @@ export class MembershipRepository {
     return (rows as DrizzleSelectMembership[]).map(toPublic);
   }
 
+  /**
+   * Cheap tenant-membership check: returns true iff the user has at
+   * least one live membership in a live team belonging to `tenantId`.
+   * One JOIN, LIMIT 1 -- the only callers are admin write paths
+   * (scoping overrides) where we don't want N+1 lookups.
+   */
+  async userBelongsToTenant(userId: string, tenantId: string): Promise<boolean> {
+    const d = this.d();
+    const m = d.schema.memberships;
+    const t = d.schema.teams;
+    const rows = await (d.db as any)
+      .select({ id: m.id })
+      .from(m)
+      .innerJoin(t, eq(t.id, m.teamId))
+      .where(and(eq(m.userId, userId), isNull(m.deletedAt), eq(t.tenantId, tenantId), isNull(t.deletedAt)))
+      .limit(1);
+    return (rows as Array<{ id: string }>).length > 0;
+  }
+
   async get(userId: string, teamId: string, opts: ListOptions = {}): Promise<MembershipRow | null> {
     const d = this.d();
     const m = d.schema.memberships;

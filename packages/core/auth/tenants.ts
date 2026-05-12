@@ -112,6 +112,14 @@ export class TenantManager {
    */
   async delete(id: string, userId: string | null = null): Promise<boolean> {
     await this.ensureSchema();
+    // 'default' is the seeded landing tenant for new sign-ups. Deleting
+    // it breaks the JIT-membership path in the login flow.
+    if (id === "default") {
+      throw new Error(
+        "Cannot delete the 'default' tenant: it is the seeded landing target " +
+          "for new sign-ups; deleting it breaks the login flow.",
+      );
+    }
     return this.db.transaction(async () => {
       const ok = await this._repo.softDelete(id, userId);
       if (!ok) return false;
