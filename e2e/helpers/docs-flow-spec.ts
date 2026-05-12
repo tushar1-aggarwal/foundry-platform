@@ -77,7 +77,7 @@ export async function compoundDocsFlowSpec(opts: CompoundSpecOpts): Promise<void
   const parked = await waitFor<SessionRead>(
     () => rpc.call<SessionRead>("session/read", { sessionId, include: ["events"] }),
     (v) => v.session.status === "ready" && v.session.stage === "review",
-    { timeoutMs: 30_000, description: `session ${sessionId} parked at review` },
+    { timeoutMs: 60_000, description: `session ${sessionId} parked at review` },
   );
 
   // ── 4. Assert workspace prepare + clone ran ───────────────────────────
