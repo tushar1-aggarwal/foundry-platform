@@ -393,7 +393,13 @@ test-laptop-real-llm: ## Run the laptop real-LLM docs flow (T6 direct mode) agai
 	  exit 1; \
 	}
 	@echo "\033[1mRunning laptop real-LLM docs flow (direct mode, real Claude, real Bitbucket)...\033[0m"
-	@ARK_REAL_LLM_E2E=1 $(BUN) test e2e/laptop-docs-real-llm.test.ts --timeout 720000
+	@# Default repo URL to the SSH form so the test's git ls-remote preflight uses
+	@# the user's SSH key instead of prompting for HTTPS credentials. Operators
+	@# with HTTPS-only auth can override on the command line:
+	@#   T6_REPO_URL=https://... make test-laptop-real-llm
+	@ARK_REAL_LLM_E2E=1 \
+	  T6_REPO_URL=$${T6_REPO_URL:-git@bitbucket.org:paytmteam/foundry-test-repo.git} \
+	  $(BUN) test e2e/laptop-docs-real-llm.test.ts --timeout 720000
 
 test-e2e-t6-docker: test-e2e-control-plane-up ## Run T6 (real claude in docker sidecar) end-to-end
 	@command -v tmux >/dev/null 2>&1 || { echo "tmux required (host side, for ark server)."; exit 1; }
