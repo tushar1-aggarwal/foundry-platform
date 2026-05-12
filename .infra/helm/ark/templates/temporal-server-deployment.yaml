@@ -32,6 +32,13 @@ spec:
             - --service=matching
             - --service=worker
           env:
+            # Bind gRPC listener on all interfaces so the kubelet readiness probe
+            # (which targets 127.0.0.1:7233) can reach the frontend. The
+            # auto-setup default is to bind on TEMPORAL_ADDRESS (pod IP), which
+            # breaks localhost probes. The pod still advertises its pod IP for
+            # membership ring discovery via TEMPORAL_BROADCAST_ADDRESS below.
+            - name: BIND_ON_IP
+              value: "0.0.0.0"
             - name: DB
               value: postgres12
             - name: POSTGRES_SEEDS

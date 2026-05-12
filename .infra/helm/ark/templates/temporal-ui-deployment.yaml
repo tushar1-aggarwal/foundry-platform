@@ -19,6 +19,12 @@ spec:
         {{- include "ark.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: temporal-ui
     spec:
+      # K8s auto-injects TEMPORAL_SERVER_PORT=tcp://<ClusterIP>:7233 for every
+      # Service in the namespace. The temporal-ui config template parses that
+      # env name as an int port and crashes ("cannot unmarshal !!str `tcp://...`
+      # into int"). Disabling service links removes those injections; the UI
+      # only needs the explicit TEMPORAL_ADDRESS below.
+      enableServiceLinks: false
       containers:
         - name: ui
           image: "{{ .Values.temporal.ui.image.repository }}:{{ .Values.temporal.ui.image.tag }}"
