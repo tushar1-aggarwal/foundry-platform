@@ -95,6 +95,14 @@ serviceAccount:
   name: ark
   annotations: {}
 
+# -- ExternalSecret (off by default; enable in env values to pull from AWS SM)
+externalSecret:
+  enabled: false
+
+# -- TensorZero sidecar (off by default)
+tensorZero:
+  enabled: false
+
 # -- Temporal (workflow orchestration for hosted/control-plane mode)
 # Shipped as part of the main chart, not a sub-chart. The persistence layer
 # (RDS + pgbouncer) is provisioned by Ops outside Helm; see
