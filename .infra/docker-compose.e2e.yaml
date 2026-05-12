@@ -158,6 +158,11 @@ services:
       # host.docker.internal reaches the test process on the docker host
       # (Mac/Windows), and via the gateway on Linux.
       ARK_CONDUCTOR_URL: "http://host.docker.internal:8422"
+      # Required by claude-code runtime's secret declaration -- fake-claude
+      # doesn't read it but dispatch validation rejects launch if missing.
+      # File-backed secrets aren't shared with the host server, so set it
+      # directly here for the worker's tenant=default secret resolver.
+      CLAUDE_CODE_OAUTH_TOKEN: "e2e-test-dummy-oauth-token"
     volumes:
       # Fake claude binary for e2e tests -- replaces the real claude so agents
       # complete stages without an Anthropic API key or real LLM calls.
