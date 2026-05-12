@@ -16,6 +16,7 @@ import type { EventRepository } from "../../repositories/event.js";
 import type { FlowStateRepository } from "../../repositories/flow-state.js";
 import type { FlowStore } from "../../stores/flow-store.js";
 import type { RuntimeStore } from "../../stores/runtime-store.js";
+import type { AgentStore } from "../../stores/agent-store.js";
 import type { ModelService } from "../../models/ModelService.js";
 import type { ComputeService } from "../compute.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
@@ -139,6 +140,8 @@ export interface GetAppCb {
  *   flowStates        -- setCurrentStage after successful launch
  *   flows             -- currently only read indirectly via getStage callbacks
  *   runtimes          -- runtime.secrets lookup for stage secrets merge
+ *   agents            -- cache warmup at dispatch entry (avoids cold-miss
+ *                        Promise leak through sync resolveAgent)
  *   computeService    -- create cloned template rows (per-session concrete)
  *   pluginRegistry    -- executor lookup (wrapped by resolveExecutor callback)
  *   statusPollers     -- currently unused at top level (poller callback wraps it)
@@ -170,6 +173,17 @@ export interface DispatchDeps {
   flowStates: FlowStateRepository;
   flows: FlowStore;
   runtimes: RuntimeStore;
+  /**
+   * AgentStore. Held directly (in addition to `resolveAgent` callback) so
+   * dispatch can warm the in-memory cache at entry. Required because
+   * DbResourceStore.get() returns Promise<T|null> on cold cache miss; the
+   * sync `resolveAgent` path treats that Promise as a truthy agent and
+   * silently loses every field including `agent.runtime` -- surfaces as
+   * "No runtime resolvable for session ...". Calling list() at the top of
+   * dispatch populates the sync cache so subsequent .get() returns the
+   * real AgentDefinition.
+   */
+  agents: AgentStore;
   /**
    * Domain service over the model catalog. When present, dispatch-core
    * resolves agent.model -> provider slug via `models.resolveSlug()`.

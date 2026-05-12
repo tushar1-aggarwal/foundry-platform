@@ -87,6 +87,18 @@ export class CoreDispatcher {
   async dispatch(sessionId: string, opts?: { onLog?: (msg: string) => void }): Promise<DispatchResult> {
     const log = opts?.onLog ?? (() => {});
 
+    // Warm agent + runtime caches so the sync `resolveAgent` path (which
+    // eventually calls `app.agents.get(name)` / `app.runtimes.get(name)`)
+    // hits the in-memory cache. DbResourceStore.get() returns a Promise on
+    // a cold cache miss in hosted mode; the sync ResolveAgentCb contract
+    // treats that Promise as a truthy agent and silently loses every
+    // field (notably `agent.runtime`), which surfaces downstream as
+    // "No runtime resolvable for session ...". list() populates the sync
+    // cache so subsequent .get() calls return real AgentDefinitions.
+    // Mirrors the same warmup in temporal/activities/dispatch-stage.ts.
+    await Promise.resolve((this.deps.agents as { list?: () => unknown }).list?.()).catch(() => {});
+    await Promise.resolve((this.deps.runtimes as { list?: () => unknown }).list?.()).catch(() => {});
+
     // 1. Load + validate session preconditions.
     const validated = await validateSessionForDispatch(this.deps, sessionId);
     if (validated.early) return validated.early;
