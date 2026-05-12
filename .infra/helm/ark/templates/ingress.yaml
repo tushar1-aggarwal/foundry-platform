@@ -45,4 +45,13 @@ spec:
                 name: {{ include "ark.fullname" . }}-control-plane
                 port:
                   name: web
+          {{- if and .Values.temporal.enabled .Values.temporal.ui.enabled .Values.temporal.ui.ingress.enabled }}
+          - path: {{ .Values.temporal.ui.ingress.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: temporal-ui
+                port:
+                  number: 8080
+          {{- end }}
 {{- end }}
