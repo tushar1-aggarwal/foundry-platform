@@ -1,0 +1,78 @@
+{{- if .Values.temporal.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-server
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-server
+spec:
+  replicas: {{ .Values.temporal.server.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ark.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: temporal-server
+  template:
+    metadata:
+      labels:
+        {{- include "ark.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal-server
+    spec:
+      containers:
+        - name: temporal-server
+          image: "{{ .Values.temporal.server.image.repository }}:{{ .Values.temporal.server.image.tag }}"
+          imagePullPolicy: {{ .Values.temporal.server.image.pullPolicy }}
+          args:
+            - --service=frontend
+            - --service=history
+            - --service=matching
+            - --service=worker
+          env:
+            - name: DB
+              value: postgres12
+            - name: POSTGRES_SEEDS
+              value: {{ .Values.temporal.persistence.host | quote }}
+            - name: DB_PORT
+              value: {{ .Values.temporal.persistence.port | quote }}
+            - name: DBNAME
+              value: {{ .Values.temporal.persistence.database | quote }}
+            - name: VISIBILITY_DBNAME
+              value: {{ .Values.temporal.persistence.visibilityDatabase | quote }}
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ .Values.temporal.persistence.secretKeys.username }}
+            - name: POSTGRES_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ .Values.temporal.persistence.secretKeys.password }}
+            - name: TEMPORAL_BROADCAST_ADDRESS
+              value: "0.0.0.0"
+          ports:
+            - name: grpc
+              containerPort: 7233
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.temporal.server.resources | nindent 12 }}
+          # Probes use temporal CLI shipped with the server image's debian base.
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "temporal operator cluster health --address 127.0.0.1:7233 >/dev/null 2>&1"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 7233
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+{{- end }}
