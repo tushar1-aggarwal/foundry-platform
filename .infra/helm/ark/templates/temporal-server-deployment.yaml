@@ -49,8 +49,13 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.temporal.persistence.existingSecret }}
                   key: {{ .Values.temporal.persistence.secretKeys.password }}
+            # Multi-replica clusters need each pod to advertise its own IP for
+            # membership ring discovery. 0.0.0.0 silently breaks ring formation
+            # when replicaCount > 1 (prod default is 2).
             - name: TEMPORAL_BROADCAST_ADDRESS
-              value: "0.0.0.0"
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           ports:
             - name: grpc
               containerPort: 7233
