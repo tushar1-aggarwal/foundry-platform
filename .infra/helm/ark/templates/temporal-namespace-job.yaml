@@ -1,0 +1,54 @@
+{{- if and .Values.temporal.enabled .Values.temporal.namespaceJob.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-namespace
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-namespace
+  annotations:
+    # Post-install: server must be up before we can call its API.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "ark.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal-namespace
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: namespace
+          image: "{{ .Values.temporal.namespaceJob.image.repository }}:{{ .Values.temporal.namespaceJob.image.tag }}"
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: "{{ .Values.temporal.serverServiceName }}:7233"
+            - name: TEMPORAL_CLI_ADDRESS
+              value: "{{ .Values.temporal.serverServiceName }}:7233"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              # Wait up to 90s for server to be reachable.
+              for i in $(seq 1 30); do
+                if temporal operator cluster health --address "$TEMPORAL_ADDRESS" >/dev/null 2>&1; then
+                  break
+                fi
+                echo "waiting for temporal-server... ($i)"
+                sleep 3
+              done
+              # Idempotent namespace creation.
+              {{- range .Values.temporal.namespaces }}
+              if temporal operator namespace describe {{ . | quote }} >/dev/null 2>&1; then
+                echo "namespace {{ . }} exists"
+              else
+                temporal operator namespace create --retention {{ $.Values.temporal.namespaceJob.retention }} {{ . | quote }}
+                echo "namespace {{ . }} created"
+              fi
+              {{- end }}
+{{- end }}
