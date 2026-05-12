@@ -1,0 +1,45 @@
+# Minimal values for `helm template` smoke checks during plan execution.
+# Not a real deployment values file.
+namespace: ark-test
+
+externalSecret:
+  enabled: false
+
+tensorZero:
+  enabled: false
+
+controlPlane:
+  image:
+    repository: ark
+    tag: test
+
+postgresql:
+  enabled: false
+  external:
+    host: rds-test.example.com
+    port: 5432
+    database: ark
+    existingSecret: ark-db-credentials
+
+redis:
+  enabled: false
+  external:
+    host: redis-test.example.com
+
+temporal:
+  enabled: true
+  namespace: ark-test
+  namespaces:
+    - ark-test
+  taskQueue: ark.default.stages
+  serverServiceName: temporal-server
+  persistence:
+    host: pgbouncer.example.com
+    port: 6432
+    database: temporal
+    visibilityDatabase: temporal_visibility
+    existingSecret: temporal-db-credentials
+  worker:
+    image:
+      repository: ghcr.io/ytarasova/ark-temporal-worker
+      tag: test
