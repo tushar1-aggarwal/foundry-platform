@@ -1,0 +1,25 @@
+name: e2e-docs-review
+description: "Combined docs + review test flow: plan -> implement -> review_gate -> pr.
+              requires_repo: true exercises the workspace prepare + clone + push paths
+              against a local git-http-backend server with basic auth. The create_pr
+              action runs through the graceful (non-GitHub) host path."
+requires_repo: true
+stages:
+  - name: plan
+    agent: stub-planner
+    gate: auto
+
+  - name: implement
+    agent: stub-implementer
+    gate: auto
+    depends_on: [plan]
+
+  - name: review
+    type: review_gate
+    gate: manual
+    depends_on: [implement]
+
+  - name: pr
+    action: create_pr
+    gate: auto
+    depends_on: [review]
