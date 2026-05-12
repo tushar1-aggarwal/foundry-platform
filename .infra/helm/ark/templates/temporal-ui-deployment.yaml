@@ -33,6 +33,8 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          resources:
+            {{- toYaml .Values.temporal.ui.resources | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /

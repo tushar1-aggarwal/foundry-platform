@@ -1,4 +1,7 @@
 {{- if .Values.temporal.enabled }}
+{{- if not .Values.temporal.persistence.host }}
+{{- fail "temporal.persistence.host must be set when temporal.enabled=true (e.g., pgbouncer.<account>.example). Disable Temporal via --set temporal.enabled=false or provide a host in your env values file." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
