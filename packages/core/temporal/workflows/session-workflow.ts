@@ -17,7 +17,7 @@ const {
   loadFlowActivity,
 } = proxyActivities<typeof acts>({
   startToCloseTimeout: "1 hour",
-  heartbeatTimeout: "60 seconds",
+  heartbeatTimeout: "10 minutes",
   retry: { maximumAttempts: 2, initialInterval: "1s", backoffCoefficient: 2 },
 });
 
