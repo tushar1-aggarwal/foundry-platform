@@ -64,7 +64,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
   && rm -rf /var/lib/apt/lists/* \
-  && npm install -g @anthropic-ai/claude-code \
+  && npm install -g @anthropic-ai/claude-code@2.1.126 \
   && npm cache clean --force
 # Pull kubectl from a multi-arch image (Docker Hub is Zscaler-trusted, dl.k8s.io is MITM-blocked).
 COPY --from=bitnami/kubectl:latest /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/kubectl
