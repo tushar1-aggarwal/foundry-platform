@@ -164,6 +164,12 @@ dev-control-plane: dev-temporal dev-docker ## Boot full laptop dev stack -- dock
 	@# crash immediately with `Cannot find module '@temporalio/activity'` on a
 	@# fresh checkout (or after a clean). Matches the `dev` target's pattern.
 	@$(BUN) install --silent
+	@# Pre-build the web bundle. The server has a lazy auto-build at
+	@# `packages/core/hosted/web.ts:195` with a 30s timeout that silently
+	@# swallows errors; Vite cold builds routinely exceed that on a fresh
+	@# checkout, leaving the UI as 404s. Build explicitly so the dist is
+	@# ready when `server start` initializes its static handler.
+	@$(MAKE) build-web --no-print-directory
 	@echo ""
 	@echo "\033[1mArk dev stack -- full laptop\033[0m"
 	@set -a && . ./.env.control-plane && set +a && \
