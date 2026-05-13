@@ -15,6 +15,18 @@ This spec **builds on** `2026-04-30-typed-secrets-design.md` -- it does **not** 
 
 The composition: this layer produces the **effective tenant-scoped secret set** for a given session by walking `user -> teamChain -> tenant` per key and honoring per-key policy. That set is then handed to the existing `placeAllSecrets(...)` pipeline as if it were a flat tenant secret list -- the placer layer is unaware of scope. Migration is therefore additive: existing tenant-only secrets become rows with `scope_kind="tenant", scope_id=<tenant_id>` and continue to flow through the typed-secrets pipeline unchanged.
 
+### Typed-secrets decisions: what this spec preserves vs supersedes
+
+| Typed-secrets decision | This spec |
+|---|---|
+| Schema shape (`type`, `metadata`, bytes) | **Preserved** |
+| Per-type placer architecture + per-provider `PlacementCtx` | **Preserved** |
+| v1 type taxonomy (`env-var`, `ssh-private-key`, `generic-blob`, `kubeconfig`) | **Preserved** |
+| Narrowing filter (stage / runtime YAML `secrets: [NAME]` lists) | **Preserved** -- applies on top of the per-user resolved set |
+| `ssh-keyscan` execution on the control plane | **Preserved** |
+| **Auto-attach all tenant secrets to every session** (typed-secrets D2) | **SUPERSEDED** -- the input to `placeAllSecrets` is now the per-user effective set produced by this layer's resolver, not the flat tenant secret list. Operator must explicitly accept this supersession before implementation begins; it is the load-bearing motivation for this entire spec. |
+| Phasing of typed-secrets work | **Preserved**, with explicit sequencing below |
+
 ## Context
 
 ### What exists today
@@ -89,6 +101,8 @@ type SecretsCallerContext =
   | { kind: "system";       tenantId; onBehalfOfUserId?: string;   reason: string };
 ```
 
+**Daemon-to-daemon (conductor -> arkd over HTTP) does NOT get its own `kind`.** The bearer token between daemons authenticates the *channel*, not an identity. Daemon callers are required to forward the originating `SecretsCallerContext` in a signed sidecar header (`X-Ark-Caller-Ctx`, HMAC'd with the inter-daemon shared secret). The receiving daemon verifies the HMAC and re-hydrates the context. There is no path by which a daemon HTTP caller can invoke the secrets service without a forwarded user/api_key/system context -- the service rejects requests whose channel-auth succeeded but whose `X-Ark-Caller-Ctx` is missing or fails HMAC verification.
+
 Role -> capability mapping lives in `packages/core/auth/capabilities.ts` (new). v1 mapping:
 
 ```ts
@@ -129,9 +143,10 @@ Four new tables in `packages/secrets/schema/{sqlite,postgres}.ts`. SQLite and Po
 | `nonce` | BLOB NOT NULL | 12 bytes, per-secret random |
 | `tag` | BLOB NOT NULL | 16-byte GCM tag (may be appended to ciphertext; column kept separate for clarity) |
 | `aad_fingerprint` | TEXT NOT NULL | SHA-256 hex of the AAD that was bound to this ciphertext; used for tamper detection |
-| `value_kind` | TEXT NOT NULL | `"string"` or `"blob"` -- matches existing `SecretsCapability` split |
 | `created_at` | INTEGER NOT NULL | epoch ms |
 | Indexes | `(tenant_id)` |
+
+The cipher's storage shape (string vs blob) is **derived** from the binding's `secret_type` (env-var / ssh-private-key / kubeconfig -> string; generic-blob -> blob). No `value_kind` column on `secret_blobs` -- single source of truth lives on the binding.
 
 ### `secret_bindings`
 
@@ -235,7 +250,7 @@ function resolve(ctx, sessionScope, key): Plaintext | null {
 ### Cipher
 
 - **Algorithm:** AES-256-GCM. Per-secret random 12-byte nonce. 16-byte auth tag.
-- **AAD:** `tenant_id || 0x00 || scope_kind || 0x00 || scope_id || 0x00 || key || 0x00 || value_kind`. Computed deterministically at encrypt and verified at decrypt. Tampering with any AAD field (e.g. copying a ciphertext to a different tenant row) causes decryption to fail.
+- **AAD:** `tenant_id || 0x00 || scope_kind || 0x00 || scope_id || 0x00 || key || 0x00 || secret_type`. Computed deterministically at encrypt and verified at decrypt. Tampering with any AAD field (e.g. copying a ciphertext to a different tenant row, swapping a binding's `secret_type` after the fact) causes decryption to fail.
 - **AAD fingerprint** (SHA-256 hex of the AAD bytes) is stored on `secret_blobs.aad_fingerprint` to detect row-level tampering at audit time even before a decrypt is attempted.
 
 ### KEK lifecycle
@@ -252,7 +267,7 @@ Tried in order; first hit wins, with a structured log line at startup naming the
 |---|---|---|
 | 1 | `ARK_MASTER_KEY` env var (base64, 32 bytes) | Set by operator -- hosted, k8s `Secret` mounted via `LoadCredential=`, Vault agent, systemd creds |
 | 2 | OS keychain entry `ark.master-key` | Desktop: macOS Keychain, Linux libsecret, Windows DPAPI |
-| 3 | `$ARK_DIR/.master.key` (mode 0600, 32 random bytes) | Auto-generated on first start if no other source. Startup logs a warning that key is on disk; dev-safe, prod-bad. |
+| 3 | `$ARK_DIR/.master.key` (mode 0600, 32 random bytes) | Auto-generated on first start if no other source. **Threat model honestly stated:** this protects against accidental disclosure via backups, snapshots, and casual filesystem snooping. It does **not** protect against an attacker with local filesystem read access -- they get both ciphertext and key. Startup logs a warning naming this; dev-safe, prod-acceptable only when the host's filesystem is trusted (e.g., single-tenant single-user). |
 | 4 | `--unlock <passphrase>` CLI flag | Argon2id-derived; for single-tenant high-security operators who explicitly opt in. Blocks until provided. |
 
 A `KekSource` enum is recorded on every daemon-start audit event so operators can confirm the active source.
@@ -396,9 +411,23 @@ The narrowing filter from the typed-secrets design (stage / runtime YAML `secret
 |---|---|
 | Phase 1 -- Foundation | Schema migrations, `SecretsService`, KEK resolver, AES-GCM cipher, `secrets.json` migration. No HTTP routes yet. Read path operates via in-process `kind=system`. `tenant_claude_auth` shim wired. |
 | Phase 2 -- HTTP & CLI | `/secrets/registry`, `/secrets/bindings`, `/secrets/audit` routes. `ark secrets ...` CLI generalised to set scope. Capability middleware enforces. |
-| Phase 3 -- Hierarchy in dispatch | `effectiveSecretsForSession` replaces flat tenant list in dispatch. Team-chain snapshot persisted on session at start. End-to-end resolution observable in audit log. |
+| Phase 3 -- Hierarchy in dispatch | `effectiveSecretsForSession` replaces flat tenant list in dispatch. End-to-end resolution observable in audit log. |
 
 Each phase has its own implementation plan; this design covers all three.
+
+### Sequencing with the typed-secrets work
+
+Both specs have Phase 1/2/3. They are **not** independent. Gate dependencies:
+
+| Typed-secrets phase | This spec's phase | Order |
+|---|---|---|
+| TS Phase 1 (schema migration: `type` + `metadata` on stored secrets) | -- | **Must land first**. This spec's `secret_bindings.secret_type` and `metadata_json` columns directly mirror that shape; landing this before TS Phase 1 would create a fork. |
+| TS Phase 2 (`ssh-private-key` placer + EC2 unblock) | -- | Can land in parallel with this spec's Phase 1 (foundation). They touch disjoint code. |
+| -- | This Phase 1 (foundation: schema, KEK, cipher, service) | Lands after TS Phase 1. Migration code converts existing tenant-only secrets into `scope_kind="tenant"` bindings. |
+| -- | This Phase 2 (HTTP + CLI) | Lands after this Phase 1. |
+| TS Phase 3 (generalise: claude-blob deletion, full provider coverage) | This Phase 3 (hierarchy in dispatch) | Must land **together** -- the moment dispatch starts feeding the per-user effective set into `placeAllSecrets`, the typed-secrets generalisation must be in place so every type is handled. |
+
+Recommended cut: ship `[TS-1, TS-2, This-1, This-2]` as a coherent slice, then `[TS-3, This-3]` as the second slice.
 
 ---
 
@@ -438,11 +467,14 @@ These remain undecided. Each is presented with options the operator can pick bef
 
 ### Q5. Audit log retention?
 
+**Volume driver to note:** the dominant audit-row producer is **resolution at dispatch**, not writes. A tenant with N registered secrets and S sessions/day emits ~N*S resolve rows/day, plus a smaller number of write rows. For a tenant with 30 secrets and 100 sessions/day, that's 3000 resolve rows/day -- ~1M/year. Retention strategy should be sized to this, not to write volume.
+
 | Option | Implication |
 |---|---|
-| **A. Indefinite (v1 default)** | Simplest; grows linearly. |
+| **A. Indefinite (v1 default)** | Simplest; grows linearly with resolutions, not writes. |
 | **B. TTL-driven (e.g. 90 days), rolling delete background job** | Bounded growth; needs a scheduler. Configurable per tenant. |
 | **C. Tenant-controlled retention with admin-set TTL** | Compliance-friendly; more configuration surface. |
+| **D. Split tables: writes (indefinite) + resolves (TTL'd)** | Keeps the compliance-relevant write trail forever; cheap-to-lose resolve trail rolls. Two tables, one query helper. |
 
 ### Q6. What happens when a user is removed from a team while they have a running session that's still resolving secrets via the cached `teamChain`?
 
@@ -479,6 +511,9 @@ These were decided during the 2026-05-13 brainstorming session and are locked un
 | D10 | Authorization vocabulary | **Capabilities, not roles**. Secrets code asks `caller.capabilities.has(...)`; the role-to-capability map lives in `packages/core/auth/capabilities.ts` and is the single edit point for future RBAC. |
 | D11 | Relationship to typed-secrets design | This spec **extends** `2026-04-30-typed-secrets-design.md`. Placement layer (per-type placers + per-provider `PlacementCtx`) is unchanged; this layer produces the effective tenant secret set that feeds into the existing pipeline. |
 | D12 | Plaintext after write | Admins force-writing a binding receive no read-back of plaintext. Self-writes flow back at dispatch as plaintext, as expected. |
+| D13 | **Supersession of typed-secrets D2 (auto-attach all tenant secrets to every session)** | **Pending explicit operator confirmation.** This spec replaces auto-attach with per-user resolution via `effectiveSecretsForSession`. It is the load-bearing motivation for this design; without superseding D2, hierarchy cannot exist. Operator must accept before implementation begins. |
+| D14 | Daemon-to-daemon caller | Daemon HTTP callers forward the originating `SecretsCallerContext` via HMAC-signed sidecar header. No new caller `kind`; channel auth is separate from identity auth. |
+| D15 | Cipher storage shape | Derived from `secret_type` on the binding. No redundant `value_kind` column. AAD binds `secret_type`. |
 
 ---
 
