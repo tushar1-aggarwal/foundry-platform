@@ -264,9 +264,12 @@ export class K8sCompute implements Compute {
 
     await api.createNamespacedPod({ namespace, body: pod });
 
-    // kubectl port-forward refuses to attach to a Pending pod and exits 1
-    // immediately. Wait until the pod reports Running before continuing.
-    // Cap at 2min to cover cold image pull + container start.
+    // kubectl port-forward refuses Pending pods AND silently dies if the
+    // forwarded port has nothing listening yet. Wait for two gates in order:
+    //   1. pod.status.phase === "Running" (kubelet has started the container)
+    //   2. arkd inside the pod actually accepts a TCP connection on :19300
+    //      (Bun + CLI cold-start takes ~5-15s after container start)
+    // Cap each at 2min and 1min respectively to cover slow image pulls.
     const podDeadline = Date.now() + 120_000;
     while (Date.now() < podDeadline) {
       try {
@@ -279,6 +282,21 @@ export class K8sCompute implements Compute {
       } catch (e) {
         logDebug("compute", `readNamespacedPod transient: ${(e as Error)?.message ?? e}`);
       }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    // Probe arkd readiness via `kubectl exec ... -- curl http://localhost:19300/health`.
+    // Spawns a one-shot subprocess per probe; doesn't matter for cold-start.
+    const arkdDeadline = Date.now() + 60_000;
+    while (Date.now() < arkdDeadline) {
+      const ok = await new Promise<boolean>((resolve) => {
+        const args = ["exec", "-n", namespace, podName, "--", "curl", "-fsS", "-m", "2", `http://localhost:${ARKD_POD_PORT}/health`];
+        if (cfg.kubeconfig) args.unshift("--kubeconfig", cfg.kubeconfig);
+        const probe = spawn("kubectl", args, { stdio: "ignore" });
+        probe.on("exit", (code) => resolve(code === 0));
+        probe.on("error", () => resolve(false));
+      });
+      if (ok) break;
       await new Promise((r) => setTimeout(r, 1000));
     }
 
