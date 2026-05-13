@@ -62,6 +62,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
+# Pull kubectl from a multi-arch image (Docker Hub is Zscaler-trusted, dl.k8s.io is MITM-blocked).
+COPY --from=bitnami/kubectl:latest /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/kubectl
 
 # Production node_modules come from the deps stage (no devDeps) --
 # keeps the final image slim. Source comes from the build stage.
