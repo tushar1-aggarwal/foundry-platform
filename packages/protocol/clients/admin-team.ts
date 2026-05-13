@@ -248,4 +248,76 @@ export class AdminTeamClient {
   }
 
   // --- END agent-B ---
+
+  // ── admin/scoping/* (Phase 2 -- replaces SQL playbook for scoping_overrides) ──
+
+  async scopingSet(opts: {
+    scope_kind: "user" | "team" | "tenant";
+    scope_id: string;
+    key: string;
+    value: unknown;
+  }): Promise<ScopingOverrideRow> {
+    const { row } = await this.rpc<{ row: ScopingOverrideRow }>(
+      "admin/scoping/set",
+      opts as unknown as Record<string, unknown>,
+    );
+    return row;
+  }
+
+  async scopingList(
+    opts: {
+      scope_kind?: "user" | "team" | "tenant";
+      scope_id?: string;
+      key?: string;
+      includeDeleted?: boolean;
+    } = {},
+  ): Promise<ScopingOverrideRow[]> {
+    const { rows } = await this.scopingListPage(opts);
+    return rows;
+  }
+
+  /**
+   * Like `scopingList` but exposes the server's `truncated` flag so
+   * callers (CLI, scripts) can warn when the safety cap was hit.
+   */
+  async scopingListPage(
+    opts: {
+      scope_kind?: "user" | "team" | "tenant";
+      scope_id?: string;
+      key?: string;
+      includeDeleted?: boolean;
+    } = {},
+  ): Promise<{ rows: ScopingOverrideRow[]; truncated: boolean }> {
+    const { rows, truncated } = await this.rpc<{ rows: ScopingOverrideRow[]; truncated: boolean }>(
+      "admin/scoping/list",
+      opts as unknown as Record<string, unknown>,
+    );
+    return { rows, truncated };
+  }
+
+  async scopingGet(id: string): Promise<ScopingOverrideRow> {
+    const { row } = await this.rpc<{ row: ScopingOverrideRow }>("admin/scoping/get", { id });
+    return row;
+  }
+
+  async scopingDelete(
+    opts: { id: string } | { scope_kind: "user" | "team" | "tenant"; scope_id: string; key: string },
+  ): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/scoping/delete", opts as Record<string, unknown>);
+    return ok;
+  }
+}
+
+export interface ScopingOverrideRow {
+  id: string;
+  scope_kind: "user" | "team" | "tenant";
+  scope_id: string;
+  key: string;
+  value_json: string;
+  tenant_id: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  set_by: string | null;
+  deleted_by: string | null;
 }

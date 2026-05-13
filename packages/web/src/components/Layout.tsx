@@ -2,8 +2,9 @@ import { useEffect, useMemo } from "react";
 import { IconRail } from "./ui/IconRail.js";
 import type { IconRailItem } from "./ui/IconRail.js";
 import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
-import { Play, Bot, Zap, Monitor, Clock, DollarSign, Cog, Wrench, Calendar, Plug } from "lucide-react";
+import { Play, Bot, Zap, Monitor, Clock, DollarSign, Cog, Wrench, Calendar, Plug, Shield } from "lucide-react";
 import { useOptionalAuth } from "../auth/AuthContext.js";
+import type { Identity } from "../auth/whoami.js";
 import { UserMenu } from "./UserMenu.js";
 
 interface LayoutProps {
@@ -34,6 +35,35 @@ const BASE_NAV_ITEMS: IconRailItem[] = [
   { id: "integrations", icon: <Plug size={18} strokeWidth={1.5} />, label: "Integrations", shortcut: "I" },
   { id: "costs", icon: <DollarSign size={18} strokeWidth={1.5} />, label: "Costs", shortcut: "$" },
 ];
+
+const ADMIN_NAV_ITEM: IconRailItem = {
+  id: "admin",
+  icon: <Shield size={18} strokeWidth={1.5} />,
+  label: "Admin",
+};
+
+/**
+ * Compose the icon-rail nav items. Pure function -- exported so tests can
+ * exercise the role gating + unread-badge merging without rendering the
+ * whole `Layout` tree.
+ *
+ * - `totalUnread > 0` puts a numeric badge on the Sessions entry.
+ * - `role === "admin"` appends the Admin entry at the end of the rail.
+ *   Member / viewer / null (anonymous) callers don't see it -- the page
+ *   itself also rejects them with FORBIDDEN, so showing the entry would
+ *   be a dead end.
+ *
+ * Signature takes `role` directly (not the full `Identity`) so the
+ * `useMemo` in `Layout` can key off a stable primitive instead of the
+ * `whoami`-returned identity object, which churns on every refresh.
+ */
+export function buildNavItems(role: Identity["role"] | null, totalUnread: number | undefined): IconRailItem[] {
+  const items: IconRailItem[] = totalUnread
+    ? BASE_NAV_ITEMS.map((item) => (item.id === "sessions" ? { ...item, badge: totalUnread } : item))
+    : [...BASE_NAV_ITEMS];
+  if (role === "admin") items.push(ADMIN_NAV_ITEM);
+  return items;
+}
 
 const SETTINGS_ITEM: IconRailItem = {
   id: "settings",
@@ -82,10 +112,11 @@ export function Layout({
   // path still works for those tests).
   const auth = useOptionalAuth();
   const identity = auth?.identity ?? null;
-  const navItems = useMemo(() => {
-    if (!totalUnread) return BASE_NAV_ITEMS;
-    return BASE_NAV_ITEMS.map((item) => (item.id === "sessions" ? { ...item, badge: totalUnread } : item));
-  }, [totalUnread]);
+  const role = identity?.role ?? null;
+  // Re-derive only when the visible state for the rail actually changes
+  // (badge count + admin gate). Keying off `role` (a stable primitive)
+  // avoids churning on every whoami refresh that doesn't move the role.
+  const navItems = useMemo(() => buildNavItems(role, totalUnread), [role, totalUnread]);
 
   // Keyboard shortcuts for navigation
   useEffect(() => {

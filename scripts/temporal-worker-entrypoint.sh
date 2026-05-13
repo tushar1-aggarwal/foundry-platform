@@ -19,7 +19,7 @@ mkdir -p "$PLUGIN_DIR" "$FLOW_DIR"
 # `ARK_E2E_MODE` is the explicit opt-in. The e2e compose stack
 # (.infra/docker-compose.e2e.yaml) sets it; chart deployments do not.
 if [ "${ARK_E2E_MODE:-0}" = "1" ]; then
-  echo "[entrypoint] ARK_E2E_MODE=1, installing e2e stub executor and flow fixtures"
+  echo "[entrypoint] ARK_E2E_MODE=1, installing e2e stub executors and flow fixtures"
   [ -f /app/e2e/fixtures/fake-claude-code-executor.mjs ] \
     && cp /app/e2e/fixtures/fake-claude-code-executor.mjs "$PLUGIN_DIR/claude-code.mjs"
   if [ -d /app/e2e/fixtures/flows ]; then

@@ -206,8 +206,8 @@ session/start time).
 ## Creating an admin (NULL-owner) key via CLI
 
 You need an admin-role key first to call this. (Yes, chicken-and-egg
-on a fresh install -- typically the first admin key is minted via
-direct DB insert during initial deployment.)
+on a fresh install -- the first admin key is minted via direct DB
+insert during initial deployment; see the bootstrap recipe below.)
 
 ```bash
 ark --token "$ADMIN_BEARER" auth create-key \
@@ -215,6 +215,85 @@ ark --token "$ADMIN_BEARER" auth create-key \
 ```
 
 The output prints the plaintext key once. Save it.
+
+### First-time bootstrap (no admin key exists yet)
+
+`apikey/create` is gated by the `requireRealUser` identity check, which
+rejects anonymous callers, local-mode synthetic admins, and api-key
+callers themselves. On a fresh install with `ARK_AUTH_REQUIRE_TOKEN=true`
+there is no human-cookie session yet, so the only way to seed the first
+admin bearer is a direct SQL insert. After that, all subsequent admin
+keys go through the cookie -> `apikey/create` RPC path.
+
+```bash
+TENANT=default
+
+# Safety: bootstrap is for fresh installs. If a live admin key already
+# exists for the tenant, mint additional keys via `ark auth create-key`
+# instead so the audit trail stays clean.
+EXISTING=$(sqlite3 ~/.ark/ark.db \
+  "SELECT COUNT(*) FROM api_keys WHERE tenant_id='$TENANT' AND role='admin' AND deleted_at IS NULL;")
+if [ "$EXISTING" -gt 0 ]; then
+  echo "tenant '$TENANT' already has $EXISTING live admin key(s)."
+  echo "Use 'ark auth create-key --tenant $TENANT --role admin --name <label>' instead."
+  echo "If you really need to bootstrap a new key (original lost), delete the guard and re-run."
+  exit 1
+fi
+
+SECRET=$(openssl rand -hex 16)
+KEY="ark_${TENANT}_$SECRET"                     # format: ark_<tenantId>_<secret>
+HASH=$(printf '%s' "$KEY" | openssl dgst -sha256 -hex | awk '{print $NF}')
+BOOT_ID="ak-bootstrap-$(openssl rand -hex 3)"   # unique suffix so the recipe is re-runnable
+NOW=$(date -u +%FT%TZ)
+sqlite3 ~/.ark/ark.db \
+  "INSERT INTO api_keys (id, tenant_id, key_hash, name, role, created_at)
+   VALUES ('$BOOT_ID', '$TENANT', '$HASH', 'bootstrap', 'admin', '$NOW');"
+export ARK_TOKEN="$KEY"
+
+# Verify
+ark scoping list   # should return [] (or whatever the tenant has), not "admin role required"
+```
+
+Two formatting details that will silently reject the key if you get
+them wrong:
+
+- **Token format must be `ark_<tenantId>_<secret>`.** The validator
+  (`auth/api-keys.ts:104-109`) splits on `_` and reads the second
+  segment as the tenant id; a 2-segment key like `ark_<secret>` is
+  rejected before the hash is even computed.
+- **The stored `key_hash` is SHA-256 over the *full* key string**
+  (including the `ark_default_` prefix), not just the random secret.
+  The `openssl dgst -sha256 -hex` call above is portable across
+  macOS and Linux; on macOS you can substitute `shasum -a 256`, on
+  Linux `sha256sum`, but the openssl form avoids the platform fork.
+
+For Postgres-backed deployments, swap the `sqlite3` line for `psql` and
+keep the same column names and key format.
+
+**Rotate this key once a real admin exists.** The bootstrap row is a
+long-lived shared secret minted outside the normal audit path. As soon
+as you have a real human admin (Google OIDC sign-in -> dashboard ->
+mint admin key), revoke the bootstrap row:
+
+```bash
+ark auth revoke-key "$BOOT_ID"   # or look up the id with `ark auth list-keys --tenant default`
+```
+
+**Shell hygiene.** The recipe ends with `export ARK_TOKEN="$KEY"`,
+which writes the secret into your shell's process env (and, for many
+configurations, the shell history). For production deployments,
+prefer storing the key in your secret manager (Vault, AWS Secrets
+Manager, etc.) and sourcing it on demand:
+
+```bash
+# production-friendly pattern
+export ARK_TOKEN=$(vault read -field=ark_bootstrap secret/ark/default)
+ark scoping list
+unset ARK_TOKEN   # don't leave it in the parent shell after you're done
+```
+
+On a single-developer laptop the `export` form is fine; on a shared
+build host or CI runner it isn't.
 
 ## Identity gates
 
@@ -312,8 +391,17 @@ defaults (agent YAML, runtime YAML, the hardcoded `"local"` fallback).
 | **Team-level** | Admin acting for a team | Team preferences: "the AI team prefers codex over claude" |
 | **User-level** | Admin acting for a user, or the user themselves through the cookie session | Personal preferences: "I work on a slow laptop, default my compute to the cloud pool" |
 
-There's no admin RPC or dashboard UI yet -- everything goes through
-direct SQL inserts on the `scoping_overrides` table (covered below).
+**Two ways to manage overrides**:
+- **Phase 2: admin RPCs + CLI** (preferred) -- `admin/scoping/set` /
+  `list` / `get` / `delete`, wrapped by `ark scoping set/list/get/delete`.
+  Validates at write time so a typo'd runtime / model / compute / flow
+  name is rejected immediately. See the "Admin RPCs + CLI" subsection
+  below.
+- **Direct SQL** (fallback) -- inserts on `scoping_overrides` for
+  deployments that prefer raw DB access. No write-time validation;
+  bad values surface at the next `session/start`.
+
+The dashboard UI for override management is a follow-up PR.
 
 ## The four scoped keys
 
@@ -363,6 +451,99 @@ appears in the array are visible / startable.
 | Bearer + self-service api-key (`api_keys.user_id` set) | yes (key owner's `users.id`) | yes (owner's chain) | yes |
 | Bearer + admin-minted api-key (`api_keys.user_id` NULL) | no | no | yes (tenant-only) |
 | Local mode (no auth) | no | no | yes (tenant-only) |
+
+## Setting overrides (admin RPCs + CLI -- Phase 2)
+
+`admin/scoping/*` RPCs are the supported write path. They gate on
+admin role, validate the scope-id (cross-tenant defense), and validate
+each value against the appropriate catalog (`runtime`, `model`,
+`compute.default` -> registry; `flow.allowlist` -> per-name catalog
+check). Bad values are rejected at write time, not at the next user's
+`session/start`. Audit fields `set_by` / `deleted_by` capture the
+caller's `ctx.userId` (an actor identifier -- may be a real `users.id`
+or an api-key sentinel `ak-...`, depending on auth path).
+
+The CLI wraps the RPCs. Mint an admin Bearer key first
+(`make bootstrap-key` on fresh installs, or any existing admin api
+key) and pass it via `--token`.
+
+### Set or update an override
+
+```bash
+# Tenant-level runtime override
+ark --token "$ADMIN_TOKEN" scoping set \
+  --scope tenant --scope-id default --key runtime --value '"codex"'
+
+# Tenant-level model override using an alias
+ark --token "$ADMIN_TOKEN" scoping set \
+  --scope tenant --scope-id default --key model --value '"sonnet"'
+
+# Tenant-level compute.default
+ark --token "$ADMIN_TOKEN" scoping set \
+  --scope tenant --scope-id default --key compute.default --value '"local"'
+
+# Tenant-level flow.allowlist (strict: every name must exist in the catalog)
+ark --token "$ADMIN_TOKEN" scoping set \
+  --scope tenant --scope-id default --key flow.allowlist \
+  --value '["docs","brainstorm","pr-review"]'
+
+# Team-level
+ark --token "$ADMIN_TOKEN" scoping set \
+  --scope team --scope-id team-eng --key runtime --value '"codex"'
+
+# User-level
+ark --token "$ADMIN_TOKEN" scoping set \
+  --scope user --scope-id u-rachna --key compute.default --value '"rachna-laptop"'
+```
+
+The `--value` flag accepts any JSON literal. Use single-quotes around
+the entire JSON so your shell doesn't interpret the inner double-quotes.
+
+If the value is bad, the call fails loud:
+
+```
+$ ark --token "$ADMIN_TOKEN" scoping set \
+    --scope tenant --scope-id default --key runtime --value '"coddex"'
+Error: runtime 'coddex' is not a registered runtime
+```
+
+### List overrides
+
+```bash
+# All live overrides in your tenant
+ark --token "$ADMIN_TOKEN" scoping list
+
+# Filter by scope kind
+ark --token "$ADMIN_TOKEN" scoping list --scope user
+
+# Filter by key
+ark --token "$ADMIN_TOKEN" scoping list --key runtime
+
+# Include soft-deleted (tombstones) for audit
+ark --token "$ADMIN_TOKEN" scoping list --include-deleted
+```
+
+### Get a single override by id
+
+```bash
+ark --token "$ADMIN_TOKEN" scoping get <override-id>
+```
+
+### Soft-delete
+
+Two forms. Both end up with the same DB write:
+
+```bash
+# By id (e.g. from `scoping list` output)
+ark --token "$ADMIN_TOKEN" scoping delete <override-id>
+
+# By composite key (scope_kind + scope_id + key)
+ark --token "$ADMIN_TOKEN" scoping delete \
+  --scope tenant --scope-id default --key runtime
+```
+
+Both are mutually exclusive -- passing both `<id>` and `--scope/--scope-id/--key`
+together is rejected (ambiguous).
 
 ## Setting overrides (SQL playbook)
 
@@ -771,14 +952,21 @@ doesn't.
 
 ## Scoping (Part 3)
 
-- **No admin RPC for managing overrides.** All inserts / updates /
-  deletes go through direct SQL on the `scoping_overrides` table.
-- **No dashboard UI for overrides.** Use `sqlite3` or a SQL client
-  like DBeaver to view / edit rows.
-- **No write-time validation.** A typo'd value lands in the table
-  successfully but fails the next session/start with a clear error
-  (e.g. `Runtime override 'coddex' is not a registered runtime`). Fix
-  by updating or soft-deleting the row.
+- ~~**No admin RPC for managing overrides.**~~ Phase 2 added
+  `admin/scoping/*` RPCs + `ark scoping ...` CLI. Direct SQL is now
+  a fallback, not the only path.
+- ~~**No write-time validation.**~~ Phase 2 admin RPCs validate every
+  override at write time (runtime / model / compute / flow names
+  must exist; tenant-scope rules enforced). Direct-SQL writers still
+  bypass this -- bad rows surface at the next `session/start`.
+- **No dashboard UI for overrides.** Still SQL or CLI for now;
+  dashboard is a Phase 3 follow-up.
+- **No pagination on `admin/scoping/list`.** A safety cap of 1000
+  rows applies per call; the response carries a `truncated` boolean
+  set via a `limit + 1` probe so operators know to filter further.
+  Real cursor pagination (`cursor` param + `next_cursor` in the
+  response) is a Phase 3 follow-up -- revisit before any tenant
+  approaches the 1000-row cap.
 - **Project-scoped models can't be used as override targets.**
   Validation runs against the global model catalog at session/start;
   models registered only under `<repo>/.ark/models/` aren't visible

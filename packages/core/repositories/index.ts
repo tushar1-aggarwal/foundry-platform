@@ -27,5 +27,6 @@ export {
   type ScopingOverrideRow,
   type ScopingOverrideKey,
   type ScopeKind,
+  type ListForTenantOptions as ScopingOverrideListOptions,
 } from "./scoping-overrides.js";
 export { initSchema, seedLocalCompute } from "./schema.js";

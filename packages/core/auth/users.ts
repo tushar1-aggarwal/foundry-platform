@@ -10,11 +10,21 @@
  */
 
 import type { DatabaseAdapter } from "../database/index.js";
-import { UserRepository, type ListOptions, type UserRow } from "../repositories/users.js";
-import { MembershipRepository } from "../repositories/memberships.js";
+import {
+  UserRepository,
+  type ListOptions,
+  type TenantSearchUser,
+  type TenantUserRow,
+  type UserRow,
+  type UserWithTenantTeamCount,
+} from "../repositories/users.js";
+import { MembershipRepository, type MembershipWithTeamTenant } from "../repositories/memberships.js";
 import { logDebug } from "../observability/structured-log.js";
 
 export type User = UserRow;
+export type { TenantSearchUser, TenantUserRow, UserWithTenantTeamCount, MembershipWithTeamTenant };
+
+const MIN_SEARCH_LEN = 3;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -59,6 +69,17 @@ export class UserManager {
   async list(opts: ListOptions = {}): Promise<User[]> {
     await this.ensureSchema();
     return this._repo.list(opts);
+  }
+
+  /**
+   * Tenant-scoped user listing for the UsersTab under the
+   * tenant-admin model: users with ≥1 membership in `tenantId` OR
+   * global orphans. Cross-tenant-only users are filtered out at the
+   * repo. Each row carries a `team_count` scoped to `tenantId`.
+   */
+  async listInTenantOrOrphanWithTeamCount(tenantId: string): Promise<UserWithTenantTeamCount[]> {
+    await this.ensureSchema();
+    return this._repo.listInTenantOrOrphanWithTeamCount(tenantId);
   }
 
   async get(idOrEmail: string, opts: ListOptions = {}): Promise<User | null> {
@@ -107,5 +128,62 @@ export class UserManager {
   async restore(id: string): Promise<boolean> {
     await this.ensureSchema();
     return this._repo.restore(id);
+  }
+
+  /**
+   * Tenant-scoped user search for autocomplete UIs. This layer enforces
+   * the 3-char minimum (returns `[]` for shorter inputs); the underlying
+   * `UserRepository.searchByTenant` caps results at 50 regardless of the
+   * caller-supplied `limit`.
+   *
+   * If `contextTeamId` is supplied, each row carries the user's existing
+   * role in that team (or `null`); the TeamsTab combobox uses this to
+   * tag already-members and flip the Add/Update-role button.
+   */
+  async searchByTenant(
+    tenantId: string,
+    q: string,
+    opts: { limit?: number; contextTeamId?: string } = {},
+  ): Promise<TenantSearchUser[]> {
+    await this.ensureSchema();
+    const trimmed = q.trim();
+    if (trimmed.length < MIN_SEARCH_LEN) return [];
+    return this._repo.searchByTenant(tenantId, trimmed, opts);
+  }
+
+  /**
+   * Per-user membership listing joined with team + tenant identity.
+   * Live rows only -- a row is included iff the membership, its team,
+   * and the tenant are all live. Used by the UsersTab memberships
+   * drawer to render where a user lives and as what.
+   *
+   * Optional `tenantId` narrows the result to memberships in that
+   * tenant only. Handlers running under the tenant-admin model pass
+   * `ctx.tenantId` so cross-tenant memberships of the same user stay
+   * invisible to admins outside their tenant.
+   */
+  async listMemberships(userId: string, opts: { tenantId?: string } = {}): Promise<MembershipWithTeamTenant[]> {
+    await this.ensureSchema();
+    return this._memberships.listByUserWithTeamTenant(userId, opts);
+  }
+
+  /**
+   * Tenant-anchored user roll-up for the TenantsTab. Read-only -- the
+   * mutation surface stays on TeamsTab + UsersTab.
+   */
+  async listTenantUsers(tenantId: string): Promise<TenantUserRow[]> {
+    await this.ensureSchema();
+    return this._repo.listTenantUsers(tenantId);
+  }
+
+  /**
+   * Counts live memberships for `userId`, split by whether the team's
+   * tenant matches `tenantId`. The tenant-admin handlers for
+   * admin/user/{get,delete} use this to gate visibility + deletion
+   * decisions without two separate queries.
+   */
+  async tenantMembershipStats(userId: string, tenantId: string): Promise<{ in_tenant: number; out_of_tenant: number }> {
+    await this.ensureSchema();
+    return this._memberships.tenantMembershipStats(userId, tenantId);
   }
 }

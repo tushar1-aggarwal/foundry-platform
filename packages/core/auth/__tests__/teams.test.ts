@@ -162,4 +162,64 @@ describe("TeamManager", () => {
     await expect(tm.addMember(team.id, user.id, "god" as any)).rejects.toThrow(/Invalid role/);
     await db.close();
   });
+
+  it("refuses to delete the seeded 'default-team' team and leaves it live", async () => {
+    // 'default-team' is the JIT-membership target hardcoded in
+    // auth/login.ts (DEFAULT_TEAM_ID). Deleting it silently breaks new
+    // Google-OIDC signups. Protection at the manager layer so every
+    // entry point inherits.
+    const db = await freshDb();
+    const tm = new TeamManager(db);
+
+    const before = await tm.get("default-team");
+    expect(before).not.toBeNull();
+    expect(before?.deleted_at).toBeNull();
+
+    await expect(tm.delete("default-team")).rejects.toThrow(/'default-team' team.*landing destination/);
+
+    const after = await tm.get("default-team");
+    expect(after?.deleted_at).toBeNull();
+    await db.close();
+  });
+
+  it("still allows delete of non-default teams after the protection lands", async () => {
+    // Regression guard: only exact id === "default-team" is blocked.
+    const db = await freshDb();
+    const tenant = await new TenantManager(db).create({ slug: "ndtm", name: "NDTM" });
+    const tm = new TeamManager(db);
+    const team = await tm.create({ tenant_id: tenant.id, slug: "not-default", name: "Not Default Team" });
+    expect(team.id).not.toBe("default-team");
+    expect(await tm.delete(team.id)).toBe(true);
+    expect((await tm.get(team.id, { includeDeleted: true }))?.deleted_at).not.toBeNull();
+    await db.close();
+  });
+
+  it("refuses to update the seeded 'default-team' team", async () => {
+    // Same intent as the delete guard. A slug rename on 'default-team'
+    // would silently mismatch the DEFAULT_TEAM_ID hardcoded in
+    // auth/login.ts. Block at the manager so every entry point inherits.
+    const db = await freshDb();
+    const tm = new TeamManager(db);
+
+    const before = await tm.get("default-team");
+    expect(before?.slug).toBe("default-team");
+
+    await expect(tm.update("default-team", { slug: "renamed-default-team" })).rejects.toThrow(/'default-team' team/);
+    await expect(tm.update("default-team", { name: "Default Team 2" })).rejects.toThrow(/'default-team' team/);
+
+    const after = await tm.get("default-team");
+    expect(after?.slug).toBe("default-team");
+    expect(after?.name).toBe(before?.name);
+    await db.close();
+  });
+
+  it("still allows update of non-default teams", async () => {
+    const db = await freshDb();
+    const tenant = await new TenantManager(db).create({ slug: "ndtm-u", name: "NDTM U" });
+    const tm = new TeamManager(db);
+    const team = await tm.create({ tenant_id: tenant.id, slug: "not-default", name: "Not Default Team" });
+    const renamed = await tm.update(team.id, { slug: "renamed-team" });
+    expect(renamed?.slug).toBe("renamed-team");
+    await db.close();
+  });
 });

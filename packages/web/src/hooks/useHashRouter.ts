@@ -11,6 +11,7 @@ const VALID_VIEWS = new Set([
   "costs",
   "integrations",
   "settings",
+  "admin",
   "_design",
 ]);
 
@@ -20,7 +21,7 @@ export interface RouteState {
   tab: string | null;
 }
 
-function parseHash(): RouteState {
+export function parseHash(): RouteState {
   const raw = window.location.hash.replace(/^#\/?/, "");
   if (!raw) return { view: "sessions", subId: null, tab: null };
   const parts = raw.split("/");

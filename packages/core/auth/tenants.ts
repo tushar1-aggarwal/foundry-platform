@@ -96,6 +96,14 @@ export class TenantManager {
 
   async update(id: string, fields: Partial<Pick<Tenant, "slug" | "name" | "status">>): Promise<Tenant | null> {
     await this.ensureSchema();
+    // Mirror the deletion guard: 'default' is the seeded landing tenant
+    // for new sign-ups (auth/login.ts JIT-flow); a slug rename or
+    // status change would silently mismatch the hardcoded id the
+    // login flow depends on, OR (when downstream code starts gating
+    // on tenant.status === 'active') break the login path entirely.
+    if (id === "default") {
+      throw new Error("Cannot update the 'default' tenant: it is the seeded landing target for new sign-ups.");
+    }
     if (fields.slug) assertSlug(fields.slug);
     return this._repo.update(id, fields);
   }
@@ -112,6 +120,14 @@ export class TenantManager {
    */
   async delete(id: string, userId: string | null = null): Promise<boolean> {
     await this.ensureSchema();
+    // 'default' is the seeded landing tenant for new sign-ups. Deleting
+    // it breaks the JIT-membership path in the login flow.
+    if (id === "default") {
+      throw new Error(
+        "Cannot delete the 'default' tenant: it is the seeded landing target " +
+          "for new sign-ups; deleting it breaks the login flow.",
+      );
+    }
     return this.db.transaction(async () => {
       const ok = await this._repo.softDelete(id, userId);
       if (!ok) return false;
@@ -139,6 +155,11 @@ export class TenantManager {
 
   async setStatus(id: string, status: TenantStatus): Promise<Tenant | null> {
     await this.ensureSchema();
+    if (id === "default") {
+      throw new Error(
+        "Cannot change status of the 'default' tenant: it is the seeded landing target for new sign-ups.",
+      );
+    }
     return this._repo.update(id, { status });
   }
 }

@@ -54,6 +54,27 @@ export function requireAdmin(ctx: TenantContext): void {
 }
 
 /**
+ * Throw FORBIDDEN if a resource's tenant does not match the caller's.
+ * The auth model is "tenant admin only": an admin in tenant A cannot
+ * act on resources owned by tenant B. Callers resolve `resourceTenantId`
+ * either from a path parameter (`tenant_id`) or by fetching the resource
+ * and reading its tenant column, then pass it here.
+ *
+ * Use after `requireAdmin(ctx)` so the failure ordering is consistent
+ * (non-admins always see "admin role required" first; admins crossing
+ * tenants see this message).
+ */
+export function requireSameTenant(ctx: TenantContext, resourceTenantId: string): void {
+  if (ctx.tenantId !== resourceTenantId) {
+    // Deliberately generic: do NOT include either tenant id in the
+    // message. A caller probing for valid resource ids must not learn
+    // the resource's tenant from this error. Server-side logs can
+    // record the detail if forensics are needed.
+    throw new RpcError("resource belongs to a different tenant", ErrorCodes.FORBIDDEN);
+  }
+}
+
+/**
  * Local / single-user default context. Used when `requireToken` is off
  * and no bearer token is supplied. `defaultTenant` comes from
  * `config.authSection.defaultTenant` (null-safe fallback to `"default"`).

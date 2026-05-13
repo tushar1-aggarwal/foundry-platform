@@ -136,3 +136,77 @@ describe("MembershipRepository soft-delete", () => {
     await db.close();
   });
 });
+
+describe("MembershipRepository.userBelongsToTenant", () => {
+  it("true when user has a live membership in a live team of the tenant", async () => {
+    const db = await freshDb();
+    const tenant = await new TenantManager(db).create({ slug: "ub-yes", name: "UB Yes" });
+    const team = await new TeamManager(db).create({ tenant_id: tenant.id, slug: "eng", name: "Eng" });
+    const user = await new UserManager(db).create({ email: "yes@ub.com" });
+    const repo = new MembershipRepository(db);
+    await repo.add(user.id, team.id, "member");
+
+    expect(await repo.userBelongsToTenant(user.id, tenant.id)).toBe(true);
+    await db.close();
+  });
+
+  it("false when user has no memberships at all", async () => {
+    const db = await freshDb();
+    const tenant = await new TenantManager(db).create({ slug: "ub-empty", name: "UB Empty" });
+    const user = await new UserManager(db).create({ email: "empty@ub.com" });
+    const repo = new MembershipRepository(db);
+
+    expect(await repo.userBelongsToTenant(user.id, tenant.id)).toBe(false);
+    await db.close();
+  });
+
+  it("false when the user's only membership has been soft-removed", async () => {
+    const db = await freshDb();
+    const tenant = await new TenantManager(db).create({ slug: "ub-soft", name: "UB Soft" });
+    const team = await new TeamManager(db).create({ tenant_id: tenant.id, slug: "eng", name: "Eng" });
+    const user = await new UserManager(db).create({ email: "soft@ub.com" });
+    const repo = new MembershipRepository(db);
+    await repo.add(user.id, team.id, "member");
+    await repo.softRemove(user.id, team.id);
+
+    expect(await repo.userBelongsToTenant(user.id, tenant.id)).toBe(false);
+    await db.close();
+  });
+
+  it("false when the user's membership is in a different tenant", async () => {
+    const db = await freshDb();
+    const tA = await new TenantManager(db).create({ slug: "ub-ta", name: "TA" });
+    const tB = await new TenantManager(db).create({ slug: "ub-tb", name: "TB" });
+    const teamA = await new TeamManager(db).create({ tenant_id: tA.id, slug: "eng", name: "Eng" });
+    const user = await new UserManager(db).create({ email: "cross@ub.com" });
+    const repo = new MembershipRepository(db);
+    await repo.add(user.id, teamA.id, "member");
+
+    expect(await repo.userBelongsToTenant(user.id, tA.id)).toBe(true);
+    expect(await repo.userBelongsToTenant(user.id, tB.id)).toBe(false);
+    await db.close();
+  });
+
+  it("false when the membership's team has been soft-deleted", async () => {
+    const db = await freshDb();
+    const tenant = await new TenantManager(db).create({ slug: "ub-dead-team", name: "UB DT" });
+    const teams = new TeamManager(db);
+    const team = await teams.create({ tenant_id: tenant.id, slug: "eng", name: "Eng" });
+    const user = await new UserManager(db).create({ email: "dt@ub.com" });
+    const repo = new MembershipRepository(db);
+    await repo.add(user.id, team.id, "member");
+    await teams.delete(team.id);
+
+    expect(await repo.userBelongsToTenant(user.id, tenant.id)).toBe(false);
+    await db.close();
+  });
+
+  it("false when no such user exists", async () => {
+    const db = await freshDb();
+    const tenant = await new TenantManager(db).create({ slug: "ub-ghost", name: "UB Ghost" });
+    const repo = new MembershipRepository(db);
+
+    expect(await repo.userBelongsToTenant("u-ghost", tenant.id)).toBe(false);
+    await db.close();
+  });
+});

@@ -298,7 +298,7 @@ test-e2e: test-web-e2e ## Run all end-to-end tests (web Playwright)
 test-e2e-local-bespoke: ## Run local-mode docs-flow e2e (no Docker, SQLite, bespoke dispatch)
 	@command -v tmux >/dev/null 2>&1 || { echo "tmux required (brew install tmux / apt-get install tmux)."; exit 1; }
 	@echo "\033[1mRunning local bespoke docs-flow e2e...\033[0m"
-	@$(BUN) test e2e/local-bespoke.test.ts
+	@$(BUN) test --bail e2e/local-bespoke.test.ts
 
 # Control-plane e2e -- the test-side counterpart of `dev-control-plane`.
 #
@@ -334,7 +334,7 @@ test-e2e-control-plane: test-e2e-control-plane-up ## Run all docker-stack e2e te
 	@$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e exec -T postgres \
 	  psql -U ark -d ark -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='ark' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true
 	@echo "\033[1mRunning Temporal hosted docs-flow e2e...\033[0m"
-	@ARK_E2E_STACK_RUNNING=1 $(BUN) test e2e/temporal-control-plane.test.ts
+	@ARK_E2E_STACK_RUNNING=1 $(BUN) test --bail e2e/temporal-control-plane.test.ts
 
 test-e2e-control-plane-up: ## Bring up the e2e Docker stack (Postgres :15434 + Redis :6380 + Temporal :7234)
 	@command -v docker >/dev/null 2>&1 || { echo "Docker required for control-plane e2e."; exit 1; }

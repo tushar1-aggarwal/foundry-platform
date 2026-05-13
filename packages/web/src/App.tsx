@@ -56,10 +56,15 @@ function App() {
   const readOnly = READ_ONLY;
   const daemonStatus = useDaemonStatus();
 
-  function showToast(msg: string, type: string) {
+  // `useCallback` so this prop's identity is stable across App re-renders
+  // (daemon-status polling, auth refresh, theme toggles, etc.). Pages that
+  // memoise effects on `onToast` -- e.g. AdminPage tabs -- would otherwise
+  // see the callback flip on every poll tick and re-run effects that wipe
+  // local state (selected row, open modal, etc.).
+  const showToast = useCallback((msg: string, type: string) => {
     setToast({ msg, type });
     setToastKey((k) => k + 1);
-  }
+  }, []);
 
   // Navigate to a view (clears subId and tab)
   const onNavigate = useCallback((v: string, id?: string | null, t?: string | null) => navigate(v, id, t), [navigate]);

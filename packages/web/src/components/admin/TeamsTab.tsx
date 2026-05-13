@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "../ui/button.js";
 import { useAdminApi } from "./adminApi.js";
+import { MemberPicker } from "./MemberPicker.js";
 import type { Tenant, Team, Membership, MembershipRole } from "./types.js";
 
 const ROLES: MembershipRole[] = ["owner", "admin", "member", "viewer"];
@@ -17,12 +18,10 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
   const [selected, setSelected] = useState<Team | null>(null);
   const [members, setMembers] = useState<Membership[]>([]);
   const [showNew, setShowNew] = useState(false);
+  const [newTenantId, setNewTenantId] = useState("");
   const [newSlug, setNewSlug] = useState("");
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
-  const [addEmail, setAddEmail] = useState("");
-  const [addRole, setAddRole] = useState<MembershipRole>("member");
-
   useEffect(() => {
     adminApi
       .listTenants()
@@ -49,9 +48,14 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
     [adminApi, onToast],
   );
 
+  // Data-only effect. Earlier this also did `setSelected(null)`,
+  // which fired whenever `refreshTeams`'s identity changed -- and
+  // that identity tracks `onToast`, which flips on every App
+  // re-render (daemon poll, theme toggle, etc.). The result was the
+  // detail panel closing mid-click. Selection clearing now happens
+  // explicitly on the user-action paths.
   useEffect(() => {
     refreshTeams(tenantId);
-    setSelected(null);
   }, [tenantId, refreshTeams]);
 
   const selectedId = selected?.id;
@@ -72,6 +76,10 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
   }, [refreshMembers]);
 
   async function handleCreate() {
+    // Under the tenant-admin model the form's tenant is fixed to the
+    // caller's tenant (the dropdown collapsed to a static row), so
+    // `newTenantId === tenantId` always. No cross-tenant-targeted
+    // create path remains; we just refresh the team list in place.
     if (!tenantId || !newSlug.trim() || !newName.trim()) return;
     try {
       const team = await adminApi.createTeam({
@@ -82,6 +90,7 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
       });
       onToast?.(`Team '${team.slug}' created`, "success");
       setShowNew(false);
+      setNewTenantId("");
       setNewSlug("");
       setNewName("");
       setNewDesc("");
@@ -98,18 +107,6 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
       onToast?.(`Team '${t.slug}' deleted`, "success");
       setSelected(null);
       await refreshTeams(tenantId);
-    } catch (e: any) {
-      onToast?.(`Failed: ${e?.message}`, "error");
-    }
-  }
-
-  async function handleAdd() {
-    if (!selected || !addEmail.trim()) return;
-    try {
-      await adminApi.addMember(selected.id, addEmail.trim(), addRole);
-      onToast?.(`Added ${addEmail} as ${addRole}`, "success");
-      setAddEmail("");
-      await refreshMembers();
     } catch (e: any) {
       onToast?.(`Failed: ${e?.message}`, "error");
     }
@@ -142,27 +139,38 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
     <div className="flex h-full">
       <div className="w-80 border-r border-[var(--border)] overflow-y-auto">
         <div className="p-3 border-b border-[var(--border)] space-y-2">
+          {/* Under the tenant-admin model the admin only sees their
+              own tenant, so the previous tenant dropdown collapses to
+              a static label showing which tenant the rail is anchored
+              on. The selected `tenantId` still drives the team query. */}
           <label className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Tenant</label>
-          <select
-            className="w-full h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
-            value={tenantId}
-            onChange={(e) => setTenantId(e.target.value)}
-          >
-            {tenants.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.slug})
-              </option>
-            ))}
-          </select>
+          <div className="h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg-subtle)] flex items-center">
+            {tenants.find((t) => t.id === tenantId)?.name ?? <span className="text-[var(--fg-muted)]">Loading...</span>}
+          </div>
           <div className="flex items-center justify-between">
             <div className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Teams ({teams.length})</div>
-            <Button size="xs" onClick={() => setShowNew(true)} disabled={!tenantId}>
+            <Button
+              size="xs"
+              onClick={() => {
+                setNewTenantId(tenantId);
+                setShowNew(true);
+              }}
+              disabled={!tenants.length}
+            >
               + New
             </Button>
           </div>
         </div>
         {showNew && (
           <div className="p-3 border-b border-[var(--border)] space-y-2 bg-[var(--bg-subtle)]">
+            {/* `newTenantId` is set when the form opens (defaults to the
+                caller's tenant). We render a static row instead of a
+                dropdown since under the tenant-admin model there is only
+                one tenant to pick. */}
+            <label className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Tenant</label>
+            <div className="h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)] flex items-center">
+              {tenants.find((t) => t.id === newTenantId)?.name ?? newTenantId}
+            </div>
             <input
               className="w-full h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
               placeholder="slug"
@@ -185,7 +193,17 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
               <Button size="xs" onClick={handleCreate}>
                 Create
               </Button>
-              <Button size="xs" variant="ghost" onClick={() => setShowNew(false)}>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => {
+                  setShowNew(false);
+                  setNewTenantId("");
+                  setNewSlug("");
+                  setNewName("");
+                  setNewDesc("");
+                }}
+              >
                 Cancel
               </Button>
             </div>
@@ -201,7 +219,17 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
                 (selected?.id === t.id ? " bg-[var(--bg-subtle)]" : "")
               }
             >
-              <div className="text-sm font-medium">{t.name}</div>
+              <div className="flex items-center gap-1.5">
+                <div className="text-sm font-medium">{t.name}</div>
+                {t.id === "default-team" && (
+                  <span
+                    title="System team -- protected from rename and delete because new sign-ups land here."
+                    className="rounded border border-[var(--border)] bg-[var(--bg-subtle)] px-1 py-0.5 text-[9px] uppercase tracking-wider text-[var(--fg-muted)]"
+                  >
+                    🔒
+                  </span>
+                )}
+              </div>
               <div className="text-[11px] text-[var(--fg-muted)]">{t.slug}</div>
             </button>
           ))}
@@ -215,42 +243,38 @@ export function TeamsTab({ onToast }: TeamsTabProps) {
           <div className="space-y-6">
             <div>
               <div className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)]">Team</div>
-              <h2 className="text-xl font-semibold mt-1">{selected.name}</h2>
+              <div className="flex items-center gap-2 mt-1">
+                <h2 className="text-xl font-semibold">{selected.name}</h2>
+                {selected.id === "default-team" && (
+                  <span
+                    title="System team -- protected from rename and delete because new sign-ups land here."
+                    className="rounded border border-[var(--border)] bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-[var(--fg-muted)]"
+                  >
+                    🔒 system
+                  </span>
+                )}
+              </div>
               <div className="text-sm text-[var(--fg-muted)]">slug: {selected.slug}</div>
               <div className="text-sm text-[var(--fg-muted)]">id: {selected.id}</div>
               {selected.description && <div className="text-sm mt-1">{selected.description}</div>}
             </div>
-            <div>
-              <Button size="sm" variant="destructive" onClick={() => handleDelete(selected)}>
-                Delete team
-              </Button>
-            </div>
+            {selected.id === "default-team" ? (
+              <p className="text-[12px] text-[var(--fg-muted)]">
+                Delete is disabled on the <code className="font-mono">default-team</code> team - it is the seeded
+                landing destination for new sign-ups and is protected at the server.
+              </p>
+            ) : (
+              <div>
+                <Button size="sm" variant="destructive" onClick={() => handleDelete(selected)}>
+                  Delete team
+                </Button>
+              </div>
+            )}
             <div>
               <div className="text-[11px] uppercase tracking-wider text-[var(--fg-muted)] mb-2">
                 Members ({members.length})
               </div>
-              <div className="flex gap-2 mb-3">
-                <input
-                  className="flex-1 h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
-                  placeholder="user@example.com"
-                  value={addEmail}
-                  onChange={(e) => setAddEmail(e.target.value)}
-                />
-                <select
-                  className="h-8 px-2 text-sm rounded border border-[var(--border)] bg-[var(--bg)]"
-                  value={addRole}
-                  onChange={(e) => setAddRole(e.target.value as MembershipRole)}
-                >
-                  {ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-                <Button size="sm" onClick={handleAdd}>
-                  Add
-                </Button>
-              </div>
+              <MemberPicker teamId={selected.id} onAdded={refreshMembers} onToast={onToast} />
               {members.length ? (
                 <table className="w-full text-sm">
                   <thead>

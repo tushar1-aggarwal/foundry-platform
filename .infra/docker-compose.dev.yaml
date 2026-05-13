@@ -87,6 +87,19 @@ services:
       # host.docker.internal reaches it on Mac (Docker Desktop) and via
       # host-gateway on Linux.
       ARK_CONDUCTOR_URL: "http://host.docker.internal:8421"
+    # Process-alive healthcheck so `docker compose up --wait` blocks until
+    # the worker process is up. See docker-compose.e2e.yaml for the full
+    # rationale; in dev this prevents `make dev-control-plane` from
+    # reporting "ready" before the worker has registered task-queue pollers.
+    # Uses /proc directly to avoid depending on procps in cached images.
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "for f in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < $$f 2>/dev/null | grep -q 'packages/core/temporal/worker.ts' && exit 0; done; exit 1"
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
 
 volumes:
   ark-postgres-data:

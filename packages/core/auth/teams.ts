@@ -117,6 +117,12 @@ export class TeamManager {
 
   async update(teamId: string, fields: Partial<Pick<Team, "slug" | "name" | "description">>): Promise<Team | null> {
     await this.ensureSchema();
+    // Mirror the deletion guard: 'default-team' is hardcoded as the
+    // JIT-membership target in auth/login.ts. A slug rename would
+    // silently mismatch the hardcoded id the login flow depends on.
+    if (teamId === "default-team") {
+      throw new Error("Cannot update the 'default-team' team: it is the seeded landing destination for new sign-ups.");
+    }
     if (fields.slug) assertSlug(fields.slug);
     return this._teams.update(teamId, fields);
   }
@@ -131,6 +137,15 @@ export class TeamManager {
    */
   async delete(teamId: string, userId: string | null = null): Promise<boolean> {
     await this.ensureSchema();
+    // 'default-team' is the seeded landing destination for new sign-ups
+    // (hardcoded as DEFAULT_TEAM_ID in auth/login.ts). Deleting it breaks
+    // the JIT-membership path in the login flow.
+    if (teamId === "default-team") {
+      throw new Error(
+        "Cannot delete the 'default-team' team: it is the seeded landing " +
+          "destination for new sign-ups; deleting it breaks the login flow.",
+      );
+    }
     return this.db.transaction(async () => {
       const ok = await this._teams.softDelete(teamId, userId);
       if (!ok) return false;
@@ -180,5 +195,15 @@ export class TeamManager {
     await this.ensureSchema();
     assertRole(role);
     return this._memberships.setRole(userId, teamId, role);
+  }
+
+  /**
+   * Returns true iff `userId` has a live membership in some live team of
+   * `tenantId`. One JOIN underneath -- safe to call on the admin write
+   * path without an N+1.
+   */
+  async userBelongsToTenant(userId: string, tenantId: string): Promise<boolean> {
+    await this.ensureSchema();
+    return this._memberships.userBelongsToTenant(userId, tenantId);
   }
 }

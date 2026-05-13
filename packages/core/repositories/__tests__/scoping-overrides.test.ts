@@ -132,4 +132,138 @@ describe("ScopingOverrideRepository", () => {
     const row = await repo.get(k);
     expect(JSON.parse(row!.value_json)).toEqual(value);
   });
+
+  it("set() records setBy on insert", async () => {
+    const db = await freshDb();
+    const repo = new ScopingOverrideRepository(db);
+    const k = { scope_kind: "user" as const, scope_id: "u-1", key: "runtime", tenant_id: "t-1" };
+    const row = await repo.set(k, "codex", "admin-u-rachna");
+    expect(row.set_by).toBe("admin-u-rachna");
+  });
+
+  it("set() updates setBy on subsequent upsert", async () => {
+    const db = await freshDb();
+    const repo = new ScopingOverrideRepository(db);
+    const k = { scope_kind: "user" as const, scope_id: "u-1", key: "runtime", tenant_id: "t-1" };
+    await repo.set(k, "codex", "admin-1");
+    const second = await repo.set(k, "claude-code", "admin-2");
+    expect(second.set_by).toBe("admin-2");
+  });
+
+  it("delete() records deletedBy", async () => {
+    const db = await freshDb();
+    const repo = new ScopingOverrideRepository(db);
+    const k = { scope_kind: "user" as const, scope_id: "u-1", key: "runtime", tenant_id: "t-1" };
+    await repo.set(k, "codex");
+    await repo.delete(k, "admin-deleter");
+    const dRow = await repo.listForTenant("t-1", { includeDeleted: true });
+    const tombstone = dRow.find((r) => r.scope_id === "u-1" && r.key === "runtime");
+    expect(tombstone?.deleted_by).toBe("admin-deleter");
+  });
+
+  it("getById() returns tenant-scoped row only", async () => {
+    const db = await freshDb();
+    const repo = new ScopingOverrideRepository(db);
+    const row = await repo.set({ scope_kind: "user", scope_id: "u-1", key: "runtime", tenant_id: "t-a" }, "codex");
+    const fromA = await repo.getById(row.id, "t-a");
+    expect(fromA?.id).toBe(row.id);
+    const fromB = await repo.getById(row.id, "t-b");
+    expect(fromB).toBeNull();
+  });
+
+  it("getById() returns tombstoned rows (audit drill-down contract)", async () => {
+    // Deliberate asymmetry with get / getMany / listForTenant (which all
+    // filter `deleted_at IS NULL`). The audit drill-down path -- CLI
+    // `ark scoping get <id>`, dashboard's ScopingAuditDrawer -- needs to
+    // surface tombstones so operators can inspect "(deleted)" rows after
+    // soft-delete. The cross-tenant guard is still strict; the row's
+    // deleted_at field carries the tombstone signal so callers can render
+    // appropriately.
+    const db = await freshDb();
+    const repo = new ScopingOverrideRepository(db);
+    const k = { scope_kind: "user" as const, scope_id: "u-1", key: "runtime", tenant_id: "t-1" };
+    const row = await repo.set(k, "codex");
+    await repo.delete(k, "admin-deleter");
+
+    const tombstone = await repo.getById(row.id, "t-1");
+    expect(tombstone).not.toBeNull();
+    expect(tombstone?.id).toBe(row.id);
+    expect(tombstone?.deleted_at).not.toBeNull();
+    expect(tombstone?.deleted_by).toBe("admin-deleter");
+
+    // Cross-tenant guard still applies to tombstones.
+    expect(await repo.getById(row.id, "t-OTHER")).toBeNull();
+  });
+
+  it("listForTenant() filters out other tenants regardless of filters", async () => {
+    const db = await freshDb();
+    const repo = new ScopingOverrideRepository(db);
+    await repo.set({ scope_kind: "user", scope_id: "u-1", key: "runtime", tenant_id: "t-a" }, "codex");
+    await repo.set({ scope_kind: "user", scope_id: "u-1", key: "runtime", tenant_id: "t-b" }, "claude-code");
+    const rows = await repo.listForTenant("t-a");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tenant_id).toBe("t-a");
+  });
+
+  it("listForTenant() honors scope_kind / scope_id / key filters", async () => {
+    const db = await freshDb();
+    const repo = new ScopingOverrideRepository(db);
+    await repo.set({ scope_kind: "user", scope_id: "u-1", key: "runtime", tenant_id: "t-1" }, "codex");
+    await repo.set({ scope_kind: "team", scope_id: "team-eng", key: "runtime", tenant_id: "t-1" }, "claude-code");
+    await repo.set({ scope_kind: "tenant", scope_id: "t-1", key: "model", tenant_id: "t-1" }, "opus");
+
+    expect(await repo.listForTenant("t-1", { scope_kind: "user" })).toHaveLength(1);
+    expect(await repo.listForTenant("t-1", { key: "runtime" })).toHaveLength(2);
+    expect(await repo.listForTenant("t-1", { scope_kind: "team", key: "runtime" })).toHaveLength(1);
+  });
+
+  it("listForTenant() includes tombstones only when includeDeleted=true", async () => {
+    const db = await freshDb();
+    const repo = new ScopingOverrideRepository(db);
+    const k = { scope_kind: "user" as const, scope_id: "u-1", key: "runtime", tenant_id: "t-1" };
+    await repo.set(k, "codex");
+    await repo.delete(k);
+
+    expect(await repo.listForTenant("t-1")).toHaveLength(0);
+    expect(await repo.listForTenant("t-1", { includeDeleted: true })).toHaveLength(1);
+  });
+
+  it("set() is concurrent-safe: parallel calls produce one live row", async () => {
+    // M1: the partial unique index on (scope_kind, scope_id, key, tenant_id)
+    // WHERE deleted_at IS NULL means two concurrent inserts race -- the
+    // second hits a UNIQUE violation. The repo must catch + retry-as-update
+    // instead of leaking SQLITE_CONSTRAINT_UNIQUE to the caller.
+    const db = await freshDb();
+    const repo = new ScopingOverrideRepository(db);
+    const k = { scope_kind: "user" as const, scope_id: "u-race", key: "runtime", tenant_id: "t-1" };
+
+    const settled = await Promise.allSettled([
+      repo.set(k, "codex", "actor-A"),
+      repo.set(k, "claude-code", "actor-B"),
+      repo.set(k, "gemini", "actor-C"),
+    ]);
+    for (const r of settled) {
+      expect(r.status).toBe("fulfilled");
+    }
+    const live = await repo.listForTenant("t-1");
+    const matching = live.filter((r) => r.scope_id === "u-race" && r.key === "runtime");
+    expect(matching).toHaveLength(1);
+  });
+
+  it("deleteById() is tenant-scoped + idempotent on re-delete", async () => {
+    const db = await freshDb();
+    const repo = new ScopingOverrideRepository(db);
+    const row = await repo.set({ scope_kind: "user", scope_id: "u-1", key: "runtime", tenant_id: "t-a" }, "codex");
+
+    // Wrong-tenant attempt: no-op.
+    expect(await repo.deleteById(row.id, "t-b", "attacker")).toBe(false);
+    // Correct tenant: deletes.
+    expect(await repo.deleteById(row.id, "t-a", "admin-deleter")).toBe(true);
+    // Re-delete: no live row left.
+    expect(await repo.deleteById(row.id, "t-a", "admin-deleter")).toBe(false);
+
+    // Row still has correct deleted_by recorded.
+    const fetched = await repo.getById(row.id, "t-a");
+    expect(fetched?.deleted_by).toBe("admin-deleter");
+  });
 });

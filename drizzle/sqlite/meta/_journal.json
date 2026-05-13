@@ -22,6 +22,13 @@
       "when": 1778260968483,
       "tag": "0002_auth_phase1",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1778518047792,
+      "tag": "0003_scoping_audit_columns",
+      "breakpoints": true
     }
   ]
 }

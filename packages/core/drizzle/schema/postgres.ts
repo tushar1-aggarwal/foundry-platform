@@ -481,6 +481,8 @@ export const scopingOverrides = pgTable(
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
     deletedAt: text("deleted_at"),
+    setBy: text("set_by"),
+    deletedBy: text("deleted_by"),
   },
   (t) => ({
     idxLive: uniqueIndex("idx_scoping_overrides_live")

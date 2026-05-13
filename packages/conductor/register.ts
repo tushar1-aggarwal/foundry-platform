@@ -39,6 +39,7 @@ import { registerAdminHandlers } from "./handlers/admin.js";
 import { registerAdminPolicyHandlers } from "./handlers/admin-policy.js";
 import { registerAdminApiKeyHandlers } from "./handlers/admin-apikey.js";
 // --- END agent-B ---
+import { registerAdminScopingHandlers } from "./handlers/admin-scoping.js";
 // --- BEGIN agent-C: resource-crud ---
 import { registerResourceCrudHandlers } from "./handlers/resource-crud.js";
 // --- END agent-C ---
@@ -105,6 +106,7 @@ export function registerSharedHandlers(router: Router, app: AppContext): void {
   registerAdminPolicyHandlers(router, app);
   registerAdminApiKeyHandlers(router, app);
   // --- END agent-B ---
+  registerAdminScopingHandlers(router, app);
 
   // --- BEGIN agent-C: resource-crud ---
   // Must run AFTER registerResourceHandlers so the YAML-aware variants win

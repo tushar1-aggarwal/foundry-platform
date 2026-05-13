@@ -179,6 +179,88 @@ describe("TenantManager deleted_by audit", () => {
   });
 });
 
+describe("TenantManager seeded-row protection", () => {
+  it("refuses to delete the seeded 'default' tenant and leaves the row live", async () => {
+    // The 'default' tenant is the JIT-membership target for new Google-OIDC
+    // signups (auth/login.ts). Deleting it breaks the login flow silently
+    // hours later when a new user tries to sign in. Protection lives at
+    // the manager layer so every entry point (handler, CLI, direct repo)
+    // inherits.
+    const db = await freshDb();
+    const tm = new TenantManager(db);
+
+    // Migration 017 seeds the default tenant; verify it's present.
+    const before = await tm.get("default");
+    expect(before).not.toBeNull();
+    expect(before?.deleted_at).toBeNull();
+
+    await expect(tm.delete("default")).rejects.toThrow(/'default' tenant.*landing target/);
+
+    // Row remains live -- no partial write.
+    const after = await tm.get("default");
+    expect(after?.deleted_at).toBeNull();
+    await db.close();
+  });
+
+  it("still allows delete of non-default tenants after the protection lands", async () => {
+    // Regression guard: the hardcoded check must not catch tenants whose
+    // slug merely contains 'default'. Only exact id === "default".
+    const db = await freshDb();
+    const tm = new TenantManager(db);
+    const t = await tm.create({ slug: "not-default", name: "Not Default" });
+    expect(t.id).not.toBe("default");
+    expect(await tm.delete(t.id)).toBe(true);
+    expect((await tm.get(t.id, { includeDeleted: true }))?.deleted_at).not.toBeNull();
+    await db.close();
+  });
+
+  it("refuses to update the seeded 'default' tenant and leaves the row unchanged", async () => {
+    // Same intent as the delete guard: a slug rename or any field
+    // change on 'default' would silently mismatch the hardcoded id the
+    // login flow depends on.
+    const db = await freshDb();
+    const tm = new TenantManager(db);
+
+    const before = await tm.get("default");
+    expect(before?.slug).toBe("default");
+
+    await expect(tm.update("default", { slug: "renamed-default" })).rejects.toThrow(/'default' tenant/);
+    await expect(tm.update("default", { name: "Default 2" })).rejects.toThrow(/'default' tenant/);
+
+    const after = await tm.get("default");
+    expect(after?.slug).toBe("default");
+    expect(after?.name).toBe(before?.name);
+    await db.close();
+  });
+
+  it("refuses to setStatus on the seeded 'default' tenant", async () => {
+    // If a future hardening pass starts gating logins on
+    // `tenant.status === "active"`, an archived 'default' would
+    // break the JIT-membership path. Symmetric with delete + update.
+    const db = await freshDb();
+    const tm = new TenantManager(db);
+
+    await expect(tm.setStatus("default", "archived")).rejects.toThrow(/'default' tenant/);
+    await expect(tm.setStatus("default", "suspended")).rejects.toThrow(/'default' tenant/);
+
+    const after = await tm.get("default");
+    expect(after?.status).toBe("active");
+    await db.close();
+  });
+
+  it("still allows update + setStatus of non-default tenants", async () => {
+    // Regression guard: only exact id === "default" is locked.
+    const db = await freshDb();
+    const tm = new TenantManager(db);
+    const t = await tm.create({ slug: "not-default", name: "Not Default" });
+    const renamed = await tm.update(t.id, { slug: "renamed" });
+    expect(renamed?.slug).toBe("renamed");
+    const archived = await tm.setStatus(t.id, "archived");
+    expect(archived?.status).toBe("archived");
+    await db.close();
+  });
+});
+
 describe("TenantManager cascade delete", () => {
   it("soft-cascades to teams and memberships on delete in one txn", async () => {
     const db = await freshDb();
