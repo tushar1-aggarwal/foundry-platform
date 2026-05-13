@@ -55,13 +55,17 @@ RUN if [ -f packages/web/vite.config.ts ]; then \
 FROM oven/bun:1.3-slim AS production
 WORKDIR /app
 
-# Install runtime system dependencies
+# Install runtime system dependencies + Node (for npm-installed claude CLI).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     tmux \
     curl \
     ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+    nodejs \
+    npm \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install -g @anthropic-ai/claude-code \
+  && npm cache clean --force
 # Pull kubectl from a multi-arch image (Docker Hub is Zscaler-trusted, dl.k8s.io is MITM-blocked).
 COPY --from=bitnami/kubectl:latest /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/kubectl
 
