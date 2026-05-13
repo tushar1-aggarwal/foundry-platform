@@ -43,6 +43,7 @@ COPY agents/ agents/
 COPY flows/ flows/
 COPY skills/ skills/
 COPY models/ models/
+COPY runtimes/ runtimes/
 COPY ark ./ark
 
 # Build web UI (Vite). Server code stays as .ts -- Bun runs it directly.
@@ -79,11 +80,12 @@ COPY --from=build /app/tsconfig.json ./
 COPY --from=build /app/packages ./packages
 COPY --from=build /app/ark ./ark
 
-# Copy resource definitions (agents, flows, skills, models)
+# Copy resource definitions (agents, flows, skills, models, runtimes)
 COPY --from=build /app/agents ./agents
 COPY --from=build /app/flows ./flows
 COPY --from=build /app/skills ./skills
 COPY --from=build /app/models ./models
+COPY --from=build /app/runtimes ./runtimes
 
 # Copy web UI build output (if it exists)
 COPY --from=build /app/packages/web/dist ./packages/web/dist
