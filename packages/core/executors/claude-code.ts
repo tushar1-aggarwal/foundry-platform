@@ -16,6 +16,7 @@ import { discoverWorkspacePorts } from "../compute/isolation/ports.js";
 import { hasDevcontainerConfig } from "../compute/isolation/devcontainer.js";
 import { logWarn } from "../observability/structured-log.js";
 import { buildAuthedHttpsUrl } from "../services/git/auth-url.js";
+import type { ComputeHandle } from "../compute/types.js";
 
 /**
  * Default home directory on EC2 / k8s remote hosts. Used as the
@@ -131,13 +132,25 @@ export const claudeCodeExecutor: Executor = {
     // one. The lifecycle re-runs `attachExistingHandle` itself; we only
     // need the handle here so `compute.resolveWorkdir(handle, session)`
     // and `compute.buildLaunchEnv` can read off `handle.meta`.
+    //
+    // Fallback to `session.config.compute_handle` when `attachExistingHandle`
+    // returns null. K8sCompute.attachExistingHandle returns null when the
+    // row config has no `pod_name` -- which is the case when `session.compute_name`
+    // points at the template (e.g. `docs-k8s`) rather than the per-session
+    // instance. The conductor persists the provisioned handle to
+    // session.config.compute_handle, so use that as the source of truth for
+    // path resolution. Without this fallback the launcher's `cd` falls back
+    // to REMOTE_HOME ("/home/ubuntu") instead of the cloned workdir, and
+    // the agent exits immediately because the launch.sh runs `cd
+    // /home/ubuntu` before claude can start.
+    const persistedHandle = (session.config as { compute_handle?: ComputeHandle } | null | undefined)?.compute_handle;
     const previewHandle =
       target && compute
         ? (target.compute.attachExistingHandle?.({
             name: compute.name,
             status: compute.status,
             config: (compute.config ?? {}) as Record<string, unknown>,
-          }) ?? null)
+          }) ?? persistedHandle ?? null)
         : null;
 
     // Setup worktree + trust (dynamic import to avoid circular dependency)
