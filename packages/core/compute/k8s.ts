@@ -503,15 +503,23 @@ export class K8sCompute implements Compute {
 
   // ── resolveWorkdir ───────────────────────────────────────────────────────
   //
-  // Pod-side mount layout is TBD: the legacy K8sProvider didn't implement
-  // this hook (sessions ran against a conductor-shared workdir under the
-  // local-host adapter), and the future plan for k8s-launched arkd has not
-  // yet committed to a layout (`/workspace/<sid>/<repo>` is the leading
-  // candidate but not wired). Returning null here lets the dispatcher fall
-  // back to `session.workdir` until the layout is decided.
-
-  resolveWorkdir(_h: ComputeHandle, _session: Session): string | null {
-    return null;
+  // Mirrors LocalCompute's layout, rooted at `/workspace/<sid>/<repo>` inside
+  // the per-session pod. Returning null here previously caused the
+  // prepare-workspace lifecycle step to be silently skipped (the guard at
+  // target-lifecycle.ts requires a non-null remoteWorkdir), leaving the pod
+  // with no checkout and the agent with nothing to edit. The `/workspace`
+  // prefix is the layout the K8s pod-template provisions writable space at.
+  // Bare-worktree dispatch (no session.repo) still returns null so the clone
+  // is honestly skipped rather than landing on a meaningless path.
+  resolveWorkdir(_h: ComputeHandle, session: Session): string | null {
+    const cloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo;
+    if (!cloneSource) return null;
+    const repoBasename =
+      cloneSource
+        .split("/")
+        .pop()
+        ?.replace(/\.git$/, "") ?? "project";
+    return `/workspace/${session.id}/${repoBasename}`;
   }
 
   // ── prepareWorkspace ─────────────────────────────────────────────────────
