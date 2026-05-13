@@ -49,3 +49,5 @@ PLAN.md
 # macOS Finder droppings -- never tracked.
 .DS_Store
 **/.DS_Store
+out/
+.env.iso
