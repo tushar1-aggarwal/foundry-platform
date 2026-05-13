@@ -146,8 +146,7 @@ export async function cloneRemoteRepoIfNeeded(
   // existing-checkout use case) skip the clone entirely.
   const repoField = typeof session.repo === "string" ? session.repo : "";
   const remoteUrl =
-    (session.config?.remoteRepo as string | undefined) ??
-    (repoField && isRepoUrl(repoField) ? repoField : undefined);
+    (session.config?.remoteRepo as string | undefined) ?? (repoField && isRepoUrl(repoField) ? repoField : undefined);
   if (!remoteUrl || session.workdir) return { ok: true };
 
   // Hosted dispatch normally defers cloning to the compute target. Laptop-hosted
