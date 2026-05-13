@@ -4,10 +4,17 @@ requires_repo: true
 stages:
   - name: plan
     agent: planner
+    # Force haiku at stage level. `foundry` TF service account ACL only grants
+    # access to claude-haiku-4-5; opus/sonnet return 403. The agent.yaml
+    # already declares model:haiku, but something in the dispatch chain (still
+    # debugging) overrides it to opus -- the stage-level model override beats
+    # everything else so this is a guaranteed pin until that's traced.
+    model: haiku
     gate: auto
 
   - name: implement
     agent: worker
+    model: haiku
     gate: auto
     depends_on: [plan]
     on_failure: "retry(1)"
