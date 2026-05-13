@@ -1,0 +1,97 @@
+{{- if and .Values.temporal.enabled .Values.temporal.schemaJob.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: temporal-schema
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-schema
+  annotations:
+    # Run before any server pods come up, on every install and upgrade.
+    # update-schema is a no-op when schema is already current, so re-runs
+    # are cheap and safe.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PreSync
+    "argocd.argoproj.io/sync-wave": "-10"
+    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: {{ .Values.temporal.schemaJob.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "ark.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal-schema
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: schema
+          image: "{{ .Values.temporal.schemaJob.image.repository }}:{{ .Values.temporal.schemaJob.image.tag }}"
+          env:
+            - name: SQL_PLUGIN
+              value: postgres12
+            {{- if .Values.temporal.server.tls.enabled }}
+            - name: SQL_TLS_ENABLED
+              value: "true"
+            - name: SQL_TLS_DISABLE_HOST_VERIFICATION
+              value: "true"
+            {{- end }}
+            # DDL (CREATE TABLE / CREATE INDEX) breaks under pgbouncer
+            # transaction-pool mode, so the schema tool MUST connect directly to
+            # the RDS endpoint, not via the runtime pgbouncer host that the
+            # server uses. For pilots without pgbouncer the two values are the
+            # same -- but this isolation makes the chart correct for any account
+            # that adds pgbouncer later.
+            - name: SQL_HOST
+              value: {{ .Values.postgresql.external.host | quote }}
+            - name: SQL_PORT
+              value: {{ .Values.postgresql.external.port | quote }}
+            - name: SQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ .Values.temporal.persistence.secretKeys.username }}
+            - name: SQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ .Values.temporal.persistence.secretKeys.password }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              DB={{ .Values.temporal.persistence.database }}
+              VDB={{ .Values.temporal.persistence.visibilityDatabase }}
+              {{ if .Values.temporal.server.tls.enabled }}# RDS requires SSL: --tls --tls-disable-host-verification passed to every sql-tool call below.{{ end }}
+
+              # Idempotent setup helper: succeed cleanly if the schema_version
+              # table already exists; surface any other error (perms,
+              # connectivity, syntax) loudly so the Job fails for a real cause
+              # rather than silently swallowing it.
+              run_setup() {
+                local db="$1"
+                local out
+                if out=$(temporal-sql-tool {{ if .Values.temporal.server.tls.enabled }}--tls --tls-disable-host-verification {{ end }}--db "$db" setup-schema -v 0.0 2>&1); then
+                  echo "$out"
+                  return 0
+                fi
+                # `setup-schema` errors with `relation "schema_version" already exists`
+                # (or close variants) on already-initialized databases.
+                if echo "$out" | grep -qiE 'already exists|already initialized'; then
+                  echo "Schema for $db already initialized, skipping setup."
+                  return 0
+                fi
+                echo "ERROR: setup-schema failed for $db:" >&2
+                echo "$out" >&2
+                return 1
+              }
+
+              run_setup "$DB"
+              temporal-sql-tool {{ if .Values.temporal.server.tls.enabled }}--tls --tls-disable-host-verification {{ end }}--db "$DB" update-schema --schema-dir schema/postgresql/v12/temporal/versioned
+              run_setup "$VDB"
+              temporal-sql-tool {{ if .Values.temporal.server.tls.enabled }}--tls --tls-disable-host-verification {{ end }}--db "$VDB" update-schema --schema-dir schema/postgresql/v12/visibility/versioned
+              echo "Schema setup + update complete for $DB and $VDB."
+{{- end }}

@@ -1,0 +1,106 @@
+{{- if .Values.temporal.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-worker
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-worker
+spec:
+  replicas: {{ .Values.temporal.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ark.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: temporal-worker
+  template:
+    metadata:
+      labels:
+        {{- include "ark.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal-worker
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "ark.serviceAccountName" . }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: "{{ .Values.temporal.worker.image.repository }}:{{ .Values.temporal.worker.image.tag }}"
+          imagePullPolicy: {{ .Values.temporal.worker.image.pullPolicy }}
+          # Entrypoint is defined in .infra/Dockerfile.temporal-worker:
+          #   exec tsx packages/core/temporal/worker.ts
+          envFrom:
+            - configMapRef:
+                name: {{ include "ark.fullname" . }}-config
+            {{- if and (not .Values.postgresql.enabled) .Values.postgresql.external.existingSecret }}
+            - secretRef:
+                name: {{ .Values.postgresql.external.existingSecret }}
+            {{- end }}
+          env:
+            {{- if and (not .Values.postgresql.enabled) .Values.postgresql.external.host }}
+            - name: DB_HOST
+              value: {{ .Values.postgresql.external.host | quote }}
+            - name: DB_PORT
+              value: {{ .Values.postgresql.external.port | quote }}
+            - name: DB_NAME
+              value: {{ .Values.postgresql.external.database | quote }}
+            {{- end }}
+            {{- if .Values.s3.bucket }}
+            # Temporal worker boots AppContext (hosted mode) and hits the same
+            # storage.blobBackend check as the control-plane Deployment.
+            - name: ARK_BLOB_BACKEND
+              value: "s3"
+            - name: ARK_S3_BUCKET
+              value: {{ .Values.s3.bucket | quote }}
+            - name: ARK_S3_REGION
+              value: {{ .Values.s3.region | quote }}
+            {{- if .Values.s3.prefix }}
+            - name: ARK_S3_PREFIX
+              value: {{ .Values.s3.prefix | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.controlPlane.devAllowLocalHostedStorage }}
+            - name: ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE
+              value: "1"
+            {{- end }}
+            # LLM keys -- Temporal activities (dispatch-stage, run-verification)
+            # exec agent runtimes that read these directly from process.env.
+            {{- if or .Values.llm.anthropicApiKey .Values.llm.existingSecret }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ark.llmSecretName" . }}
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            {{- end }}
+            {{- if or .Values.llm.openaiApiKey .Values.llm.existingSecret }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ark.llmSecretName" . }}
+                  key: OPENAI_API_KEY
+                  optional: true
+            {{- end }}
+            {{- if or .Values.llm.googleApiKey .Values.llm.existingSecret }}
+            - name: GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ark.llmSecretName" . }}
+                  key: GOOGLE_API_KEY
+                  optional: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.temporal.worker.resources | nindent 12 }}
+          # Liveness via a noop curl to Temporal frontend -- if frontend is
+          # unreachable for >30s the worker process self-terminates via SDK
+          # retry exhaustion. We let k8s restart the pod.
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "pgrep -f 'tsx packages/core/temporal/worker.ts' >/dev/null"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+{{- end }}

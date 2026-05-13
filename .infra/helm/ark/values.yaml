@@ -24,6 +24,11 @@ controlPlane:
   router:
     enabled: true
     policy: balanced
+  # Hosted mode rejects FsSnapshotStore at boot and demands an S3SnapshotStore
+  # impl that is still TODO upstream. Setting this to true bypasses the check.
+  # Safe ONLY at replicaCount=1 (single-pod snapshots don't need cross-pod
+  # visibility). Flip off the day the S3 snapshot store implementation lands.
+  devAllowLocalHostedStorage: false
 
 # -- Workers
 workers:
@@ -72,6 +77,15 @@ redis:
     port: 6379
     existingSecret: ""
 
+# -- S3 backend for ark blob storage (hosted mode). When `bucket` is set,
+# control-plane and temporal-worker get ARK_BLOB_BACKEND=s3 + ARK_S3_BUCKET/
+# REGION/PREFIX env vars. Leave bucket empty to opt out (boot will then fail
+# in hosted mode unless controlPlane.devAllowLocalHostedStorage=true).
+s3:
+  bucket: ""
+  region: ""
+  prefix: ""
+
 # -- Ingress
 ingress:
   enabled: true
@@ -94,3 +108,138 @@ serviceAccount:
   create: true
   name: ark
   annotations: {}
+
+# -- ExternalSecret (off by default; enable in env values to pull from AWS SM)
+externalSecret:
+  enabled: false
+
+# -- TensorZero sidecar (off by default)
+tensorZero:
+  enabled: false
+
+# -- Temporal (workflow orchestration for hosted/control-plane mode)
+# Shipped as part of the main chart, not a sub-chart. The persistence layer
+# (RDS + pgbouncer) is provisioned by Ops outside Helm; see
+# `docs/superpowers/specs/2026-05-12-temporal-helm-gap-design.md`.
+#
+# Off by default so `helm lint` / `helm template` succeed without an account
+# overlay. The production overlay (`values-production.yaml`) flips this on
+# and each account values file must supply `temporal.persistence.host`.
+temporal:
+  enabled: false
+  # Default namespace passed to Ark control plane / worker.
+  namespace: ark-prod
+  # All namespaces created by the post-install Job. The default namespace
+  # MUST appear in this list.
+  namespaces:
+    - ark-prod
+  # Single task queue name used when taskQueueAssignments is empty.
+  taskQueue: ark.default.stages
+  # Comma-separated task queues for sharded workers. Empty means use taskQueue.
+  taskQueueAssignments: ""
+  # In-cluster Service name for the Temporal frontend.
+  serverServiceName: temporal-server
+
+  server:
+    replicaCount: 1
+    image:
+      repository: temporalio/server
+      tag: "1.27"
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    tls:
+      enabled: true             # RDS requires SSL; set false only for local/dev clusters without TLS
+
+  # Persistence -- shared RDS via Ops-provisioned pgbouncer.
+  persistence:
+    host: ""                           # pgbouncer host; required per env.
+    port: 6432
+    database: temporal
+    visibilityDatabase: temporal_visibility
+    existingSecret: temporal-db-credentials
+    secretKeys:
+      username: POSTGRES_USER
+      password: POSTGRES_PWD
+    # AWS Secrets Manager key (path or ARN) holding POSTGRES_USER/PWD for the
+    # temporal role. When set AND externalSecret.enabled=true, the chart
+    # materializes the K8s Secret named in `existingSecret` via an
+    # ExternalSecret. Leave empty to manage that K8s Secret out-of-band.
+    secretManagerKey: ""
+
+  # Optional: bootstrap Job to create the `temporal` role + temporal/
+  # temporal_visibility databases on RDS. Runs as pre-install,pre-upgrade
+  # hook (weight -25, before schema migration at -10). Uses master DB
+  # credentials from `masterSecretName` (defaults to <release>-secrets, which
+  # holds the RDS-managed rotated master from ExternalSecret).
+  #
+  # When enabled, the chart manages `temporal-db-credentials` directly: a
+  # random password is generated on first install and preserved across
+  # upgrades via `lookup`. Mutually exclusive with persistence.secretManagerKey
+  # (which would have ExternalSecrets manage the same K8s Secret instead).
+  dbBootstrap:
+    enabled: false
+    masterSecretName: ""
+    masterSecretKeys:
+      username: DB_USERNAME
+      password: DB_PASSWORD
+    image:
+      repository: postgres
+      tag: "16-alpine"
+
+  # Helm Job: temporal-sql-tool setup-schema + update-schema.
+  # Runs on pre-install AND pre-upgrade. Idempotent.
+  schemaJob:
+    enabled: true
+    image:
+      repository: temporalio/admin-tools
+      tag: "1.27"
+    # 3 retries to absorb transient RDS connection drops mid-migration. Job
+    # is idempotent (setup is gated on schema_version absence, update-schema
+    # is a no-op when current), so retries are safe.
+    backoffLimit: 3
+
+  # Helm Job: post-install, creates namespaces idempotently.
+  namespaceJob:
+    enabled: true
+    image:
+      repository: temporalio/admin-tools
+      tag: "1.27"
+    retention: 72h
+
+  ui:
+    enabled: true
+    image:
+      repository: temporalio/ui
+      tag: "2.34.0"
+    corsOrigins: ""
+    ingress:
+      enabled: false
+      path: /temporal
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  # The Ark-side Temporal worker (Node+tsx process).
+  worker:
+    replicaCount: 2
+    image:
+      repository: ghcr.io/ytarasova/ark-temporal-worker
+      tag: latest
+      pullPolicy: Always
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi

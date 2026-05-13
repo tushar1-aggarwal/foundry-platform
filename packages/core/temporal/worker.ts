@@ -10,6 +10,7 @@ import * as actAwait from "./activities/await-stage-completion.js";
 import * as actAction from "./activities/execute-action.js";
 import * as actVerify from "./activities/run-verification.js";
 import * as actProjSession from "./activities/project-session.js";
+import * as actProjStage from "./activities/project-stage.js";
 import * as actLoadFlow from "./activities/load-flow.js";
 import * as activities from "./activities/index.js";
 
@@ -28,6 +29,7 @@ async function main() {
   actAction.injectDeps(deps);
   actVerify.injectDeps(deps);
   actProjSession.injectDeps(deps);
+  actProjStage.injectDeps(deps);
   actLoadFlow.injectDeps(deps);
 
   const connection = await NativeConnection.connect({ address: config.temporal.serverUrl });

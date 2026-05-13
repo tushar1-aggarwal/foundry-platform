@@ -40,6 +40,8 @@ make test-file F=packages/core/__tests__/session.test.ts # single file
 
 Use `AppContext.forTestAsync()` for test isolation (fresh arkDir + ephemeral ports).
 
+**E2E test timeouts:** Each individual test case must have a `timeout` of 180_000ms (3 minutes) and tests must be configured to bail on first failure (`--bail` / `bail: 1`). Never let a single hanging test consume the full CI job budget.
+
 ## Ports
 
 19400 (conductor), 19300 (arkd), 8420 (web), 19200+ (channels)

@@ -1,14 +1,17 @@
-# Local Postgres + Redis for Ark control-plane mode dev.
+# Local Postgres + Redis + Temporal worker for Ark control-plane mode dev.
 #
 # Brings up:
-#   - ark-postgres : Postgres 16 on :15433, db `ark`, user/pass `ark`/`ark`.
-#                    (Non-default host port so it can't clash with a host-side
-#                    Postgres or an RDS SSH tunnel that already grabbed :5432.)
-#   - ark-redis    : Redis 7 on :6379, no auth.
+#   - ark-postgres        : Postgres 16 on :15433, db `ark`, user/pass `ark`/`ark`.
+#                           (Non-default host port so it can't clash with a host-side
+#                           Postgres or an RDS SSH tunnel that already grabbed :5432.)
+#   - ark-redis           : Redis 7 on :6379, no auth.
+#   - temporal-worker     : Ark Temporal worker (image ark-temporal-worker:dev).
+#                           Connects to the ark-temporal compose project's server
+#                           via host.docker.internal:7233 and to the ark server on
+#                           the host via host.docker.internal:8421.
 #
-# Both are intentionally distinct from the Temporal stack
-# (`docker-compose.temporal.yaml`) so the two compose projects can run
-# side-by-side without volume / port conflicts.
+# The Temporal server itself lives in docker-compose.temporal.yaml (separate project)
+# so the two stacks can be brought up independently.
 #
 # Usage:
 #   make dev-stack         # bring up + wait for health
@@ -52,6 +55,51 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+
+  temporal-worker:
+    build:
+      context: ..
+      dockerfile: .infra/Dockerfile.temporal-worker
+    image: ark-temporal-worker:dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgres://ark:ark@postgres:5432/ark?sslmode=disable
+      # Temporal server lives in the ark-temporal compose project, exposed on
+      # the host at :7233. Reach it via host.docker.internal from inside this
+      # container (works on Docker Desktop for Mac; host-gateway covers Linux).
+      ARK_TEMPORAL_SERVER_URL: host.docker.internal:7233
+      ARK_TEMPORAL_NAMESPACE: ark-dev
+      ARK_TEMPORAL_WORKER: "true"
+      ARK_TEMPORAL_ORCHESTRATION: "true"
+      ARK_PROFILE: control-plane
+      ARK_LOG_LEVEL: info
+      ARK_BLOB_BACKEND: local
+      ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE: "1"
+      ARK_SECRETS_BACKEND: file
+      ARK_AUTH_REQUIRE_TOKEN: "false"
+      ARK_DEFAULT_TENANT: default
+      # Ark server runs on the host at :8421 (ARK_WEB_PORT in .env.control-plane).
+      # host.docker.internal reaches it on Mac (Docker Desktop) and via
+      # host-gateway on Linux.
+      ARK_CONDUCTOR_URL: "http://host.docker.internal:8421"
+    # Process-alive healthcheck so `docker compose up --wait` blocks until
+    # the worker process is up. See docker-compose.e2e.yaml for the full
+    # rationale; in dev this prevents `make dev-control-plane` from
+    # reporting "ready" before the worker has registered task-queue pollers.
+    # Uses /proc directly to avoid depending on procps in cached images.
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "for f in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < $$f 2>/dev/null | grep -q 'packages/core/temporal/worker.ts' && exit 0; done; exit 1"
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
 
 volumes:
   ark-postgres-data:

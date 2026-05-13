@@ -78,7 +78,7 @@ services:
       retries: 30
 
   temporal:
-    image: temporalio/auto-setup:1.26
+    image: temporalio/auto-setup:1.27
     container_name: ark-e2e-temporal
     restart: "no"
     depends_on:
@@ -100,7 +100,7 @@ services:
       start_period: 30s
 
   temporal-ui:
-    image: temporalio/ui:2.31.2
+    image: temporalio/ui:2.34.0
     container_name: ark-e2e-temporal-ui
     restart: "no"
     depends_on:
@@ -144,6 +144,12 @@ services:
       ARK_SECRETS_BACKEND: file
       ARK_AUTH_REQUIRE_TOKEN: "false"
       ARK_DEFAULT_TENANT: default
+      # Opt-in switch for the e2e test stubs in scripts/temporal-worker-entrypoint.sh.
+      # When set, the entrypoint installs fake-claude-code-executor.mjs as a
+      # plugin under <arkDir>/plugins/executors/claude-code.mjs, which shadows
+      # the real claude-code built-in via the registerExecutor() last-write-wins
+      # registry. Prod deploys must leave this unset so the real executor wins.
+      ARK_E2E_MODE: "1"
       # Enable test-only action handlers (notably `flaky_pr`) so T5a/T5b can
       # exercise retry policy + non-retryable failures through this worker.
       # Without this, executeAction sees flaky_pr as an unknown action and
@@ -158,6 +164,41 @@ services:
       # host.docker.internal reaches the test process on the docker host
       # (Mac/Windows), and via the gateway on Linux.
       ARK_CONDUCTOR_URL: "http://host.docker.internal:8422"
+      # Required by claude-code runtime's secret declaration -- fake-claude
+      # doesn't read it but dispatch validation rejects launch if missing.
+      # File-backed secrets aren't shared with the host server, so set it
+      # directly here for the worker's tenant=default secret resolver.
+      CLAUDE_CODE_OAUTH_TOKEN: "e2e-test-dummy-oauth-token"
+    volumes:
+      # Fake claude binary for e2e tests -- replaces the real claude so agents
+      # complete stages without an Anthropic API key or real LLM calls.
+      - ../e2e/fixtures/fake-claude.sh:/usr/local/bin/claude:ro
+      # e2e/ is now excluded from prod builds via .dockerignore (defense in
+      # depth: prevents the fake-claude-code stub from shadowing the real
+      # claude-code executor in prod even if ARK_E2E_MODE leaks). The
+      # temporal-worker entrypoint reads fixtures from /app/e2e/fixtures, so
+      # bind-mount them here at the same path for the e2e stack.
+      - ../e2e/fixtures:/app/e2e/fixtures:ro
+    # Process-alive healthcheck so `docker compose up --wait` blocks until
+    # the worker entrypoint has actually exec'd tsx and the worker.ts process
+    # is up. Without this, `--wait` returned immediately and the first test
+    # raced the worker's Temporal-connect + task-queue-poll registration --
+    # session/start fired, the workflow queued on `ark.default.stages`, and
+    # the activity never ran because no poller was registered yet. The
+    # follow-up `waitForTemporalWorkerPolling()` in docker-stack.ts confirms
+    # the worker is *actually* polling (not just process-alive).
+    #
+    # Uses /proc directly instead of `pgrep -f` because older cached worker
+    # images may not yet have `procps` installed (Dockerfile adds it but a
+    # stale cached layer can lag). /proc is always present on Linux.
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "for f in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < $$f 2>/dev/null | grep -q 'packages/core/temporal/worker.ts' && exit 0; done; exit 1"
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
     # Note (T6 worker-in-container): an earlier iteration mounted the host's
     # docker.sock + arkDir + source tree here so this worker could dispatch
     # T6 sidecars from inside compose. Reverted because we can't currently

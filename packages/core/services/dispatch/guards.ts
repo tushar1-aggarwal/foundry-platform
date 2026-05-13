@@ -19,6 +19,7 @@ import { execFile } from "child_process";
 
 import { logWarn } from "../../observability/structured-log.js";
 import { detectInjection } from "../../session/prompt-guard.js";
+import { buildAuthedHttpsUrl } from "../git/auth-url.js";
 import type { DispatchDeps, DispatchResult } from "./types.js";
 import type { Session } from "../../../types/index.js";
 
@@ -168,7 +169,11 @@ export async function cloneRemoteRepoIfNeeded(
   try {
     const tmpDir = join(deps.config.dirs.ark, "worktrees", sessionId);
     mkdirSync(tmpDir, { recursive: true });
-    await execFileAsync("git", ["clone", "--depth", "1", remoteUrl, tmpDir], { timeout: 120_000 });
+    // Inject tenant-scoped basic-auth creds (BITBUCKET_TOKEN/USERNAME,
+    // GITHUB_TOKEN) into the URL for hosts we know how to authenticate.
+    // Non-https URLs and unknown hosts pass through unchanged.
+    const clonedUrl = await buildAuthedHttpsUrl(deps.getApp(), session, remoteUrl);
+    await execFileAsync("git", ["clone", "--depth", "1", clonedUrl, tmpDir], { timeout: 120_000 });
     // Update BOTH workdir and repo so setupSessionWorktree's later
     // `resolve(session.repo)` lands on the cloned dir (a real local git
     // repo) instead of re-resolving the URL as a path.
@@ -185,7 +190,12 @@ export async function cloneRemoteRepoIfNeeded(
     });
     return { ok: true };
   } catch (e: any) {
-    return { ok: false, message: `Failed to clone remote repo: ${e.message}` };
+    // Strip basic-auth userinfo from any URL in the error before surfacing.
+    // Git's "fatal: ... https://x-token-auth:TOKEN@host/..." messages would
+    // otherwise leak the token into session.error / event logs.
+    const raw = typeof e?.message === "string" ? e.message : String(e);
+    const safe = raw.replace(/https:\/\/[^@\s/]+@/g, "https://***@");
+    return { ok: false, message: `Failed to clone remote repo: ${safe}` };
   }
 }
 
