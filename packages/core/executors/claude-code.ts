@@ -15,6 +15,7 @@ import * as tmux from "../infra/tmux.js";
 import { discoverWorkspacePorts } from "../compute/isolation/ports.js";
 import { hasDevcontainerConfig } from "../compute/isolation/devcontainer.js";
 import { logWarn } from "../observability/structured-log.js";
+import { buildAuthedHttpsUrl } from "../services/git/auth-url.js";
 
 /**
  * Default home directory on EC2 / k8s remote hosts. Used as the
@@ -436,7 +437,13 @@ export const claudeCodeExecutor: Executor = {
       // `session.config.remoteRepo`); fall back to `session.repo` for
       // co-located compute kinds. Null suppresses prepare-workspace --
       // bare-worktree dispatch surfaces the misconfig at the agent stage.
-      const cloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo ?? null;
+      //
+      // For private HTTPS remotes (Bitbucket/GitHub) inject tenant-scoped
+      // basic-auth into the URL so the pod's `git clone` authenticates --
+      // the in-pod arkd has no git credential helper. `buildAuthedHttpsUrl`
+      // returns the URL unchanged for non-https or unknown hosts.
+      const rawCloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo ?? null;
+      const cloneSource = rawCloneSource ? await buildAuthedHttpsUrl(app, session, rawCloneSource) : null;
 
       log("Launching on remote...");
       // `remoteWorkdir` is null on the no-resolveWorkdir fallback (so
