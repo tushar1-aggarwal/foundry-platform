@@ -137,7 +137,11 @@ DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker
 dev-docker: ## Sub-target: Postgres :15433 + Redis :6379 containers (factored out of dev-control-plane)
 	@command -v docker >/dev/null 2>&1 || { echo "Docker required. Install Docker Desktop."; exit 1; }
 	@echo "\033[1mStarting Ark dev docker (Postgres + Redis)...\033[0m"
-	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d --wait
+	# Scope to postgres+redis only. The compose file also defines `temporal-worker`,
+	# but that service depends on the Temporal server (separate `ark-temporal` project)
+	# being up at host.docker.internal:7233. `dev-control-plane` brings the worker up
+	# explicitly after `dev-temporal`; running it here would fail `--wait`.
+	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d --wait postgres redis
 	@echo ""
 	@echo "  Postgres:  postgres://ark:ark@localhost:15433/ark"
 	@echo "  Redis:     redis://localhost:6379"
@@ -154,7 +158,7 @@ dev-temporal-worker: ## Sub-target: Temporal worker on host (Node + tsx; Bun lac
 	  echo "" && \
 	  exec tsx packages/core/temporal/worker.ts
 
-dev-control-plane: dev-docker dev-temporal ## Boot full laptop dev stack -- docker + arkd + temporal worker + ark server
+dev-control-plane: dev-temporal dev-docker ## Boot full laptop dev stack -- docker + arkd + temporal worker + ark server
 	@test -f .env.control-plane || { echo ".env.control-plane missing"; exit 1; }
 	@echo ""
 	@echo "\033[1mArk dev stack -- full laptop\033[0m"
