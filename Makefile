@@ -160,6 +160,10 @@ dev-temporal-worker: ## Sub-target: Temporal worker on host (Node + tsx; Bun lac
 
 dev-control-plane: dev-temporal dev-docker ## Boot full laptop dev stack -- docker + arkd + temporal worker + ark server
 	@test -f .env.control-plane || { echo ".env.control-plane missing"; exit 1; }
+	@# Ensure host-side bun deps are present. Without this, arkd/server/daemon
+	@# crash immediately with `Cannot find module '@temporalio/activity'` on a
+	@# fresh checkout (or after a clean). Matches the `dev` target's pattern.
+	@$(BUN) install --silent
 	@echo ""
 	@echo "\033[1mArk dev stack -- full laptop\033[0m"
 	@set -a && . ./.env.control-plane && set +a && \
