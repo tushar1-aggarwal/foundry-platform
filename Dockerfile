@@ -61,6 +61,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tmux \
     curl \
     ca-certificates \
+    jq \
     nodejs \
     npm \
   && rm -rf /var/lib/apt/lists/* \
