@@ -76,6 +76,37 @@ async function waitForTemporalWorkerPolling(): Promise<void> {
   }
 }
 
+/**
+ * Block until arkd inside the temporal-worker container answers /health.
+ * The container's entrypoint background-starts arkd on :19300 before exec'ing
+ * the worker; the compose healthcheck only proves the worker process is up,
+ * not arkd. The real claude-code executor's LocalCompute path uses arkd
+ * (prepareWorkspace clone, hook-publish relay), so we gate on its readiness
+ * before the first session/start.
+ *
+ * No host port mapping for arkd (it's only reachable from inside the
+ * container), so probe via `docker exec`.
+ */
+async function waitForArkdHealth(): Promise<void> {
+  const deadline = Date.now() + 60_000;
+  const container = "ark-e2e-temporal-worker-1";
+  let lastErr: unknown = null;
+  while (Date.now() < deadline) {
+    const proc = Bun.spawn(
+      ["docker", "exec", container, "curl", "-fsS", "http://localhost:19300/health"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const code = await proc.exited;
+    if (code === 0) return;
+    lastErr = `exit ${code}`;
+    await Bun.sleep(500);
+  }
+  throw new Error(
+    `arkd did not answer /health inside ${container} within 60s` +
+      (lastErr ? ` (last: ${String(lastErr)})` : ""),
+  );
+}
+
 export async function up(): Promise<void> {
   // When the Makefile already brought up the stack (ARK_E2E_STACK_RUNNING=1),
   // skip the compose call but ALWAYS wait for the worker to be polling. The
@@ -93,6 +124,7 @@ export async function up(): Promise<void> {
     if (code !== 0) throw new Error(`docker compose up failed (exit ${code})`);
   }
   await waitForTemporalWorkerPolling();
+  await waitForArkdHealth();
 }
 
 export async function down(): Promise<void> {

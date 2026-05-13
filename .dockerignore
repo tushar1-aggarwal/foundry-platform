@@ -11,12 +11,18 @@ dist/
 packages/desktop/out/
 packages/desktop/node_modules/
 docs/
-# E2E fixtures. The temporal-worker entrypoint installs anything found in
-# /app/e2e/fixtures/ as a plugin (when ARK_E2E_MODE=1); leaving them out of
-# prod build contexts is defense-in-depth so an image built without the
-# ARK_E2E_MODE gate still can't shadow the real claude-code executor.
-# The e2e docker-compose bind-mounts ../e2e/fixtures into the container at
-# runtime so tests still see them.
+# E2E fixtures. Keep out of every image build context -- prod doesn't need
+# them, and the e2e stack bind-mounts them at runtime instead:
+#   - `e2e/fixtures/fake-claude.sh` -> /usr/local/bin/claude (replaces the
+#     real claude binary so tests don't need an API key)
+#   - `e2e/fixtures` -> /app/e2e/fixtures (legacy mount, kept for any future
+#     in-container reads; the current Mode A.1 entrypoint reads nothing
+#     from here)
+# Pre-Mode-A.1 this directory also contained `fake-claude-code-executor.mjs`
+# which the entrypoint would install as an executor plugin when
+# ARK_E2E_MODE=1. That gate has been removed (the tests now exercise the
+# real claude-code executor end-to-end), but excluding `e2e/` from prod
+# image builds stays correct as defense-in-depth.
 #
 # NB: NOT excluding **/__tests__/ or *.test.ts -- packages/core/services/
 # actions/index.ts imports ./__tests__/flaky-pr-fixture.js as part of the

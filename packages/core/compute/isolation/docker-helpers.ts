@@ -54,9 +54,25 @@ export interface CreateContainerOpts {
   network?: string;
 }
 
-/** Pull a Docker image. 5-min timeout for large images over slow networks. */
+/**
+ * Pull a Docker image. 5-min timeout for large images over slow networks.
+ *
+ * If `docker pull` fails AND the image already exists in the local daemon,
+ * treat the pull as a no-op success. Mirrors k8s `imagePullPolicy: IfNotPresent`
+ * and matches `docker compose`'s `pull_policy: missing`. Required for the laptop
+ * T6 path where `ark:latest` is built locally via `make build-ark-image` and has
+ * no registry to pull from. Real registry failures (image doesn't exist locally
+ * AND pull fails) still propagate.
+ */
 export async function pullImage(image: string): Promise<void> {
-  await execFileAsync("docker", ["pull", image], { timeout: 300_000 });
+  try {
+    await execFileAsync("docker", ["pull", image], { timeout: 300_000 });
+  } catch (pullErr) {
+    const localExists = await execFileAsync("docker", ["image", "inspect", image])
+      .then(() => true)
+      .catch(() => false);
+    if (!localExists) throw pullErr;
+  }
 }
 
 /**

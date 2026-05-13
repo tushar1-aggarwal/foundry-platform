@@ -144,12 +144,9 @@ services:
       ARK_SECRETS_BACKEND: file
       ARK_AUTH_REQUIRE_TOKEN: "false"
       ARK_DEFAULT_TENANT: default
-      # Opt-in switch for the e2e test stubs in scripts/temporal-worker-entrypoint.sh.
-      # When set, the entrypoint installs fake-claude-code-executor.mjs as a
-      # plugin under <arkDir>/plugins/executors/claude-code.mjs, which shadows
-      # the real claude-code built-in via the registerExecutor() last-write-wins
-      # registry. Prod deploys must leave this unset so the real executor wins.
-      ARK_E2E_MODE: "1"
+      # ARK_E2E_MODE plugin shadow removed: tests now run the real claude-code
+      # executor end-to-end. /usr/local/bin/claude is bind-mounted to
+      # e2e/fixtures/fake-claude.sh which stubs only the LLM call.
       # Enable test-only action handlers (notably `flaky_pr`) so T5a/T5b can
       # exercise retry policy + non-retryable failures through this worker.
       # Without this, executeAction sees flaky_pr as an unknown action and

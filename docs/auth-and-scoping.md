@@ -1,7 +1,7 @@
-# Phase 1 Auth: Onboarding Guide
+# Auth & Scoping: Operator Reference
 
-This guide walks you through enabling, using, and configuring the
-Phase 1 auth stack. Three parts:
+End-to-end reference for enabling, using, and operating the Ark auth
+stack. Four parts:
 
 1. **Google OIDC login** -- browser users sign in with Google; the
    server mints an HttpOnly cookie session.
@@ -10,6 +10,9 @@ Phase 1 auth stack. Three parts:
 3. **Scoping overrides** -- a single override surface (user / team /
    tenant scoped) for org-level configuration like default flows,
    runtimes, models, and compute targets.
+4. **Operations runbook** -- concrete recipes for day-to-day admin
+   tasks: bootstrapping a tenant, adding members, setting overrides,
+   revoking keys, debugging.
 
 ```
             ┌─────────────────┐
@@ -31,10 +34,88 @@ Phase 1 auth stack. Three parts:
             └─────────────────┘
 ```
 
-Phase 1 is **opt-in**. Local development with no env vars set runs in
-single-user-admin mode and bypasses all three parts. Hosted /
-multi-user deployments enable Phase 1 by setting the env vars in
-Part 1.
+Auth is **opt-in**. Local development with no env vars set runs in
+single-user-admin mode and bypasses Parts 1-3 entirely (every request
+is treated as an admin in the `default` tenant). Hosted / multi-user
+deployments enable auth by setting the env vars in Part 1.
+
+---
+
+## The auth model at a glance
+
+Before the mechanics, the data model. New devs should read this once
+and refer back as needed.
+
+```
+            ┌─────────┐
+            │ tenants │ (identity boundary; everything carries tenant_id)
+            └──┬───┬──┘
+       1:N FK │   │ 1:N FK
+              ▼   ▼
+        ┌─────┐  ┌──────────────────┐  ┌───────────────────┐
+        │teams│  │     api_keys     │  │ scoping_overrides │
+        └──┬──┘  │ tenant_id (FK) + │  │  (per-tenant)     │
+           │     │ opt user_id      │  └───────────────────┘
+           │     │ (soft pointer)   │
+           │     └──────────────────┘
+           │ 1:N FK
+           ▼
+     ┌─────────────┐           ┌────────┐
+     │ memberships │──────────►│ users  │  (global, no tenant_id)
+     │ (FK team_id)│  N:1 FK   └────────┘
+     └─────────────┘
+```
+
+The diagram shows the FK structure. Two soft pointers it skips
+over (not enforced by the database, enforced by the manager layer):
+
+- `api_keys.user_id` -- nullable. `NULL` = admin-minted "system"
+  key not owned by a human user. When set, points at `users.id`.
+- `scoping_overrides.scope_id` -- a string that points at one of
+  three tables depending on `scope_kind`:
+  - `scope_kind = "user"` → `users.id`
+  - `scope_kind = "team"` → `teams.id`
+  - `scope_kind = "tenant"` → equals `scoping_overrides.tenant_id`
+
+| Table | Owns | Notes |
+|---|---|---|
+| `tenants` | Identity boundary for the whole product surface | Every row downstream carries `tenant_id`. Seeded `default` tenant is the JIT-signup landing target; protected at the manager layer from update / setStatus / delete. |
+| `teams` | Belongs to one tenant (`teams.tenant_id`) | The unit of org-chart membership and the anchor for scoping overrides at team scope. Seeded `default-team` lives in `default` tenant; same protection. |
+| `users` | Global identities keyed by email | NO direct tenant column -- a user's tenant is **derived** from their team memberships. A user with zero live memberships is a "global orphan" (can't log in until a membership is added). |
+| `memberships` | `(user_id, team_id, role)` many-to-many | Live rows enforce a partial unique index on `(user_id, team_id) WHERE deleted_at IS NULL`. Role is one of `owner / admin / member / viewer`. A user can have memberships across multiple tenants -- the **consultant pattern**. |
+| `api_keys` | Bearer tokens bound to a `(tenant_id, role)` | Optional `user_id` owner column (`NULL` = admin-tier "system" key). Hashed with SHA-256 on disk; `validate()` is constant-time. |
+| `scoping_overrides` | Per-tenant override surface keyed on `(scope_kind, scope_id, key)` | `scope_kind` ∈ `user / team / tenant`. `key` ∈ `runtime / model / compute.default / flow.allowlist`. See Part 3 for resolver semantics. |
+
+### How a request resolves to a `TenantContext`
+
+```
+inbound request → bearer token / cookie → ApiKeyManager.validate or
+AuthSessionManager.validate → wire TenantContext { tenantId, userId,
+role, ... } → router materialises a handler-facing TenantContext
+{ ...wire, isAdmin: role === "admin" }
+```
+
+Every JSON-RPC handler receives the `TenantContext` as its third
+argument. Admin gates use `requireAdmin(ctx)`; cross-tenant gates
+use `requireSameTenant(ctx, resourceTenantId)` (defined in
+`packages/core/auth/context.ts`). The cross-tenant gate's error
+message is intentionally generic -- `"resource belongs to a
+different tenant"` -- with no resource id or tenant id echoed, so
+a caller probing for valid resource ids cannot learn which tenant
+owns one from the rejection.
+
+In local single-user mode the router falls back to
+`localAdminContext(defaultTenant)` -- everything passes both gates,
+and `ctx.tenantId === defaultTenant`.
+
+> 🔒 **Admin role today is tenant-scoped.** An admin in tenant A
+> cannot read or mutate tenant B's resources via the `admin/*`
+> JSON-RPC surface. Creating new tenants and moving users between
+> tenants are operator-tier operations with no role assigned to
+> them yet -- the recipes are direct SQL (see Part 4 §"Create a
+> new tenant" / §"Move a user between tenants"). The system-admin
+> tier is deferred by design, not a near-term deliverable; every
+> `admin/*` route is gated to `ctx.tenantId` until then.
 
 ---
 
@@ -57,11 +138,11 @@ Part 1.
 
 | Variable | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `ARK_AUTH_REQUIRE_TOKEN` | yes | `false` | Master switch. When `false`, the daemon runs in local-admin mode and ignores both cookies and Bearer tokens. Set to `true` to enable Phase 1. |
+| `ARK_AUTH_REQUIRE_TOKEN` | yes | `false` | Master switch. When `false`, the daemon runs in local-admin mode and ignores both cookies and Bearer tokens. Set to `true` to require a valid cookie or Bearer token on every request. |
 | `ARK_AUTH_GOOGLE_CLIENT_ID` | yes (for browser login) | unset | The OAuth 2.0 web-application client ID from Google Cloud Console (e.g. `1234567890-abcdef.apps.googleusercontent.com`). |
 | `ARK_AUTH_GOOGLE_CLIENT_SECRET` | yes (for browser login) | unset | The matching client secret. Treat as a secret. |
 | `ARK_AUTH_GOOGLE_REDIRECT_URI` | yes (for browser login) | unset | Must match exactly what's configured in the Google OAuth client. Typical values: `http://localhost:5173/auth/google/callback` (dev) or `https://yourhost.com/auth/google/callback` (prod). |
-| `ARK_AUTH_GOOGLE_ALLOWED_DOMAINS` | recommended | unset (= all `@*` allowed) | Comma-separated list of email domains permitted to log in (e.g. `paytm.com,paytm.in`). Login fails closed for any other domain. |
+| `ARK_AUTH_GOOGLE_ALLOWED_DOMAINS` | recommended | `paytm.com` (profile default, hardcoded in `packages/core/config/profiles.ts`) | Comma-separated list of email domains permitted to log in (e.g. `paytm.com,paytm.in`). Login fails closed for any other domain. Non-Paytm deployments **must** override this. |
 | `ARK_AUTH_SESSION_ALLOWED_ORIGINS` | yes (for browser login) | empty | Comma-separated list of `Origin` header values permitted on cookie-authed POST / WS upgrades. Typically your dashboard's URL(s): `http://localhost:5173,http://localhost:8420`. |
 | `ARK_AUTH_SESSION_TTL_SEC` | optional | `2592000` (30d) | Initial cookie lifetime. Sliding refresh extends this on activity. |
 | `ARK_AUTH_SESSION_REFRESH_THRESHOLD_SEC` | optional | `300` (5m) | Minimum age of a session before we slide its expiry. Lower = more DB writes; higher = looser sliding. |
@@ -109,6 +190,184 @@ You need to do this once per deployment.
 Keep the JSON outside the repo (or in a gitignored location). Anyone
 with both fields can impersonate your OAuth client.
 
+## Production deployment checklist
+
+A consolidated top-to-bottom walkthrough for enabling auth on a fresh
+production install. Each item references the longer section above for
+detail.
+
+### 1. Google Cloud Console (one-time per deployment)
+
+1. APIs & Services → Credentials → Create Credentials → OAuth 2.0
+   Client ID, type **Web application**.
+2. **Authorized JavaScript origins**: the user-facing dashboard origin
+   (e.g. `https://ark.example.com`). No trailing slash.
+3. **Authorized redirect URIs**: must equal
+   `ARK_AUTH_GOOGLE_REDIRECT_URI` byte-for-byte (Google does exact
+   string compare). Typical: `https://ark.example.com/auth/google/callback`.
+4. Save. Copy `client_id` + `client_secret` into your secret store
+   (Vault / Secrets Manager / k8s Secret).
+5. **OAuth consent screen → Internal** (G Suite domain-only) is a
+   useful belt over the `ARK_AUTH_GOOGLE_ALLOWED_DOMAINS` suspenders.
+   Note: "Internal" is only available for Google Workspace-managed
+   Cloud orgs. Externally-managed accounts must publish via
+   **Testing → Production** and may need Google's app-verification
+   review.
+
+### 2. Required env vars on the daemon process
+
+The master switch + Google trio + origin allowlist are mandatory.
+Anything not listed below falls through to profile defaults.
+
+| Var | Required | Example | Notes |
+| --- | --- | --- | --- |
+| `ARK_AUTH_REQUIRE_TOKEN` | **yes** | `true` | Master switch. If unset/false the daemon runs in local-admin mode -- no auth at all. |
+| `ARK_AUTH_GOOGLE_CLIENT_ID` | **yes** | `...apps.googleusercontent.com` | From step 1.4. |
+| `ARK_AUTH_GOOGLE_CLIENT_SECRET` | **yes** | `GOCSPX-...` | Secret. From step 1.4. |
+| `ARK_AUTH_GOOGLE_REDIRECT_URI` | **yes** | `https://ark.example.com/auth/google/callback` | Exact match to step 1.3. |
+| `ARK_AUTH_GOOGLE_ALLOWED_DOMAINS` | **yes** | `paytm.com,paytm.in` | Comma-separated. Without it, falls back to the profile default (`["paytm.com"]` -- a Paytm-specific holdover hardcoded in `packages/core/config/profiles.ts`). Non-Paytm deployments **must** set this explicitly or every Google login fails closed with an opaque `login_failed`. |
+| `ARK_AUTH_SESSION_ALLOWED_ORIGINS` | **yes** | `https://ark.example.com` | Origin-header enforcement on cookie-authed POST / WS upgrades. Comma-separated. |
+| `ARK_AUTH_SESSION_COOKIE_SECURE` | **yes** | `true` | Browsers drop a non-`Secure` cookie over HTTPS. |
+| `ARK_AUTH_SESSION_COOKIE_DOMAIN` | recommended | `.example.com` | Only set if dashboard + API live on sibling subdomains of the same parent. |
+| `ARK_AUTH_DASHBOARD_URL` | recommended | `https://ark.example.com/admin` | Post-login redirect target. Defaults to `/`. |
+| `ARK_DEFAULT_TENANT` | optional | `acme` | **Runtime-only override**, narrow scope. Sets the tenant id used by `localAdminContext` (the no-auth fallback context), `make bootstrap-key`'s one-shot daemon, and Temporal queue naming. Does **not** rename the seeded `default` tenant, does **not** change schema column defaults (`tenant_id TEXT NOT NULL DEFAULT 'default'`), and does **not** reroute Google JIT-signup (`auth/login.ts` hardcodes `DEFAULT_TEAM_ID = "default-team"` in tenant `default`). See §"Database state" below for the full picture on custom tenants. |
+| `DATABASE_URL` | **yes for multi-node prod** | `postgres://user:pw@host:5432/ark` | Flips `detectProfile` (in `packages/core/config/profiles.ts`) to control-plane mode. Without it the daemon runs on local SQLite at `~/.ark/ark.db` -- fine for a single-node box, **not** for any clustered deploy. |
+| `ARK_CONDUCTOR_HOSTNAME` | yes for containers | `0.0.0.0` | The conductor's `startWebSocket` binding in `packages/conductor/index.ts` defaults to `127.0.0.1`; set to `0.0.0.0` for Docker / k8s so the listener is reachable from the ingress. |
+| `ARK_CONDUCTOR_PORT` | optional | `19400` | Default listener port. Whatever you set here is what your reverse proxy forwards to. |
+| `ARK_AUTH_SESSION_TTL_SEC` | optional | `28800` (8h) | Cookie lifetime. Default is 30d; tighten for higher-security environments. |
+| `ARK_AUTH_SESSION_REFRESH_THRESHOLD_SEC` | optional | `300` (5m) | How old a session must be before sliding-refresh extends its expiry. |
+
+### 3. Start the daemon
+
+After env vars are exported, launch the daemon:
+
+```bash
+ark server daemon start --detach
+```
+
+For containerized deploys, the same binary runs in the foreground as
+the container entrypoint (drop `--detach`). The process listens on
+`ARK_CONDUCTOR_PORT` (default `19400`) at `ARK_CONDUCTOR_HOSTNAME`
+(default `127.0.0.1` -- override to `0.0.0.0` for containers).
+
+### 4. Filesystem state
+
+The daemon persists to `$ARK_DIR` (default `~/.ark`):
+- `~/.ark/ark.db` -- SQLite store (when `DATABASE_URL` is unset).
+- `~/.ark/ark.jsonl` -- structured logs.
+- `~/.ark/sessions/` -- per-session workspace + transcript.
+
+For containerized deploys, mount a persistent volume at `~/.ark` (or
+set `ARK_DIR` to a mounted path) or you lose all sessions / API keys
+/ tenant data on pod restart. With `DATABASE_URL=postgres://...` set,
+identity + scoping state lives in Postgres, but session workspaces
+still write to `$ARK_DIR`.
+
+### 5. Reverse proxy / ingress
+
+- TLS terminated upstream of the daemon (cookie-secure requires
+  HTTPS at the browser).
+- Forward `Host` + `Origin` headers unchanged -- the origin allowlist
+  reads `Origin`.
+- The redirect-URI path (`/auth/google/callback` by default) must
+  reach the daemon, not be intercepted by the SPA's catch-all route.
+- **WebSocket upgrade pass-through** for `/terminal/:sessionId` (the
+  in-browser session terminal rides the same listener as `/api/rpc`,
+  so any path-prefix-based WS allowlist in your proxy must include
+  `/terminal/`).
+
+### 6. Database state
+
+The daemon auto-applies migrations on startup. Confirm by querying
+the DB directly (works for both SQLite and Postgres):
+
+```sql
+SELECT MAX(version) FROM ark_schema_migrations;
+```
+
+The value should be the latest migration shipped in the build you
+deployed. If it's lower, the daemon hasn't finished startup or
+migrations errored -- check `~/.ark/ark.jsonl` (or the container's
+stdout) before continuing.
+
+The `default` tenant row is seeded by migration `003_tenants_teams_*`;
+the `default-team` row is seeded by migration `017_auth_phase1_*`.
+Both are inserted with the literal string `'default'` (hardcoded
+in the migration SQL, not parameterized by any env var).
+
+**Can I have a custom primary tenant?** Short answer: **no, not by
+renaming or replacing `default`**. The string `'default'` is baked
+into three places that no env var overrides:
+
+1. Migration seeds (`003`, `017` insert literal `'default'`).
+2. Schema column defaults (`tenant_id TEXT NOT NULL DEFAULT 'default'`).
+3. Google JIT-signup routing (`auth/login.ts` hardcodes
+   `DEFAULT_TEAM_ID = "default-team"` in tenant `'default'`).
+
+**What you can do:** create additional tenants alongside `default`
+and use them as your real org tenants. Pattern:
+
+| Question | Answer |
+| --- | --- |
+| Tenant named something other than `default`? | **Yes** -- create via SQL (Part 4 §"Create a new tenant"). Lives alongside `default`. |
+| Custom tenant as the *only* tenant? | **No** -- the `default` row always exists post-migration. You can leave it empty / unused but it's there. |
+| New Google sign-ups land in my custom tenant? | **No** -- JIT-signup is hardcoded to `default`/`default-team`. Pre-seed your real users into the custom tenant via SQL or admin RPCs. |
+| `ARK_DEFAULT_TENANT=acme` changes the seeded tenant id? | **No** -- only affects `localAdminContext` fallback and Temporal queue naming. |
+
+**Practical pattern for prod:** leave `default` in place (vestigial),
+create `acme` via the Part 4 recipe, pre-seed your admins into
+`acme` directly. Users who somehow trigger the JIT path will end up
+in `default` as an admin-detectable anomaly (they show up in
+`admin/user/list` as cross-tenant orphans). Renaming/replacing
+`default` end-to-end is a code-change item, not a config knob --
+deferred follow-up.
+
+### 7. Bootstrap the first admin
+
+The `default-team` always exists post-migration, so a human in the
+`default` tenant can technically cookie-log-in straight away -- but
+JIT-membership lands them as `member`, not `admin`, so they can't
+manage anyone. You always need to mint or pre-seed an admin first.
+Pick one of:
+
+- `make bootstrap-key NAME=ops-key [TENANT=<id>] [ROLE=admin]` --
+  ops/CI use, prints an admin Bearer. The shortcut path.
+- Direct SQL -- see Part 2 §"First-time bootstrap (no admin key
+  exists yet)". Use when `make` / `openssl` aren't on the host.
+- For the first **human** admin in a **non-default** tenant: the
+  seeded `default-team` lives in the `default` tenant only, so a
+  non-default tenant has no team for JIT to land on. Pre-seed
+  `tenants` + `teams` + `users` + `memberships` (role=`admin`) via
+  SQL. See Part 4 §"Add an admin to your tenant".
+
+### 8. Smoke test
+
+1. `curl -fsS https://<dashboard>/health` → 200.
+2. Browser → `https://<dashboard>/admin` → dashboard renders the
+   `LoginPage` (no automatic redirect). Click **Sign in with Google**
+   to kick off the OAuth dance.
+3. Sign in with an allowed-domain account that has a pre-seeded
+   membership → land on dashboard with cookie set.
+4. JSON-RPC smoke test from the host (the daemon serves JSON-RPC at
+   `/api/rpc`, not REST paths):
+   ```bash
+   curl -fsS -X POST https://<api>/api/rpc \
+     -H "Authorization: Bearer $ADMIN_BEARER" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","method":"admin/tenant/list","params":{},"id":1}'
+   ```
+   → 200 with your tenant in `result`.
+
+### 9. Hardening after first deploy
+
+- Rotate the bootstrap key once a real human admin exists (call
+  `admin/apikey/rotate` or revoke + mint a fresh one).
+- Keep the Google client secret in a rotation policy -- regenerating
+  it in the console is a single restart for the daemon (just refresh
+  `ARK_AUTH_GOOGLE_CLIENT_SECRET`).
+- Review `ARK_AUTH_GOOGLE_ALLOWED_DOMAINS` periodically; a too-broad
+  list is the most likely audit finding.
+
 ## What happens during login
 
 1. User opens the dashboard. `AuthContext.refresh()` calls
@@ -139,7 +398,12 @@ with both fields can impersonate your OAuth client.
    reject (account-takeover guard).
 8. **JIT membership**: if the user has no live membership, insert
    `(user, default-team, member)` so `AuthSessionManager.validate`
-   has a valid team chain to walk.
+   has a valid team chain to walk. The team is the literal
+   `default-team` row in the `default` tenant -- the routing is
+   hardcoded (`DEFAULT_TEAM_ID` in `auth/login.ts`), not derived
+   from email domain or tenant matching. New sign-ups for
+   non-`default` tenants are an admin-driven flow (see Part 4
+   §"Add an admin to your tenant").
 9. **Team chain computation**: walk
    `team -> parent_team -> parent's parent -> ...` up to HoD,
    JSON-encode the chain, store on `sessions_auth.team_chain` so the
@@ -218,12 +482,37 @@ The output prints the plaintext key once. Save it.
 
 ### First-time bootstrap (no admin key exists yet)
 
+> **Shortcut:** `make bootstrap-key NAME=ops-key [TENANT=<id>]
+> [ROLE=admin]` boots a one-shot daemon in local mode, mints an
+> admin key via the normal RPC, then prints it. Equivalent to the
+> manual recipe below but ~6 lines shorter. The target threads
+> `ARK_DEFAULT_TENANT="$TENANT"` to the one-shot daemon so its
+> local-admin context resolves to the same tenant the CLI flag
+> targets, so `requireSameTenant` passes for any tenant (not just
+> `default`). Use the direct-SQL recipe below only when `make` or
+> `openssl` is unavailable.
+
 `apikey/create` is gated by the `requireRealUser` identity check, which
 rejects anonymous callers, local-mode synthetic admins, and api-key
 callers themselves. On a fresh install with `ARK_AUTH_REQUIRE_TOKEN=true`
-there is no human-cookie session yet, so the only way to seed the first
-admin bearer is a direct SQL insert. After that, all subsequent admin
-keys go through the cookie -> `apikey/create` RPC path.
+there is no human-cookie session yet, so the first admin bearer cannot
+go through the normal authenticated RPC path. Two ways out: temporarily
+disable auth and use the RPC (the `make bootstrap-key` shortcut above
+does this internally), or insert the row directly via SQL (the manual
+recipe below). Both produce the same DB result.
+
+Two paths after bootstrap depending on the tenant:
+
+- **Bootstrapping the `default` tenant.** Subsequent admin keys can be
+  minted via the cookie → `apikey/create` RPC path once a human signs
+  in via Google OIDC (the JIT-signup flow lands them in `default`).
+- **Bootstrapping any other tenant.** OIDC sign-in is hardcoded to
+  the `default` tenant -- no cookie session is ever issued for a
+  non-default tenant. Subsequent admin keys for that tenant come
+  from `ark auth create-key` invoked with an existing admin bearer
+  in **the same tenant**. The first admin key (the one from this
+  recipe) is therefore the only path in; lose it and you re-run
+  this bootstrap.
 
 ```bash
 TENANT=default
@@ -258,17 +547,45 @@ Two formatting details that will silently reject the key if you get
 them wrong:
 
 - **Token format must be `ark_<tenantId>_<secret>`.** The validator
-  (`auth/api-keys.ts:104-109`) splits on `_` and reads the second
-  segment as the tenant id; a 2-segment key like `ark_<secret>` is
-  rejected before the hash is even computed.
+  (`ApiKeyManager.validate` in `auth/api-keys.ts`) splits on `_` and
+  reads the second segment as the tenant id; a 2-segment key like
+  `ark_<secret>` is rejected before the hash is even computed.
 - **The stored `key_hash` is SHA-256 over the *full* key string**
-  (including the `ark_default_` prefix), not just the random secret.
-  The `openssl dgst -sha256 -hex` call above is portable across
-  macOS and Linux; on macOS you can substitute `shasum -a 256`, on
-  Linux `sha256sum`, but the openssl form avoids the platform fork.
+  (including the `ark_<tenantId>_` prefix), not just the random
+  secret. The `openssl dgst -sha256 -hex` call above is portable
+  across macOS and Linux; on macOS you can substitute `shasum -a 256`,
+  on Linux `sha256sum`, but the openssl form avoids the platform
+  fork.
 
-For Postgres-backed deployments, swap the `sqlite3` line for `psql` and
-keep the same column names and key format.
+**Postgres variant** (control-plane). Same flow; `sqlite3` swaps to
+`psql`, `datetime('now')` swaps to `NOW()::text` (column is `text`,
+not `timestamp` -- see Part 4 §"Move a user between tenants" for the
+same gotcha), and the COUNT preflight uses `psql -tA`:
+
+```bash
+TENANT=default
+
+EXISTING=$(psql "$DATABASE_URL" -tA -c \
+  "SELECT COUNT(*) FROM api_keys WHERE tenant_id='$TENANT' AND role='admin' AND deleted_at IS NULL;")
+if [ "$EXISTING" -gt 0 ]; then
+  echo "tenant '$TENANT' already has $EXISTING live admin key(s)."
+  exit 1
+fi
+
+SECRET=$(openssl rand -hex 16)
+KEY="ark_${TENANT}_$SECRET"
+HASH=$(printf '%s' "$KEY" | openssl dgst -sha256 -hex | awk '{print $NF}')
+BOOT_ID="ak-bootstrap-$(openssl rand -hex 3)"
+NOW=$(date -u +%FT%TZ)
+
+psql "$DATABASE_URL" -c \
+  "INSERT INTO api_keys (id, tenant_id, key_hash, name, role, created_at)
+   VALUES ('$BOOT_ID', '$TENANT', '$HASH', 'bootstrap', 'admin', '$NOW');"
+export ARK_TOKEN="$KEY"
+```
+
+Token format, hash algorithm, and `ark auth revoke-key` cleanup are
+identical across both backends.
 
 **Rotate this key once a real admin exists.** The bootstrap row is a
 long-lived shared secret minted outside the normal audit path. As soon
@@ -368,6 +685,46 @@ row stays in the table for audit purposes. Soft-deleted keys can
 NEVER authenticate again -- the SELECT in `validate()` filters on
 `deleted_at IS NULL`.
 
+## What an admin can / cannot do
+
+The `admin` role is **tenant-scoped**. The matrix below is the
+ground truth: every operation either succeeds within the caller's
+own tenant or fails closed (FORBIDDEN / 404 / generic rejection).
+
+| Operation | Inside own tenant | Cross-tenant (other tenant's resource) |
+|---|---|---|
+| List tenants | Returns own tenant only | n/a (list is implicitly filtered) |
+| Get / update / set-status / delete a tenant | ✅ | ❌ FORBIDDEN |
+| **Create a tenant** | ❌ FORBIDDEN (system-admin op) | ❌ FORBIDDEN |
+| List / get / create / update / delete teams | ✅ | ❌ FORBIDDEN |
+| List / add / remove / set-role on team members | ✅ | ❌ FORBIDDEN |
+| Search team-member candidates (autocomplete) | ✅ | ❌ FORBIDDEN |
+| List users (`admin/user/list`) | Returns in-tenant users + global orphans | Cross-tenant-only users hidden from response |
+| Roll-up users in a specific tenant (`admin/tenant/users`) | ✅ | ❌ FORBIDDEN |
+| Get / view memberships of a user | ✅ for in-tenant + orphan users | ❌ 404 (same message as missing user) |
+| Upsert a user (`admin/user/upsert`) -- creates a new identity OR updates an existing user's `name` | ✅ creates always allowed; updates allowed for in-tenant + orphan users | ❌ 404 when updating a cross-tenant-only user (prevents name graffiti on a foreign identity) |
+| **Delete a user** (`admin/user/delete`) | ✅ when user has no memberships outside this tenant | ❌ FORBIDDEN ("user has memberships in other tenants") |
+| Create a user (`admin/user/create`) | ✅ -- creates a global identity row, no cross-tenant access on its own | (same) |
+| List / create / delete / revoke / restore / rotate API keys | ✅ | ❌ FORBIDDEN |
+| List / get / set / delete scoping overrides | ✅ within tenant scope | ❌ FORBIDDEN (validator enforces R1/R2 -- a user-scope id must have a live membership in your tenant; a team-scope id must belong to your tenant) |
+
+**Why creates are permissive on users.** `admin/user/create` and
+`admin/user/upsert` mint a global identity row with no cross-tenant
+access grant on their own. The actual damage vector is always
+`create + add-to-team-in-other-tenant`, and `members/add` is gated.
+The upsert path additionally refuses to update a cross-tenant-only
+user's `name` column (graffiti prevention).
+
+**No existence oracle.** For each of
+`admin/user/{get,memberships,upsert,delete}`, the 404 message is
+identical between "user truly doesn't exist" and "user exists only
+in another tenant" -- a probing admin cannot distinguish the two
+within a single route. The message **format** differs by which
+input the route accepts: id-keyed routes return `User '<id>' not
+found`; `admin/user/upsert` is email-keyed and returns `User with
+email '<email>' not found`. Within-route symmetry is what closes
+the oracle.
+
 ---
 
 # Part 3: Scoping overrides
@@ -391,17 +748,18 @@ defaults (agent YAML, runtime YAML, the hardcoded `"local"` fallback).
 | **Team-level** | Admin acting for a team | Team preferences: "the AI team prefers codex over claude" |
 | **User-level** | Admin acting for a user, or the user themselves through the cookie session | Personal preferences: "I work on a slow laptop, default my compute to the cloud pool" |
 
-**Two ways to manage overrides**:
-- **Phase 2: admin RPCs + CLI** (preferred) -- `admin/scoping/set` /
+**Three ways to manage overrides**:
+- **Dashboard** (`/admin → Scoping`) -- list / filter / new / edit /
+  delete, with catalog-driven value pickers and an audit drawer.
+  Preferred for ad-hoc operator use.
+- **Admin RPCs + CLI** -- `admin/scoping/set` /
   `list` / `get` / `delete`, wrapped by `ark scoping set/list/get/delete`.
   Validates at write time so a typo'd runtime / model / compute / flow
   name is rejected immediately. See the "Admin RPCs + CLI" subsection
-  below.
+  below. Preferred for scripted / automated use.
 - **Direct SQL** (fallback) -- inserts on `scoping_overrides` for
   deployments that prefer raw DB access. No write-time validation;
   bad values surface at the next `session/start`.
-
-The dashboard UI for override management is a follow-up PR.
 
 ## The four scoped keys
 
@@ -452,7 +810,7 @@ appears in the array are visible / startable.
 | Bearer + admin-minted api-key (`api_keys.user_id` NULL) | no | no | yes (tenant-only) |
 | Local mode (no auth) | no | no | yes (tenant-only) |
 
-## Setting overrides (admin RPCs + CLI -- Phase 2)
+## Setting overrides (admin RPCs + CLI)
 
 `admin/scoping/*` RPCs are the supported write path. They gate on
 admin role, validate the scope-id (cross-tenant defense), and validate
@@ -493,7 +851,7 @@ ark --token "$ADMIN_TOKEN" scoping set \
 
 # User-level
 ark --token "$ADMIN_TOKEN" scoping set \
-  --scope user --scope-id u-rachna --key compute.default --value '"rachna-laptop"'
+  --scope user --scope-id u-alice --key compute.default --value '"alice-laptop"'
 ```
 
 The `--value` flag accepts any JSON literal. Use single-quotes around
@@ -547,9 +905,21 @@ together is rejected (ambiguous).
 
 ## Setting overrides (SQL playbook)
 
-The `scoping_overrides` table is modified by direct SQL until admin
-RPCs land. Connect via `sqlite3` (local) or your Postgres client
-(hosted).
+> **For new operators, prefer the admin RPC + CLI surface in the
+> previous section, or the dashboard `/admin → Scoping` tab.**
+> Direct SQL bypasses write-time catalog validation, the `set_by`
+> audit column, and the admin gate. This playbook is kept here for
+> headless / DB-only contexts and as a reference for the row
+> shape.
+
+The `scoping_overrides` table is also modifiable by direct SQL.
+Connect via `sqlite3` (local) or your Postgres client (hosted).
+
+**Postgres operators:** the examples below use SQLite syntax
+(`datetime('now')`). For Postgres substitute `NOW()::text` -- the
+schema column is `text`, not `timestamp` (same gotcha as Part 4
+§"Move a user between tenants"). All column names, JSON shapes,
+heredoc patterns, and resolver semantics are backend-identical.
 
 > **Heredoc, not shell-escaped.** zsh/bash mangle the JSON quotes in a
 > one-liner SQL string. `'[\"docs\"]'` ends up stored as
@@ -600,8 +970,8 @@ sqlite3 ~/.ark/ark.db <<'SQL'
 INSERT INTO scoping_overrides
   (id, scope_kind, scope_id, key, value_json, tenant_id, created_at, updated_at)
 VALUES
-  ('user-rachna-compute', 'user', 'u-4acda986d4d9', 'compute.default',
-   '"rachna-laptop"', 'default',
+  ('user-alice-compute', 'user', 'u-4acda986d4d9', 'compute.default',
+   '"alice-laptop"', 'default',
    datetime('now'), datetime('now'));
 SQL
 ```
@@ -691,6 +1061,15 @@ compute target -- each session picks its own.
 
 ## Common scenarios (cookbook)
 
+> The SQL inserts below are the original recipes from before the
+> admin RPC + dashboard surfaces existed. They still work, but
+> direct SQL bypasses write-time catalog validation, the `set_by`
+> audit column, and the admin gate. **For new operators, prefer
+> the dashboard UI (`/admin → Scoping`) or `ark scoping set` --
+> see Part 4 §"Set / update / delete a scoping override".** The
+> SQL form is kept here as a fallback for headless environments
+> and as a reference for what each row physically looks like.
+
 ### 1. Limit my team to specific flows
 
 ```bash
@@ -748,13 +1127,13 @@ sqlite3 ~/.ark/ark.db <<'SQL'
 INSERT INTO scoping_overrides
   (id, scope_kind, scope_id, key, value_json, tenant_id, created_at, updated_at)
 VALUES
-  ('rachna-compute', 'user', 'u-4acda986d4d9', 'compute.default',
-   '"rachna-laptop"', 'default',
+  ('alice-compute', 'user', 'u-4acda986d4d9', 'compute.default',
+   '"alice-laptop"', 'default',
    datetime('now'), datetime('now'));
 SQL
 ```
 
-Any session rachna starts (without `--compute`) defaults to her
+Any session alice starts (without `--compute`) defaults to her
 laptop. She can still override per-session with `ark session start
 --compute foo`.
 
@@ -762,9 +1141,9 @@ laptop. She can still override per-session with `ark session start
 
 If both are set, **the most specific scope wins**. So:
 - Tenant override `runtime = "claude-code"` (admin-set policy)
-- User override `runtime = "codex"` (rachna's personal preference)
+- User override `runtime = "codex"` (alice's personal preference)
 
-When rachna dispatches, she gets `codex` (user-level beats tenant).
+When alice dispatches, she gets `codex` (user-level beats tenant).
 
 If you want tenant policy to be a hard mandate, you currently can't
 enforce that through scoping_overrides alone -- they are preferences,
@@ -795,6 +1174,541 @@ SET deleted_at = NULL, updated_at = datetime('now')
 WHERE id = 'paytm-runtime';
 SQL
 ```
+
+---
+
+# Part 4: Operations runbook
+
+Day-to-day recipes for the admin role. Each recipe lists every path
+that works today (dashboard / CLI / SQL) so you can pick the one
+that fits your context. Recipes that need a step deprecated by the
+tenant-admin tightening are noted inline.
+
+## Recipe: Bootstrap a fresh installation
+
+The first ever admin in a fresh DB. Two steps -- get an admin API
+key, then sign in.
+
+1. **Mint the initial admin key.** Simplest path:
+   `make bootstrap-key NAME=ops-key [TENANT=<id>]` -- boots a
+   one-shot daemon in local mode, mints an admin key via the normal
+   RPC, prints the plaintext key, then exits. Works for any tenant
+   (the target threads `ARK_DEFAULT_TENANT` through to the daemon).
+   For hostile environments without `make`/`openssl`, fall back to
+   the SQL bootstrap recipe in Part 2 §"Creating an admin
+   (NULL-owner) key via CLI" → "First-time bootstrap (no admin key
+   exists yet)". Either path mints an `ark_<tenantId>_…` key and
+   prints it once.
+2. **Sign in to the dashboard.** Open `/admin`, use "Use an API
+   key instead", paste the key. You now hold a tenant-admin in the
+   `default` tenant.
+
+That's it. The `default` tenant + `default-team` row are seeded by
+migration; the JIT-signup flow attaches new OIDC users to
+`default-team` as `member`.
+
+## Recipe: Create a new tenant
+
+`ark tenant create` and `admin/tenant/create` both return FORBIDDEN
+under the tenant-admin model -- tenant creation is a system-admin
+operation that has no role assigned yet. Use direct SQL:
+
+```bash
+DB=~/.ark/ark.db   # local dev; hosted prod: connect to the prod DB
+
+# IMPORTANT: SLUG must be kebab-case alphanumeric only. Underscores
+# break the API key parser -- `ark_<tenantId>_<secret>` splits on
+# `_`, so a tenant id containing `_` would be parsed as the first
+# segment up to the underscore, and the rest leaks into the secret.
+# Match the slug regex in tenants.ts:
+#   /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$|^[a-z0-9]$/
+# (kebab-case 2-64 chars, or a single alphanumeric)
+SLUG=acme
+NAME="Acme Corp"
+
+sqlite3 "$DB" <<SQL
+INSERT INTO tenants (id, slug, name, status, created_at, updated_at)
+VALUES ('t-${SLUG}', '${SLUG}', '${NAME}', 'active',
+        datetime('now'), datetime('now'));
+
+-- Seed a starter team in the new tenant. The new tenant's first
+-- admin can also create teams via the dashboard / CLI after sign-in,
+-- so this is optional.
+INSERT INTO teams (id, tenant_id, slug, name, description,
+                   created_at, updated_at)
+VALUES ('tm-${SLUG}-default', 't-${SLUG}', 'default-team',
+        'Default Team', 'Starter team for the tenant',
+        datetime('now'), datetime('now'));
+SQL
+```
+
+**Postgres variant** -- same flow, `datetime('now')` swaps to
+`NOW()::text` (the schema columns are `text`, not `timestamp`; same
+gotcha as Part 4 §"Move a user between tenants"):
+
+```bash
+SLUG=acme
+NAME="Acme Corp"
+
+psql "$DATABASE_URL" <<SQL
+INSERT INTO tenants (id, slug, name, status, created_at, updated_at)
+VALUES ('t-${SLUG}', '${SLUG}', '${NAME}', 'active',
+        NOW()::text, NOW()::text);
+
+INSERT INTO teams (id, tenant_id, slug, name, description,
+                   created_at, updated_at)
+VALUES ('tm-${SLUG}-default', 't-${SLUG}', 'default-team',
+        'Default Team', 'Starter team for the tenant',
+        NOW()::text, NOW()::text);
+SQL
+```
+
+Then mint a first admin key for the new tenant. The existing
+`default`-tenant admin **cannot** use their own bearer to do this
+(the `requireSameTenant` guard rejects cross-tenant mints). Two
+ways forward:
+
+- **`make bootstrap-key NAME=ops-key TENANT=t-${SLUG} ROLE=admin`** --
+  boots a one-shot daemon whose local-admin context is scoped to
+  the new tenant (via `ARK_DEFAULT_TENANT`), mints via the normal
+  RPC, exits. Cleanest path.
+- **Direct SQL** -- re-run the Part 2 §"First-time bootstrap"
+  recipe with `TENANT=t-${SLUG}`. Use this when `make`/`openssl`
+  isn't available.
+
+Hand the new key to the new tenant's operator.
+
+**Caveat: Google OIDC JIT-signup is not yet per-tenant routed.** The
+JIT-membership step in `auth/login.ts` is hardcoded against
+`DEFAULT_TEAM_ID = "default-team"` in the `default` tenant. A user
+signing in via Google for the first time always lands in the
+`default` tenant -- regardless of email domain or any per-tenant
+allowedDomains setting. The new tenant's operator therefore uses
+the **Bearer-token CLI path** (or has the existing `default` admin
+add them to a team in the new tenant explicitly via the dashboard).
+Per-tenant OIDC routing is a follow-up.
+
+When the system-admin role lands, this recipe is replaced by
+`admin/tenant/create` again (gated to system-admins).
+
+## Recipe: Add an admin to your tenant
+
+A new admin in YOUR tenant -- not a new tenant. Three sub-steps:
+add the user identity, attach them to a team at role=admin, and
+get them a credential.
+
+**Dashboard:**
+1. `/admin` → Users → `+ New User` → enter email, name, pick a
+   team and role = `admin` → Create. The team picker is
+   pre-filtered to your tenant; you cannot grant a role outside
+   it. (Works for any tenant admin.)
+2. Give them a credential. Two options, both initiated by the new
+   admin themselves -- there is **no dashboard surface** for an
+   existing admin to mint a key on another user's behalf:
+   - **Self-service API key (default tenant only):** new admin
+     signs in via Google → `Settings → API Keys → Create API key`.
+     Key shown once. This path only works when the new admin's
+     intended tenant is `default`, because Google OIDC JIT-signup
+     is hardcoded to that tenant.
+   - **Bearer-token CLI:** an existing admin in the same tenant
+     mints an admin key for the new user via `ark auth create-key`
+     (see CLI block below) and hands it over out-of-band.
+
+**Non-`default`-tenant caller:** step 1 works the same in your
+tenant. For step 2, only the Bearer-token CLI path is available --
+the Google sign-in path won't work because OIDC JIT-signup lands
+new users in `default` regardless of email domain. Per-tenant OIDC
+routing is a follow-up.
+
+**CLI:**
+```bash
+# Create the user identity (if not already present)
+ark --token "$ADMIN_BEARER" user create \
+    --email new@admin.com --name "New Admin"
+
+# Add them to a team as admin -- members subcommand, positional args
+ark --token "$ADMIN_BEARER" team members add \
+    <team-id> new@admin.com --role admin
+```
+
+## Recipe: Create a team in your tenant
+
+**Dashboard:** `/admin` → Teams → `+ New` → fill slug / name /
+description → Create.
+
+**CLI:**
+```bash
+# slug is positional; the team is created in the tenant identified
+# by --tenant (id or slug). Defaults to "default" if omitted.
+ark --token "$ADMIN_BEARER" team create eng \
+    --tenant default --name "Engineering"
+```
+
+## Recipe: Add or remove a user from a team
+
+**Dashboard, add:** `/admin` → Teams → click the team → in the
+"Add member" combobox, type ≥3 chars of email or name (debounced
+search) → pick from results OR use the `+ Add new user: <email>`
+free-text fallback for a brand-new email → choose role → Add.
+
+The picker tags users with `already member`, `no memberships`, or
+`also in: <other-teams>` so you can see context before adding.
+
+**Dashboard, remove:** Click the team → in the Members table, click
+the `Remove` button on the row (confirm dialog).
+
+**CLI:**
+```bash
+# `team members add` takes <team-id> <email> as positional args;
+# --role defaults to "member". The server upserts the user identity
+# from email if no row exists yet.
+ark --token "$ADMIN_BEARER" team members add \
+    tm-eng alice@example.com --role member
+
+ark --token "$ADMIN_BEARER" team members remove \
+    tm-eng alice@example.com
+```
+
+## Recipe: Move a user between tenants
+
+This is the operational landmine on the current auth model and worth
+calling out before you discover it the hard way. Until the system-admin
+role lands (deliberately deferred for now), no single human credential
+can move a user from tenant A to tenant B in one operation.
+
+**Why it's awkward today.** Three constraints stack:
+
+1. Google JIT-signup hardcodes every first-time user into
+   `default/default-team` as role `member`. They can't sign up directly
+   into your real tenant.
+2. After PR #568, `requireSameTenant` prevents tenant A's admin from
+   `admin/team/members/remove`-ing a user in tenant B (and vice versa).
+3. `computeTeamChain` picks `memberships[0]` ordered by `createdAt ASC`,
+   so adding a second membership in tenant B does NOT move the user --
+   their session still resolves through their oldest (tenant A)
+   membership. You must DELETE the old membership for the move to take
+   effect.
+
+Two sanctioned paths today, both deliberate trade-offs.
+
+### Path A: Direct SQL (preferred for ops / one-off moves)
+
+This is the sanctioned ops-escalation path today -- "the super-admin
+role is the RDS password" is the design stance until the system-admin
+role lands. Clean audit trail (`deleted_by` + `deleted_at` on the
+membership row), no admin-key coordination required.
+
+**Pick the variant that matches your backend** (the daemon runs on
+SQLite at `~/.ark/ark.db` if `DATABASE_URL` is unset, otherwise on
+Postgres -- see Part 1 §"Database state"). The two variants differ
+only in three function names; everything else is identical.
+
+> ⚠ Sanity-check `NEW_ROLE` before running. The variable lets you
+> set `member`, `admin`, `owner`, or `viewer` -- a typo here can
+> silently elevate the user (e.g. moving them as `admin` when you
+> meant `member`).
+
+**SQLite variant** (local / single-node):
+
+```bash
+DB="$HOME/.ark/ark.db"
+ALICE="alice@example.com"
+NEW_TEAM="tm-acme-engineering"    # team id in the destination tenant
+NEW_ROLE="member"                  # or admin / owner / viewer
+
+sqlite3 "$DB" <<SQL
+-- Preflight: prints alice's row + the destination team for human
+-- review. NOT a programmatic guard -- the BEGIN below runs whether
+-- or not these return rows. Eyeball the output, then let it complete
+-- (or Ctrl-C if either query returned 0 rows).
+SELECT id, email FROM users
+ WHERE email = '${ALICE}' AND deleted_at IS NULL;
+SELECT id, slug, tenant_id FROM teams
+ WHERE id = '${NEW_TEAM}' AND deleted_at IS NULL;
+
+-- Atomic move: wrap the membership swap in a transaction so a failed
+-- INSERT (e.g. team typo, FK violation) rolls back the UPDATE and
+-- leaves alice's old memberships intact. Without this, a failure
+-- between step 2 and step 3 strands her with zero memberships --
+-- her session would get bounced to anonymous on every request.
+BEGIN;
+
+-- 1. Soft-delete every live membership for this user. If she
+--    legitimately belongs to multiple tenants and you only want to
+--    move one, narrow the WHERE clause with AND team_id = '...'.
+--    The full-sweep below is the right default for first-time
+--    "alice was JIT'd into default, move her to acme" cases.
+UPDATE memberships
+   SET deleted_at = datetime('now'), deleted_by = 'sql-admin'
+ WHERE user_id = (SELECT id FROM users WHERE email = '${ALICE}')
+   AND deleted_at IS NULL;
+
+-- 2. Insert the new membership in the destination tenant.
+--    ID format matches the code convention (m- + 12 hex chars,
+--    see MembershipRepository.add in repositories/memberships.ts).
+INSERT INTO memberships (id, user_id, team_id, role, created_at)
+VALUES ('m-' || lower(hex(randomblob(6))),
+        (SELECT id FROM users WHERE email = '${ALICE}'),
+        '${NEW_TEAM}',
+        '${NEW_ROLE}',
+        datetime('now'));
+
+COMMIT;
+SQL
+```
+
+**Postgres variant** (control-plane): same flow, three function
+swaps. `pgcrypto` must be enabled (`CREATE EXTENSION IF NOT EXISTS
+pgcrypto;` -- safe to run; idempotent).
+
+```bash
+ALICE="alice@example.com"
+NEW_TEAM="tm-acme-engineering"
+NEW_ROLE="member"
+
+psql "$DATABASE_URL" <<SQL
+-- Preflight prints for human review; not a programmatic guard.
+-- Eyeball the output before letting the BEGIN/COMMIT complete.
+SELECT id, email FROM users
+ WHERE email = '${ALICE}' AND deleted_at IS NULL;
+SELECT id, slug, tenant_id FROM teams
+ WHERE id = '${NEW_TEAM}' AND deleted_at IS NULL;
+
+BEGIN;
+
+UPDATE memberships
+   SET deleted_at = NOW()::text, deleted_by = 'sql-admin'
+ WHERE user_id = (SELECT id FROM users WHERE email = '${ALICE}')
+   AND deleted_at IS NULL;
+
+INSERT INTO memberships (id, user_id, team_id, role, created_at)
+VALUES ('m-' || encode(gen_random_bytes(6), 'hex'),
+        (SELECT id FROM users WHERE email = '${ALICE}'),
+        '${NEW_TEAM}',
+        '${NEW_ROLE}',
+        NOW()::text);
+
+COMMIT;
+SQL
+```
+
+The `::text` casts on `NOW()` keep the timestamps in the
+`YYYY-MM-DD HH:MM:SS` text format that the schema column expects
+(`text("created_at")` / `text("deleted_at")` in
+`packages/core/drizzle/schema/postgres.ts`).
+
+Alice's existing cookie session will start serving the new tenant on
+her next request -- the live JOIN in `AuthSessionManager.validate`
+derives `tenantId` fresh each time. **But** her cached `team_chain`
+stays empty until she signs out and signs back in, so team-scope
+scoping overrides won't apply until then.
+
+### Path B: Two Bearer tokens + CLI (no SQL, no UI)
+
+When you'd rather avoid the DB. Trade-off: you need admin Bearer
+tokens for both tenants, the audit trail records two separate admin
+actors, and you have to do the remove + add in the right order.
+
+```bash
+# 1. Mint admin keys for both tenants (one-time; reuse if you have them).
+make bootstrap-key NAME=ops-default TENANT=default ROLE=admin
+make bootstrap-key NAME=ops-acme    TENANT=t-acme  ROLE=admin
+# Each command prints the ark_<tenant>_<hex> bearer once. Save them.
+
+# 2. Remove alice from the default-team using the DEFAULT admin bearer.
+ark --token "$DEFAULT_ADMIN_BEARER" team members remove \
+    default-team alice@example.com
+
+# 3. Add alice to the destination team using the ACME admin bearer.
+#    The server upserts the user identity from email; alice already
+#    exists, so this just inserts the membership.
+ark --token "$ACME_ADMIN_BEARER" team members add \
+    tm-acme-engineering alice@example.com --role member
+```
+
+**Order matters.** If you add the new membership BEFORE removing the
+old one, both rows are live simultaneously and her session still
+resolves through the older default-team membership (createdAt
+tie-break in `computeTeamChain`). The remove-then-add order avoids
+this.
+
+**Path B is not atomic** -- the two RPC calls succeed independently.
+If step 3 fails (e.g. wrong team id, FK violation), alice is left
+with zero live memberships and gets bounced to anonymous on every
+request until you fix the input and re-run step 3. To minimize the
+window, sanity-check the destination team first:
+
+```bash
+ark --token "$ACME_ADMIN_BEARER" team list | grep tm-acme-engineering
+```
+
+If atomicity matters, use Path A (the BEGIN/COMMIT wraps both rows).
+
+### Path C: Dashboard UI
+
+Only viable once you have **human admins pre-seeded into both
+tenants** (via Path A or B first). The flow is then:
+
+1. Default-tenant admin signs in via Google → `/admin → Teams → click
+   default-team → Members table → Remove on alice's row`.
+2. Sign out. Acme-tenant admin signs in via Google → `/admin → Teams
+   → click tm-acme-engineering → Add member → type alice@example.com →
+   choose role → Add`. The `MemberPicker` accepts free-form email
+   even when alice has no prior acme membership; the server upserts.
+
+Same `team_chain` caveat: alice must sign out and back in for team-
+scope overrides to apply.
+
+### Common mistake
+
+**Adding to the new team WITHOUT removing from the old team does
+not work.** The user ends up with two live memberships; their next
+login resolves through the OLDER one (tenant A) because
+`computeTeamChain` picks `memberships[0]` ordered by `createdAt ASC`.
+Always do remove-then-add (or both within the same SQL transaction).
+
+### When this gets cleaner
+
+The system-admin role (deferred today, no firm date) collapses both
+paths into a single dashboard action by a privileged operator. Per-
+tenant JIT routing (also a follow-up) would eliminate the move
+entirely for users whose email domain already maps to a known tenant.
+For now, the SQL recipe IS the supported ops path -- it's not a
+backdoor, it's the design.
+
+## Recipe: Change a user's role in a team
+
+**Dashboard:** Two paths --
+- Team-centric: `/admin` → Teams → click the team → click the role
+  dropdown on the user's row → pick the new role (inline update).
+- User-centric: `/admin` → Users → click the user's row → in the
+  drawer, change the role dropdown for the membership.
+
+**CLI:**
+```bash
+# `team members set-role` takes <team-id> <email> <role> as
+# positional args.
+ark --token "$ADMIN_BEARER" team members set-role \
+    tm-eng alice@example.com admin
+```
+
+The server's `admin/team/members/add` is also idempotent + updates
+the role -- the dashboard picker uses this fact to flip its button
+to "Update role" with a confirm dialog when the picked user is
+already in the team with a different role.
+
+## Recipe: Delete a user
+
+A user can only be deleted from their **own tenant** if they have
+zero memberships in any other tenant. Otherwise the cascade-soft-
+delete would damage another tenant's audit trail -- the server
+refuses with FORBIDDEN and a message that mentions "live
+memberships in other tenants" and tells you to remove them via
+`admin/team/members/remove` instead. (Exact wording lives in
+`packages/conductor/handlers/admin.ts`.)
+
+**To "remove a user from this tenant" without touching their global
+identity**, use Recipe "Add or remove a user from a team" on each
+of their team memberships in your tenant. That leaves the global
+`users` row intact (and other tenants' memberships unaffected).
+
+**To actually delete the global identity** (only possible if the
+user lives only in your tenant):
+
+**Dashboard:** `/admin` → Users → click `Delete` on the row
+(confirm dialog).
+
+**CLI:**
+```bash
+# Accepts either the user id (u-...) or the email as a positional
+# argument.
+ark --token "$ADMIN_BEARER" user delete alice@example.com
+```
+
+## Recipe: Set / update / delete a scoping override
+
+See Part 3 §"Setting overrides (admin RPCs + CLI)" for
+the full schema. Short form:
+
+**Dashboard:** `/admin` → Scoping → `+ New override` → pick scope
+kind / scope id / key → fill in the value (catalog dropdown for
+runtime / model / compute.default; multi-select for flow.allowlist)
+→ Create. Edit / Delete via the row's `Inspect` drawer.
+
+**CLI:**
+```bash
+ark --token "$ADMIN_BEARER" scoping set \
+    --scope tenant --scope-id $TENANT_ID --key runtime --value '"codex"'
+
+ark --token "$ADMIN_BEARER" scoping delete \
+    --scope tenant --scope-id $TENANT_ID --key runtime
+```
+
+Tenant-scope overrides require `scope_id === ctx.tenantId`;
+team-scope overrides require the team to belong to the caller's
+tenant; user-scope overrides require the user to have a live
+membership in the caller's tenant. Validator rejections from
+`admin-scoping-validators.ts` mirror these gates.
+
+## Recipe: Mint / revoke / rotate an API key
+
+**Mint (self-service):** Dashboard → Settings → API Keys → **Create
+API key**. Key shown once in a takeover modal; copy it before
+dismissing.
+
+**Mint (admin minting one in the tenant):**
+```bash
+# Mints an "owner=NULL" key bound to <tenant>. There is no
+# per-user-owner CLI flag today; admin-mint keys see the tenant
+# scope chain only (no user / team chain). Self-service keys
+# carry the owner chain.
+ark --token "$ADMIN_BEARER" auth create-key \
+    --tenant default --name "ci-key" --role member
+```
+
+**Revoke:** Dashboard → Settings → API Keys → Revoke on the row.
+Or `ark --token "$ADMIN_BEARER" auth revoke-key <key-id>`.
+
+**Rotate** (replace with a new key carrying the same metadata):
+```bash
+ark --token "$ADMIN_BEARER" auth rotate-key <key-id>
+```
+
+All these operations -- plus `restore` (un-soft-delete a revoked
+key) -- are tenant-scoped: the caller can only touch keys in their
+own tenant. The `tenant_id` parameter is optional on the delete /
+restore / rotate routes; if omitted, the handler defaults to
+`ctx.tenantId`, so a cross-tenant operation cannot happen even by
+accident.
+
+## Recipe: Inspect "what does this user see?"
+
+Useful when a user reports "I can't see X" or "I have access to Y
+that I shouldn't."
+
+```bash
+# What tenants is this user in?
+sqlite3 ~/.ark/ark.db <<SQL
+SELECT t.id AS tenant_id, t.slug, tm.name AS team_name, m.role
+FROM users u
+JOIN memberships m ON m.user_id = u.id AND m.deleted_at IS NULL
+JOIN teams tm ON tm.id = m.team_id AND tm.deleted_at IS NULL
+JOIN tenants t ON t.id = tm.tenant_id AND t.deleted_at IS NULL
+WHERE u.email = 'alice@example.com';
+SQL
+```
+
+```bash
+# What scoping overrides exist in this tenant? Filter the live list
+# to surface what would resolve for a given scope.
+ark --token "$ADMIN_BEARER" scoping list
+```
+
+There is no per-user "what would resolve right now?" CLI today --
+the precedence chain (user > team > tenant) is evaluated server-
+side at `session/start`. To preview, set a session in the dashboard
+and watch the `~/.ark/ark.jsonl` `"component":"scoping"` line that
+fires on dispatch.
 
 ---
 
@@ -829,6 +1743,64 @@ grep "s-XXXXXX" ~/.ark/ark.jsonl | tail -50
 
 # Just hint applications (the load-bearing scoping line)
 grep '"component":"scoping"' ~/.ark/ark.jsonl | grep "applied"
+```
+
+## SQL health checks
+
+Run against `~/.ark/ark.db` (local) or your prod DB. All read-only;
+safe to run anytime.
+
+```sql
+-- Orphan users (zero live memberships anywhere). Orphans are a
+-- legitimate intermediate state (cascade after a team / tenant
+-- delete, or a user manually detached from every team), kept so
+-- audit columns elsewhere (`created_by`, `deleted_by`, `actor_id`)
+-- still resolve to a user row. Orphan users CANNOT log in -- the
+-- session validator requires at least one live membership.
+-- Investigate if the count is unexpectedly large; otherwise this is
+-- informational.
+SELECT u.id, u.email, u.created_at
+FROM users u
+LEFT JOIN memberships m
+  ON m.user_id = u.id AND m.deleted_at IS NULL
+WHERE u.deleted_at IS NULL AND m.id IS NULL;
+
+-- Users with memberships spanning multiple tenants (consultant
+-- pattern). Not an error -- but worth knowing about for cross-
+-- tenant impact analysis before deletes.
+SELECT u.email, COUNT(DISTINCT t.tenant_id) AS tenant_count
+FROM users u
+JOIN memberships m ON m.user_id = u.id AND m.deleted_at IS NULL
+JOIN teams t ON t.id = m.team_id AND t.deleted_at IS NULL
+WHERE u.deleted_at IS NULL
+GROUP BY u.id
+HAVING tenant_count > 1;
+
+-- API keys per tenant (live only). Useful for "we have how many
+-- admin keys floating around for prod?"
+SELECT tenant_id, role, COUNT(*) AS n
+FROM api_keys
+WHERE deleted_at IS NULL
+GROUP BY tenant_id, role
+ORDER BY tenant_id, role;
+
+-- Memberships whose team or tenant is soft-deleted (data
+-- integrity violation -- normal cascade prevents this). Expected:
+-- 0 rows. Investigate any rows that appear here.
+SELECT m.id, m.user_id, m.team_id, t.tenant_id,
+       t.deleted_at AS team_deleted, tn.deleted_at AS tenant_deleted
+FROM memberships m
+JOIN teams t ON t.id = m.team_id
+JOIN tenants tn ON tn.id = t.tenant_id
+WHERE m.deleted_at IS NULL
+  AND (t.deleted_at IS NOT NULL OR tn.deleted_at IS NOT NULL);
+
+-- Live overrides by scope + key for a given tenant. Quick survey
+-- before changing org-level policy.
+SELECT scope_kind, scope_id, key, value_json, set_by, updated_at
+FROM scoping_overrides
+WHERE tenant_id = 'default' AND deleted_at IS NULL
+ORDER BY scope_kind, key;
 ```
 
 ## Auth-related messages
@@ -929,7 +1901,7 @@ doesn't.
 
 ---
 
-# Phase 1 limitations (what's not yet supported today)
+# Current limitations (what's not yet supported)
 
 ## Auth (Part 1)
 
@@ -938,8 +1910,18 @@ doesn't.
 - **Single Google account per user record.** If a user changes their
   Google login email, the JIT user-creation will create a new row.
   Manual SQL merge needed if you want to consolidate.
-- **No multi-IdP support.** Phase 1 is Google-only. Other OIDC
+- **No multi-IdP support.** Today is Google-only. Other OIDC
   providers (Azure AD, Okta) are a follow-up.
+- **`default` tenant cannot be renamed or replaced.** The string
+  `'default'` is baked into migration seeds (`003`, `017`), schema
+  column defaults (`tenant_id TEXT NOT NULL DEFAULT 'default'`), and
+  Google JIT-signup routing (`auth/login.ts` hardcodes
+  `DEFAULT_TEAM_ID = "default-team"` in tenant `'default'`).
+  `ARK_DEFAULT_TENANT` only affects `localAdminContext` and Temporal
+  queue naming, **not** seeding or JIT routing. Custom tenants live
+  alongside `default`, not in place of it. See Part 1 §"Database
+  state" for the practical pattern. Parameterizing this end-to-end
+  is a deferred follow-up.
 
 ## API keys (Part 2)
 
@@ -949,24 +1931,27 @@ doesn't.
   "only allowed to call `flow/list`").
 - **No audit-trail UI.** Revoke history exists in the table
   (`deleted_at`, `deleted_by`) but there's no dashboard view.
+- **`admin` role is tenant-scoped today** -- the consequences for
+  the `admin/*` surface are listed under "Tenant-admin model" at
+  the end of this section.
 
 ## Scoping (Part 3)
 
-- ~~**No admin RPC for managing overrides.**~~ Phase 2 added
-  `admin/scoping/*` RPCs + `ark scoping ...` CLI. Direct SQL is now
-  a fallback, not the only path.
-- ~~**No write-time validation.**~~ Phase 2 admin RPCs validate every
+- ~~**No admin RPC for managing overrides.**~~ Added admin write
+  RPCs + `ark scoping ...` CLI. Direct SQL is now a fallback, not
+  the only path.
+- ~~**No write-time validation.**~~ Admin RPCs validate every
   override at write time (runtime / model / compute / flow names
   must exist; tenant-scope rules enforced). Direct-SQL writers still
   bypass this -- bad rows surface at the next `session/start`.
-- **No dashboard UI for overrides.** Still SQL or CLI for now;
-  dashboard is a Phase 3 follow-up.
-- **No pagination on `admin/scoping/list`.** A safety cap of 1000
-  rows applies per call; the response carries a `truncated` boolean
-  set via a `limit + 1` probe so operators know to filter further.
-  Real cursor pagination (`cursor` param + `next_cursor` in the
-  response) is a Phase 3 follow-up -- revisit before any tenant
-  approaches the 1000-row cap.
+- ~~**No dashboard UI for overrides.**~~ Added in the dashboard-UI
+  PR: `/admin → Scoping` tab with list, filters, edit modal, audit
+  drawer.
+- **No pagination on `admin/scoping/list` or `admin/user/list`.** A
+  safety cap of 1000 rows applies per call; the response carries a
+  `truncated` boolean set via a `limit + 1` probe so operators know
+  to filter further. Real cursor pagination is a follow-up --
+  revisit before any tenant approaches the 1000-row cap.
 - **Project-scoped models can't be used as override targets.**
   Validation runs against the global model catalog at session/start;
   models registered only under `<repo>/.ark/models/` aren't visible
@@ -975,3 +1960,30 @@ doesn't.
   The chain is computed once at login and cached on
   `sessions_auth.team_chain`. If a user's team membership changes,
   they need to log out and back in for the new chain to apply.
+
+## Tenant-admin model (gates applied PR #568)
+
+- **No system-admin role yet (deferred by design, not a bug).**
+  The `admin` role is tenant-scoped: cannot create new tenants,
+  cannot enumerate or act across tenants, cannot soft-delete users
+  that have memberships outside the caller's tenant. The system-
+  admin tier is deliberately deferred -- the sanctioned ops paths
+  today are direct DB access (RDS password / `sqlite3`) and the
+  two-admin-keys-via-dashboard workaround. Both are documented in
+  Part 4 §"Move a user between tenants". Until system-admin lands,
+  these operations return FORBIDDEN to all callers:
+  - `admin/tenant/create` -- a new tenant is operator-tier work
+  - Cross-tenant user / team / scoping inspection -- no "see
+    everything" mode for support engineers yet
+  - Cross-tenant `admin/team/members/remove` -- moving a user
+    requires SQL or paired admin sessions; see the Part 4 recipe
+- **Tenant creation is via direct SQL until then.** See Part 4
+  §"Create a new tenant".
+- **OIDC JIT-signup is not per-tenant routed.** Google sign-ins
+  always land in the seeded `default` tenant's `default-team`,
+  regardless of email domain. Users in non-`default` tenants must
+  authenticate via Bearer keys today.
+- **Tombstone GC for `scoping_overrides` not implemented.**
+  Soft-deleted overrides accumulate indefinitely. A periodic
+  sweep (`ark scoping gc --older-than 90d`) is a deferred
+  follow-up.
