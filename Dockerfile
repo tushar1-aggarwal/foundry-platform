@@ -81,6 +81,13 @@ COPY --from=build /app/models ./models
 # Copy web UI build output (if it exists)
 COPY --from=build /app/packages/web/dist ./packages/web/dist
 
+# arkd shim for the per-session pod K8sCompute provisions. K8sCompute
+# hardcodes `command: ["/bin/sh","-c","arkd || sleep infinity"]` and
+# expects `arkd` on PATH. Real binary doesn't exist -- arkd is a Bun
+# subcommand of the CLI. This shim execs the right thing.
+RUN printf '#!/bin/sh\nexec bun /app/packages/cli/index.ts arkd "$@"\n' > /usr/local/bin/arkd \
+ && chmod +x /usr/local/bin/arkd
+
 # Create ark data directory
 RUN mkdir -p /root/.ark
 
