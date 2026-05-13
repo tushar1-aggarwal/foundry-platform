@@ -402,7 +402,11 @@ test-laptop-real-llm: ## Run the laptop real-LLM docs flow (T6 direct mode) agai
 	  T6_REPO_URL=$${T6_REPO_URL:-git@bitbucket.org:paytmteam/foundry-test-repo.git} \
 	  $(BUN) test e2e/laptop-docs-real-llm.test.ts --timeout 720000
 
-test-e2e-t6-docker: test-e2e-control-plane-up ## Run T6 (real claude in docker sidecar) end-to-end
+build-ark-image: ## Build ark:latest from current source (BuildKit cache makes unchanged rebuilds ~3s)
+	@echo "\033[1mBuilding ark:latest from current source...\033[0m"
+	@docker build -t ark:latest -f Dockerfile .
+
+test-e2e-t6-docker: build-ark-image test-e2e-control-plane-up ## Run T6 (real claude in docker sidecar) end-to-end
 	@command -v tmux >/dev/null 2>&1 || { echo "tmux required (host side, for ark server)."; exit 1; }
 	@# Migration lock cleanup (same trick the bespoke target uses) -- prior
 	@# crashed runs can leave idle backends holding the advisory lock.
@@ -453,8 +457,17 @@ test-e2e-t6-docker: test-e2e-control-plane-up ## Run T6 (real claude in docker s
 	  sleep 0.5; \
 	done
 	@# Seed compute=local + isolation=docker (idempotent: create or update).
+	@# T6 sidecar uses the locally-built `ark:latest` image (./Dockerfile output)
+	@# with bootstrap.skip=true -- the image already has git/tmux/bun/claude
+	@# baked in (see Dockerfile stage 3), so the apt-based bootstrapContainer
+	@# script would be a no-op and only adds latency. Keeps T6 aligned with
+	@# the prod arkd-worker pod image. See memory: arkd_claude_sidecar_invariant.
 	@curl -sf -X POST http://localhost:8422/api/rpc -H 'Content-Type: application/json' \
-	  -d '{"jsonrpc":"2.0","id":"1","method":"compute/create","params":{"name":"local","compute":"local","isolation":"docker"}}' >/dev/null 2>&1 || true
+	  -d '{"jsonrpc":"2.0","id":"1","method":"compute/create","params":{"name":"local","compute":"local","isolation":"docker","config":{"image":"ark:latest","bootstrap":{"skip":true}}}}' >/dev/null 2>&1 || true
+	@# If the row already exists (idempotent create), force-update the config too so
+	@# subsequent T6 runs pick up image/bootstrap changes without manual cleanup.
+	@$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e exec -T postgres \
+	  psql -U ark -d ark -c "UPDATE compute SET config='{\"image\":\"ark:latest\",\"bootstrap\":{\"skip\":true}}'::jsonb WHERE name='local' AND tenant_id='default';" >/dev/null 2>&1 || true
 	@$(DOCKER_COMPOSE) -f .infra/docker-compose.e2e.yaml -p ark-e2e exec -T postgres \
 	  psql -U ark -d ark -c "UPDATE compute SET isolation_kind='docker', updated_at=NOW() WHERE name='local' AND tenant_id='default';" >/dev/null 2>&1
 	@# Seed empty ANTHROPIC_* tenant secrets. StageSecretResolver requires

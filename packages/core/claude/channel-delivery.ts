@@ -8,6 +8,14 @@ import * as tmux from "../infra/tmux.js";
 import { DEFAULT_CHANNEL_BASE_URL } from "../constants.js";
 import { logInfo, logDebug } from "../observability/structured-log.js";
 
+// Runtime-agnostic sleep. The temporal-worker hosts this module under Node
+// (Bun's V8 build lacks v8.promiseHooks which the Temporal SDK needs), but
+// arkd + the local-mode dispatcher host it under Bun. Bun.sleep doesn't
+// exist in Node; setTimeout works in both.
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ── Channel prompt auto-accept ───────────────────────────────────────────────
 
 const CHANNEL_PROMPT_MARKERS = ["I am using this for local", "local channel development"];
@@ -37,7 +45,7 @@ export async function autoAcceptChannelPrompt(
   let accepted = 0;
 
   for (let i = 0; i < max; i++) {
-    await Bun.sleep(delay);
+    await sleep(delay);
     try {
       const output = await tmux.capturePaneAsync(tmuxName, { lines: 40 });
 
@@ -47,9 +55,9 @@ export async function autoAcceptChannelPrompt(
         // brief pause, then Enter to confirm. Also try just Enter in case
         // the selection is already active.
         await tmux.sendKeysAsync(tmuxName, "1");
-        await Bun.sleep(200);
+        await sleep(200);
         await tmux.sendKeysAsync(tmuxName, "Enter");
-        await Bun.sleep(500);
+        await sleep(500);
         // Double-tap Enter in case the first one was swallowed
         await tmux.sendKeysAsync(tmuxName, "Enter");
         accepted++;
@@ -124,7 +132,7 @@ export async function deliverTask(
       } catch {
         logInfo("session", "channel port not ready yet -- retry");
       }
-      await Bun.sleep(1000);
+      await sleep(1000);
     }
   } finally {
     deliveryInFlight.delete(sessionId);
