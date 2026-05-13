@@ -44,7 +44,7 @@ import type {
 } from "./types.js";
 import { NotSupportedError } from "./types.js";
 import { cloneWorkspaceViaArkd } from "./workspace-clone.js";
-import { logDebug } from "../observability/structured-log.js";
+import { logDebug, logInfo } from "../observability/structured-log.js";
 import { provisionStep } from "../services/provisioning-steps.js";
 import { K8sPlacementCtx } from "./k8s-placement-ctx.js";
 import type { PlacementCtx } from "../secrets/placement-types.js";
@@ -132,7 +132,14 @@ function defaultKillProcess(pid: number): void {
 
 const DEFAULT_DEPS: K8sComputeDeps = {
   loadK8sModule: async () => await import("@kubernetes/client-node"),
-  spawnPortForward: (args) => spawn("kubectl", args, { stdio: "ignore", detached: false }),
+  spawnPortForward: (args) => {
+    const child = spawn("kubectl", args, { stdio: ["ignore", "pipe", "pipe"], detached: false });
+    child.stdout?.on("data", (b) => logInfo("compute", `kubectl pf stdout: ${b.toString().trim()}`));
+    child.stderr?.on("data", (b) => logInfo("compute", `kubectl pf stderr: ${b.toString().trim()}`));
+    child.on("error", (e) => logInfo("compute", `kubectl pf spawn error: ${e.message}`));
+    child.on("exit", (code, sig) => logInfo("compute", `kubectl pf exited code=${code} sig=${sig}`));
+    return child;
+  },
   allocatePort,
   fetchHealth: defaultFetchHealth,
   isPidAlive,
