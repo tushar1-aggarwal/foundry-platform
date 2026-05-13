@@ -624,7 +624,13 @@ export class K8sCompute implements Compute {
   }
 
   buildLaunchEnv(_session: Session): Record<string, string> {
-    return {};
+    // IS_SANDBOX=1 lets the claude binary accept --dangerously-skip-permissions
+    // when running as root. The per-session pod runs as root by default (the
+    // oven/bun base image's USER), and claude refuses that combination with
+    // "cannot be used with root/sudo privileges". K8s pods are isolated by
+    // construction (per-session pod, no host fs, no network to user infra),
+    // so the bypass is safe in this dispatch shape.
+    return { IS_SANDBOX: "1" };
   }
 
   // ── getAttachCommand ────────────────────────────────────────────────────
