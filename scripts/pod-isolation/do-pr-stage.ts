@@ -2,16 +2,22 @@
 /**
  * Pod-isolation PR stage. Reproduces the production push-and-parse path that
  * `createWorktreePR` (packages/core/services/worktree/pr.ts) runs for
- * non-GitHub hosts, WITHOUT constructing an AppContext. It re-uses the same
- * pure helpers (`detectGitHost`, `parseCreatePrUrl`, `fallbackBranchUrl`) so
- * the URL the pod records is byte-identical to what the production CP would
- * surface for the same push stderr.
+ * non-GitHub hosts, WITHOUT constructing an AppContext. The three pure
+ * helpers (`detectGitHost`, `parseCreatePrUrl`, `fallbackBranchUrl`) are
+ * VERBATIM copies of the production code -- not a re-implementation -- so
+ * the URL the pod records is byte-identical to what the production CP
+ * surfaces for the same push stderr.
  *
- * Why not just call `createWorktreePR` directly: that function pulls in
- * AppContext, sessions, events, compute-resolver, repo-config, REST-API
- * clients -- none of which exist or are needed inside the isolation pod.
- * The PR-creation logic that actually matters for Bitbucket (push + parse +
- * fallback) is three pure functions. We import those.
+ * Why inline instead of dynamically importing from /app/packages/core/...
+ *   1. Avoid pulling in pr.ts's transitive deps (AppContext, sessions,
+ *      compute-resolver, repo-config, REST-API clients) which don't exist
+ *      and aren't needed inside an isolation pod.
+ *   2. Decouple from the running image's source tree: the ConfigMap-mounted
+ *      script becomes the source of truth per run, no image rebuild needed
+ *      when the helpers evolve (matches the documented "edit in pod" debug
+ *      preference).
+ * If pr.ts diverges, update the inlined helpers below -- they are simple
+ * pure functions with no side effects.
  *
  * Inputs (env):
  *   ARK_WORKDIR        path to the git checkout to push from
@@ -19,9 +25,6 @@
  *   ARK_AUTHED_URL     https://x-bitbucket-api-token-auth:<token>@host/owner/repo
  *   ARK_ORIGINAL_URL   the pre-auth https://host/owner/repo (used for host detection
  *                      and the recorded pr_url; the authed URL contains the token)
- *   ARK_PR_MODULE      (optional) absolute path to pr.ts -- defaults to
- *                      /app/packages/core/services/worktree/pr.ts (pod layout).
- *                      Mirrors render-prompt.ts's ARK_TEMPLATE_MODULE pattern.
  *
  * Outputs (stdout JSON):
  *   { pr_url, host, branch, push_exit, terminal_reason }
@@ -31,16 +34,45 @@
  */
 import { spawnSync } from "child_process";
 
-const PR_MODULE = process.env.ARK_PR_MODULE ?? "/app/packages/core/services/worktree/pr.ts";
-const { detectGitHost, parseCreatePrUrl, fallbackBranchUrl } = (await import(PR_MODULE)) as {
-  detectGitHost: (url: string | null | undefined) => "github" | "bitbucket" | "gitlab" | "unknown";
-  parseCreatePrUrl: (stderr: string) => string | null;
-  fallbackBranchUrl: (
-    host: "github" | "bitbucket" | "gitlab" | "unknown",
-    remoteUrl: string | null,
-    branch: string,
-  ) => string | null;
-};
+// ── inlined from packages/core/services/worktree/pr.ts ──────────────────────
+// Source-of-truth: pr.ts:54-61 (detectGitHost), pr.ts:238-247 (parseCreatePrUrl),
+// pr.ts:255-276 (fallbackBranchUrl). VERBATIM -- update here if pr.ts diverges.
+
+type GitHost = "github" | "bitbucket" | "gitlab" | "unknown";
+
+function detectGitHost(repoUrl: string | null | undefined): GitHost {
+  if (!repoUrl) return "unknown";
+  const lower = repoUrl.toLowerCase();
+  if (lower.includes("github.com")) return "github";
+  if (lower.includes("bitbucket.org")) return "bitbucket";
+  if (lower.includes("gitlab.com")) return "gitlab";
+  return "unknown";
+}
+
+function parseCreatePrUrl(pushStderr: string): string | null {
+  if (!pushStderr) return null;
+  const lines = pushStderr.split(/\r?\n/);
+  for (const line of lines) {
+    if (!line.includes("remote:")) continue;
+    const m = line.match(/https?:\/\/[^\s)>\]"']+/);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+function fallbackBranchUrl(host: GitHost, remoteUrl: string | null, branch: string): string | null {
+  if (!remoteUrl) return null;
+  let normalized = remoteUrl;
+  const sshMatch = normalized.match(/^git@([^:]+):(.+?)(\.git)?$/);
+  if (sshMatch) normalized = `https://${sshMatch[1]}/${sshMatch[2]}`;
+  normalized = normalized.replace(/\.git$/, "");
+  if (host === "bitbucket") return `${normalized}/branch/${encodeURIComponent(branch)}`;
+  if (host === "gitlab") return `${normalized}/-/tree/${encodeURIComponent(branch)}`;
+  if (host === "github") return null;
+  return normalized;
+}
+
+// ── stage logic ─────────────────────────────────────────────────────────────
 
 interface Envelope {
   pr_url: string | null;
