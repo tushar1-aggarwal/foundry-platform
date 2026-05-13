@@ -113,11 +113,25 @@ async function probeSessionStatus(
         if (executor.probeStatus) {
           return await executor.probeStatus({ app, session, handle });
         }
-        const computeHandle = target.compute.attachExistingHandle?.({
-          name: computeRow.name,
-          status: computeRow.status,
-          config: computeRow.config ?? {},
-        });
+        // attachExistingHandle reads the COMPUTE row's config. For K8s
+        // sessions on a TEMPLATE compute (e.g. session.compute_name="docs-k8s"),
+        // the template row never has pod_name -- pod metadata is persisted to
+        // session.config.compute_handle by the dispatcher's runTargetLifecycle.
+        // Without this fallback, attachExistingHandle returns null, the K8s
+        // checkAlive branch is skipped, executor.status() runs a local
+        // `tmux has-session` against the pod-side tmux name (which never
+        // exists on the conductor), declares "not_found", and the session is
+        // marked "agent process exited" while claude is still alive in the pod.
+        // Mirror the same fallback claude-code.ts already uses for previewHandle.
+        const persistedHandle =
+          ((session.config as { compute_handle?: import("../compute/types.js").ComputeHandle } | null | undefined)
+            ?.compute_handle as import("../compute/types.js").ComputeHandle | undefined) ?? undefined;
+        const computeHandle =
+          target.compute.attachExistingHandle?.({
+            name: computeRow.name,
+            status: computeRow.status,
+            config: computeRow.config ?? {},
+          }) ?? persistedHandle ?? null;
         if (computeHandle) {
           const agent = target.isolation.attachAgent(target.compute, computeHandle, handle);
           const running = await agent.checkAlive();
