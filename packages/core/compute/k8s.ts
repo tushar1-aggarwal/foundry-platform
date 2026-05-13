@@ -264,6 +264,24 @@ export class K8sCompute implements Compute {
 
     await api.createNamespacedPod({ namespace, body: pod });
 
+    // kubectl port-forward refuses to attach to a Pending pod and exits 1
+    // immediately. Wait until the pod reports Running before continuing.
+    // Cap at 2min to cover cold image pull + container start.
+    const podDeadline = Date.now() + 120_000;
+    while (Date.now() < podDeadline) {
+      try {
+        const cur = await api.readNamespacedPod({ name: podName, namespace });
+        const phase = (cur as { status?: { phase?: string } })?.status?.phase;
+        if (phase === "Running") break;
+        if (phase === "Failed" || phase === "Succeeded") {
+          throw new Error(`pod ${podName} reached terminal phase ${phase} before Running`);
+        }
+      } catch (e) {
+        logDebug("compute", `readNamespacedPod transient: ${(e as Error)?.message ?? e}`);
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
     // Build a partial meta -- transport fields (arkdLocalPort, portForwardPid)
     // are filled in by setupPortForward, called next. Done this way so
     // setupPortForward is shared between fresh-provision and rehydrate via
