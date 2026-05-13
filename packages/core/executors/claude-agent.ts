@@ -21,6 +21,7 @@ import { join } from "path";
 
 import type { Executor, LaunchOpts, LaunchResult, ExecutorStatus } from "../executor.js";
 import { logInfo, logWarn, logError } from "../observability/structured-log.js";
+import { buildAuthedHttpsUrl } from "../services/git/auth-url.js";
 
 /**
  * Project the claude-agent runtime YAML's optional fields into the env vars
@@ -227,6 +228,13 @@ export const claudeAgentExecutor: Executor = {
       return { ok: false, handle: "", message: "no compute target resolved for claude-agent dispatch" };
     }
 
+    // Inject tenant-scoped basic-auth into private HTTPS remotes so the
+    // in-pod arkd's `git clone` authenticates -- it has no git credential
+    // helper. buildAuthedHttpsUrl returns the URL unchanged for non-https
+    // or unknown hosts. Mirrors claude-code executor's clone-source path.
+    const rawCloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo ?? null;
+    const cloneSource = rawCloneSource ? await buildAuthedHttpsUrl(app, session, rawCloneSource) : null;
+
     try {
       await runTargetLifecycle(
         app,
@@ -244,10 +252,7 @@ export const claudeAgentExecutor: Executor = {
         },
         {
           prepareCtx: { workdir: workerWorkdir ?? "", onLog: log },
-          workspace: {
-            source: (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo ?? null,
-            remoteWorkdir: workerWorkdir,
-          },
+          workspace: { source: cloneSource, remoteWorkdir: workerWorkdir },
           placement: opts.placement,
           computeStatus: compute.status,
           launchOverride: async () => {
