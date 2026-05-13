@@ -216,6 +216,7 @@ bootstrap-key: ## Mint the first admin API key (auth-required deployments)
 	  fi; \
 	  echo "Booting one-shot daemon in local mode to mint key..."; \
 	  unset ARK_AUTH_REQUIRE_TOKEN; \
+	  export ARK_DEFAULT_TENANT="$$tenant"; \
 	  ./ark server daemon start --detach >/dev/null 2>&1 || true; \
 	  for i in 1 2 3 4 5 6 7 8 9 10; do \
 	    sleep 1; \
