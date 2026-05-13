@@ -97,7 +97,7 @@ export async function resolveTargetAndHandle(app: AppContext, session: Session):
     app,
     session.id,
     "compute-provision",
-    () => target.provision({ size: undefined }),
+    () => target.provision({ config: (compute?.config as Record<string, unknown> | undefined) ?? undefined, tags: { name: session.id } }),
     {
       context: { computeKind: target.compute.kind },
     },
