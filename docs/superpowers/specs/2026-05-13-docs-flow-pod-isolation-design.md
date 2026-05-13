@@ -3,17 +3,40 @@
 **Status:** draft, awaiting review
 **Date:** 2026-05-13
 **Author:** debugging session for hung docs-flow E2E on `pai-risk-mlops-platform`
-**Goal:** Prove (or disprove) that the per-session pod environment can complete a full docs-flow end-to-end -- clone, plan, implement, push, PR -- with **no Temporal, no control-plane RPC, no arkd**. The driver replicates the exact inputs CP would feed to the SDK launcher so the captured contract is reusable when fixing the upstream orchestration path.
 
-## Why this test
+## Goal
 
-Days of E2E iteration have been chasing a hang in dispatch. Symptoms point at one of several layers (Temporal activity timeout, CP `setupSessionWorktree`, arkd `/exec` for git clone, claude-agent SDK, the LLM call). Each rebuild + ArgoCD cycle is ~10 min. We need to isolate "the pod can run the work" from "orchestration is busted" so the next fix has a clear target.
+Prove (or disprove) that the per-session pod environment can complete a full docs-flow end-to-end -- clone, plan, implement, push, PR -- with **no Temporal, no control-plane RPC, no arkd**. The driver replicates the exact inputs CP would feed to the SDK launcher so the captured contract is reusable when fixing the upstream orchestration path.
 
 If this test **succeeds** -> pod environment is sound; the bug is upstream (Temporal / CP / arkd). Focus there.
 
 If this test **fails** -> bug is in the SDK / git / model / secrets path; orchestration was a red herring.
 
 Either way we end with a written I/O contract per stage that the Temporal-side fix can target.
+
+## Deliverables (checked into the repo)
+
+Under `scripts/pod-isolation/`:
+
+1. **`driver.sh`** -- the bash driver that runs inside the Job pod. Reads env vars + templates from `/app/` and `/sec/` mounts, writes contract artifacts to `/tmp/contract/`. Reusable verbatim by future runs.
+2. **`render-prompt.ts`** -- a small bun helper that resolves the agent YAML's `system_prompt` and the task prompt through the same `buildSessionVars` + nunjucks code path CP uses. Called by `driver.sh` once per stage.
+3. **`run.sh`** -- laptop-side orchestrator. Takes optional flags (cluster context, session id suffix, summary text), builds the Job manifest with the driver script + render helper inlined, POSTs to the cluster, then streams + retrieves the contract artifacts. Idempotent: pre-deletes any prior Job with the same name.
+4. **`fixtures/env.example`** -- the env-var contract this test depends on (cluster, SSM keys, BB workspace+repo, model slug). Documents the prerequisites without baking secrets in.
+5. **`README.md`** -- how to run, what to read in the output, what each artifact means, known caveats.
+6. **`fixtures/expected/CONTRACT.md.tmpl`** -- a thin template the driver fills in at the end of each run to summarise inputs+outputs per stage. Same shape every run, so diffs across runs are meaningful.
+
+Each successful run additionally produces (extracted by `run.sh` from the pod):
+
+- `out/<run-id>/contract/plan/{inputs.json, outputs.json, stdout.log, stderr.log, transcript.jsonl}`
+- `out/<run-id>/contract/implement/{...same shape...}`
+- `out/<run-id>/contract/pr/{outputs.json}`
+- `out/<run-id>/contract/CONTRACT.md`
+
+`out/` is in `.gitignore`; contract dirs from useful runs can be copied into `docs/contracts/<date>-<topic>/` for permanent reference.
+
+## Why this test
+
+Days of E2E iteration have been chasing a hang in dispatch. Symptoms point at one of several layers (Temporal activity timeout, CP `setupSessionWorktree`, arkd `/exec` for git clone, claude-agent SDK, the LLM call). Each rebuild + ArgoCD cycle is ~10 min. We need to isolate "the pod can run the work" from "orchestration is busted" so the next fix has a clear target. Beyond this single debugging round, the scripts stay around as the canonical reproducer for future regressions in the per-session pod path.
 
 ## Scope
 
@@ -108,21 +131,39 @@ For each stage (`plan`, `implement`, `pr`), the driver writes the following file
 
 ## Driver structure
 
-`driver.sh`, ~200 lines bash, base64-embedded into a Kubernetes Job manifest. Sections:
+The driver is split across three files in `scripts/pod-isolation/` so each piece is independently editable and testable:
+
+**`scripts/pod-isolation/driver.sh`** (~150 lines bash, runs inside the Job pod):
 
 1. **setup** -- env summary, clone (with auth from SSM secret), git identity, jq pre-approve ~/.claude.json
 2. **run_stage(name, agent_yaml_path)** -- function that:
-   - resolves agent's `system_prompt` via a small bun one-liner that runs nunjucks against the planner/worker YAMLs in `/app/agents/`
-   - builds the task prompt deterministically from the test session vars
-   - writes inputs.json
+   - calls `bun /tmp/render-prompt.ts <agent_yaml> <stage_name>` to resolve `system_prompt` + task prompt through `buildSessionVars` + nunjucks
+   - writes `/tmp/contract/<stage>/inputs.json`
    - exports env vars
    - invokes `bun /app/packages/core/runtimes/claude-agent/launch.ts`
-   - copies transcript.jsonl
+   - copies transcript.jsonl from `$ARK_SESSION_DIR/`
    - parses outputs (exit code, last assistant message, new commits via `git log` diff) into outputs.json
 3. **stage plan** -- `run_stage plan /app/agents/planner.yaml`
 4. **stage implement** -- `run_stage implement /app/agents/worker.yaml`
 5. **stage pr** -- `git push` + Bitbucket REST API call; captures PR URL into outputs.json
-6. **finalize** -- write CONTRACT.md describing the contract, print tree + cat all outputs.json to stdout
+6. **finalize** -- fill in `CONTRACT.md.tmpl` -> `/tmp/contract/CONTRACT.md`, print tree + cat all outputs.json to stdout (so `run.sh` can scrape them via pod log).
+
+**`scripts/pod-isolation/render-prompt.ts`** (~40 lines bun script):
+
+- Imports `buildSessionVars` from `/app/packages/core/template.ts`.
+- Reads agent YAML, extracts `system_prompt`, renders against session vars (workdir, repo, branch, summary, ticket).
+- Writes both rendered strings (`system_prompt_append`, `task_prompt`) to stdout as a small JSON envelope.
+- Same nunjucks env CP uses (`packages/core/template.ts:54`) so byte-for-byte identical output.
+
+**`scripts/pod-isolation/run.sh`** (~80 lines bash, runs on the laptop):
+
+1. Parses flags: `--cluster`, `--summary`, `--repo` (defaults documented in `fixtures/env.example`).
+2. Builds a Job manifest with `driver.sh` + `render-prompt.ts` base64-embedded.
+3. Pre-deletes any prior Job with the same generated name.
+4. POSTs to the cluster (`curl --resolve` + bearer token from `aws eks get-token`, since Zscaler blocks kubectl).
+5. Polls until the Job pod reaches a terminal phase (Succeeded / Failed / timeout 10 min).
+6. Pulls the full pod log, parses the `/tmp/contract/` tree dump out of stdout, writes the artifacts to `out/<run-id>/contract/`.
+7. Prints the per-stage summary table.
 
 ## Failure handling
 
@@ -154,7 +195,24 @@ These map onto the Nunjucks template variables (`{{workdir}}`, `{{repo}}`, `{{br
 
 - One run = `clone + 2 SDK invocations + push + PR call` -> ~3-5 minutes total.
 - No image rebuild required. Same `ark:276fbb07-merged` already in cluster.
-- Driver edits are local -> re-base64 -> POST a new Job. ~30 seconds per iteration.
+- Edits to `driver.sh` / `render-prompt.ts` are local -> `./scripts/pod-isolation/run.sh` re-base64s + POSTs a new Job in one step. ~30 seconds per iteration.
+
+## How to run (laptop)
+
+```bash
+# one-time
+cp scripts/pod-isolation/fixtures/env.example .env.iso
+# fill in cluster context, AWS profile
+
+# every run
+./scripts/pod-isolation/run.sh \
+  --summary "Add one paragraph to architecture.md" \
+  --repo "https://bitbucket.org/paytmteam/foundry-test-repo"
+
+# outputs land at:
+#   out/iso-<timestamp>/contract/{plan,implement,pr}/...
+#   out/iso-<timestamp>/contract/CONTRACT.md
+```
 
 ## Open questions
 
