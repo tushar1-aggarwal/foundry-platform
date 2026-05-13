@@ -392,6 +392,19 @@ export class K8sCompute implements Compute {
       meta.arkdLocalPort = arkdLocalPort;
       meta.portForwardPid = child.pid ?? null;
       this.writeMeta(h, meta);
+
+      // kubectl port-forward exits its CLI as soon as it spawns the bg
+      // goroutine, but the tunnel itself takes ~500ms-2s to establish.
+      // Returning here without probing means the caller's first POST to
+      // localhost:<port> races the tunnel and gets ECONNREFUSED. Probe
+      // /health until the tunnel answers (or give up after ~10s).
+      const probeUrl = `http://localhost:${arkdLocalPort}/health`;
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        if (await this.deps.fetchHealth(probeUrl, 500)) return;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      throw new Error(`port-forward to ${meta.podName} did not become reachable on :${arkdLocalPort} within 10s`);
     };
 
     if (useStep) {
