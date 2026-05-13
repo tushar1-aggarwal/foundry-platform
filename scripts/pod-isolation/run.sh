@@ -2,8 +2,9 @@
 # Laptop-side orchestrator for the pod-isolation test.
 #
 # Builds and POSTs a Kubernetes Job to EKS via curl+bearer (Zscaler blocks
-# kubectl). The Job mounts driver.sh + render-prompt.ts + CONTRACT.md.tmpl
-# from a ConfigMap and runs the docs-flow end-to-end inside one pod.
+# kubectl). The Job mounts driver.sh + render-prompt.ts + do-pr-stage.ts +
+# CONTRACT.md.tmpl from a ConfigMap and runs the docs-flow end-to-end inside
+# one pod.
 #
 # Usage:
 #   ./scripts/pod-isolation/run.sh \
@@ -104,6 +105,7 @@ cm = {
   'data': {
     'driver.sh':         open('$SCRIPT_DIR/driver.sh').read(),
     'render-prompt.ts':  open('$SCRIPT_DIR/render-prompt.ts').read(),
+    'do-pr-stage.ts':    open('$SCRIPT_DIR/do-pr-stage.ts').read(),
     'CONTRACT.md.tmpl':  open('$SCRIPT_DIR/fixtures/expected/CONTRACT.md.tmpl').read(),
   }
 }
@@ -165,6 +167,7 @@ job = {
             'items': [
               {'key': 'driver.sh', 'path': 'driver.sh', 'mode': 0o755},
               {'key': 'render-prompt.ts', 'path': 'render-prompt.ts'},
+              {'key': 'do-pr-stage.ts', 'path': 'do-pr-stage.ts'},
               {'key': 'CONTRACT.md.tmpl', 'path': 'CONTRACT.md.tmpl'},
             ]
           }

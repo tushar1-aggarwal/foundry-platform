@@ -19,7 +19,14 @@
  */
 import { readFileSync } from "fs";
 import { parse as parseYaml } from "yaml";
-import { substituteVars, buildSessionVars } from "../../packages/core/template.js";
+// Absolute path: this script runs inside the pod from /opt/iso/ (ConfigMap mount),
+// not from its source tree location, so relative imports don't resolve. Bun reads
+// .ts directly so the .ts extension is fine.
+const TEMPLATE_MODULE = process.env.ARK_TEMPLATE_MODULE ?? "/app/packages/core/template.ts";
+const { substituteVars, buildSessionVars } = (await import(TEMPLATE_MODULE)) as {
+  substituteVars: (template: string, vars: Record<string, unknown>) => string;
+  buildSessionVars: (session: Record<string, unknown>) => Record<string, unknown>;
+};
 
 interface Args {
   agentYaml: string;

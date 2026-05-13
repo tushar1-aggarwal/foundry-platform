@@ -252,7 +252,7 @@ export function parseCreatePrUrl(pushStderr: string): string | null {
  * the operator a clickable starting point even when we can't construct
  * the precise PR-creation URL.
  */
-function fallbackBranchUrl(host: GitHost, remoteUrl: string | null, branch: string): string | null {
+export function fallbackBranchUrl(host: GitHost, remoteUrl: string | null, branch: string): string | null {
   if (!remoteUrl) return null;
   // Normalize ssh-style `git@host:owner/repo(.git)` to `https://host/owner/repo`.
   let normalized = remoteUrl;
