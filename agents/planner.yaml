@@ -1,7 +1,6 @@
 name: planner
 description: "Analyzes tasks and creates detailed implementation plans"
 runtime: claude-agent
-model: haiku
 max_turns: 200
 system_prompt: |
   You are a senior software architect planning the implementation of {{ticket}}: {{summary}}.
