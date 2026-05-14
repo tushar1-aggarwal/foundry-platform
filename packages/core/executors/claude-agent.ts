@@ -360,11 +360,23 @@ export const claudeAgentExecutor: Executor = {
     const tenantApp = session.tenant_id ? app.forTenant(session.tenant_id) : app;
     const { target, compute } = await tenantApp.resolveComputeTarget(session);
     if (!target || !compute) return { state: "running" };
-    const computeHandle = target.compute.attachExistingHandle?.({
-      name: compute.name,
-      status: compute.status,
-      config: (compute.config ?? {}) as Record<string, unknown>,
-    });
+    // When session.compute_name points at a TEMPLATE compute row (e.g.
+    // "docs-k8s"), the template config has no pod_name, so
+    // K8sCompute.attachExistingHandle returns null. The actual pod metadata
+    // was persisted to session.config.compute_handle by runTargetLifecycle at
+    // provision time. Fall back to that persisted handle -- mirroring the
+    // precedent at status-poller.ts:129-137 -- so we can still call
+    // statusProcess and surface the real exit code instead of stalling at
+    // "running" forever.
+    const persistedHandle =
+      ((session.config as { compute_handle?: import("../compute/types.js").ComputeHandle } | null | undefined)
+        ?.compute_handle as import("../compute/types.js").ComputeHandle | undefined) ?? undefined;
+    const computeHandle =
+      target.compute.attachExistingHandle?.({
+        name: compute.name,
+        status: compute.status,
+        config: (compute.config ?? {}) as Record<string, unknown>,
+      }) ?? persistedHandle ?? null;
     if (!computeHandle?.statusProcess) {
       // Compute handle can't tell us about processes -- safest answer is
       // "still running" so we don't false-positive into completed.
