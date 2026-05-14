@@ -44,7 +44,7 @@ import type {
 } from "./types.js";
 import { NotSupportedError } from "./types.js";
 import { cloneWorkspaceViaArkd } from "./workspace-clone.js";
-import { logDebug, logInfo } from "../observability/structured-log.js";
+import { logDebug, logError, logInfo } from "../observability/structured-log.js";
 import { provisionStep } from "../services/provisioning-steps.js";
 import { K8sPlacementCtx } from "./k8s-placement-ctx.js";
 import type { PlacementCtx } from "../secrets/placement-types.js";
@@ -431,6 +431,12 @@ export class K8sCompute implements Compute {
 
       const arkdLocalPort = await this.deps.allocatePort();
       const args = this.buildPortForwardArgs(meta.podName, meta.namespace, arkdLocalPort, meta.kubeconfig);
+      logInfo("compute", "k8s: spawning kubectl port-forward", {
+        compute: h.name,
+        podName: meta.podName,
+        namespace: meta.namespace,
+        hostPort: arkdLocalPort,
+      });
       const child = this.deps.spawnPortForward(args);
       meta.arkdLocalPort = arkdLocalPort;
       meta.portForwardPid = child.pid ?? null;
@@ -446,9 +452,23 @@ export class K8sCompute implements Compute {
       const probeUrl = `http://localhost:${arkdLocalPort}/health`;
       const deadline = Date.now() + 60_000;
       while (Date.now() < deadline) {
-        if (await this.deps.fetchHealth(probeUrl, 1000)) return;
+        if (await this.deps.fetchHealth(probeUrl, 1000)) {
+          logInfo("compute", "k8s: port-forward tunnel established", {
+            compute: h.name,
+            podName: meta.podName,
+            arkdLocalPort,
+            pid: meta.portForwardPid,
+          });
+          return;
+        }
         await new Promise((r) => setTimeout(r, 500));
       }
+      logError("compute", "k8s: port-forward failed to become reachable", {
+        compute: h.name,
+        podName: meta.podName,
+        arkdLocalPort,
+        pid: meta.portForwardPid,
+      });
       throw new Error(`port-forward to ${meta.podName} did not become reachable on :${arkdLocalPort} within 60s`);
     };
 
@@ -475,6 +495,11 @@ export class K8sCompute implements Compute {
   async stop(h: ComputeHandle): Promise<void> {
     const meta = this.readMeta(h);
     if (meta.portForwardPid) {
+      logInfo("compute", "k8s: tearing down port-forward", {
+        compute: h.name,
+        podName: meta.podName,
+        pid: meta.portForwardPid,
+      });
       try {
         process.kill(meta.portForwardPid, "SIGTERM");
       } catch {

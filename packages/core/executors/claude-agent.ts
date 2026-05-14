@@ -214,6 +214,12 @@ export const claudeAgentExecutor: Executor = {
     ].join("\n");
 
     log(`Launching claude-agent via ${compute.compute_kind} -> arkd /process/spawn (handle=${handle})`);
+    logInfo("compute", "claude-agent: spawning launcher", {
+      sessionId: session.id,
+      handle,
+      computeKind: compute.compute_kind,
+      workerWorkdir: workerWorkdir ?? "(none)",
+    });
 
     // Run the provisioning lifecycle (compute-start / ensure-reachable /
     // flush-secrets / prepare-workspace / isolation-prepare) and spawn
