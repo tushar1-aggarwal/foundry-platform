@@ -1,42 +1,11 @@
 // packages/core/temporal/activities/__tests__/execute-action.test.ts
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import { executeActionActivity, injectDeps } from "../execute-action.js";
-import type { OrchestrationDeps } from "../../../services/deps.js";
 import { AppContext } from "../../../app.js";
 import { depsFromApp } from "../../../services/deps.js";
 import { ACTION_INDEX } from "../../../services/actions/index.js";
 
-function stubDeps(overrides: Partial<OrchestrationDeps> = {}): OrchestrationDeps {
-  const events: Array<{ type: string; data: unknown }> = [];
-  const stub = {
-    sessions: { get: async () => ({ id: "s-1", stage: "pr", flow: "docs" }) },
-    events: { log: async (_sid: string, type: string, payload: any) => { events.push({ type, data: payload?.data }); } },
-    db: { query: async () => [] },
-    flows: { get: () => ({ stages: [{ name: "pr", action: "create_pr" }] }) },
-    config: {} as any,
-    secrets: {} as any,
-    blobStore: {} as any,
-    computes: {} as any,
-    agents: {} as any,
-    runtimes: {} as any,
-    pluginRegistry: {} as any,
-    flowStates: {} as any,
-    statusPollers: {} as any,
-    messages: {} as any,
-    tenantId: "default",
-    arkDir: "/tmp/test-ark",
-    app: undefined,
-    ...overrides,
-  } as unknown as OrchestrationDeps;
-  (stub as any)._events = events;
-  return stub;
-}
-
 describe("executeActionActivity (happy path)", () => {
-  beforeEach(() => {
-    // Reset module state between tests so each test injects fresh deps.
-  });
-
   it("emits action_executed on success (the success-signal contract; no action_skipped on the happy path)", async () => {
     // Use a real AppContext + real ACTION_INDEX so the test exercises the
     // actual executeAction -> handler chain. The activity's own
