@@ -10,7 +10,7 @@ const {
   projectStageActivity,
 } = proxyActivities<typeof acts>({
   startToCloseTimeout: "1 hour",
-  heartbeatTimeout: "10 minutes",
+  heartbeatTimeout: "60 seconds",
   retry: { maximumAttempts: 2, initialInterval: "1s", backoffCoefficient: 2 },
 });
 
