@@ -97,6 +97,13 @@ COPY --from=build /app/packages/web/dist ./packages/web/dist
 RUN printf '#!/bin/sh\nexec bun /app/packages/cli/index.ts arkd "$@"\n' > /usr/local/bin/arkd \
  && chmod +x /usr/local/bin/arkd
 
+# `ark` CLI on PATH for in-pod launchers. claude-agent.ts launcher emits
+# `exec ark run-agent-sdk`; without this, the launcher exits 127 and the
+# session hangs until Temporal heartbeatTimeout (~10 min). Symlinks to
+# /app/ark (the bash shim copied in above, resolves to
+# `bun /app/packages/cli/index.ts "$@"`).
+RUN ln -sf /app/ark /usr/local/bin/ark
+
 # Create ark data directory
 RUN mkdir -p /root/.ark
 
