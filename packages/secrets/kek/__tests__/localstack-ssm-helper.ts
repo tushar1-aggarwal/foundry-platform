@@ -143,7 +143,9 @@ async function waitForReady(endpoint: string, service: "ssm"): Promise<void> {
     }
     await Bun.sleep(HEALTH_POLL_MS);
   }
-  throw new Error(`LocalStack ${service} did not report healthy within ${HEALTH_TIMEOUT_MS}ms: ${lastErr?.message ?? ""}`);
+  throw new Error(
+    `LocalStack ${service} did not report healthy within ${HEALTH_TIMEOUT_MS}ms: ${lastErr?.message ?? ""}`,
+  );
 }
 
 export function setLocalStackCredentials(): { restore: () => void } {
