@@ -54,10 +54,17 @@ export class SsmKekBackend implements KekBackend {
 
     let decoded: Buffer;
     try {
-      decoded = Buffer.from(value, "base64");
+      // Accept both standard (RFC 4648 sec 4) and URL-safe (sec 5) base64
+      // alphabets. Operators rotating keys with tools that emit URL-safe
+      // output -- e.g. `openssl rand -base64 32 | tr '+/' '-_'` or several
+      // Node-native helpers -- otherwise hit a spurious "not valid base64"
+      // because Buffer.from happily decodes URL-safe but always re-encodes
+      // as standard, breaking the roundtrip-equality check below.
+      const standard = value.replace(/-/g, "+").replace(/_/g, "/");
+      decoded = Buffer.from(standard, "base64");
       // Buffer.from is permissive about non-base64 input. Re-encode and
-      // require equality to catch garbage.
-      if (decoded.toString("base64").replace(/=+$/, "") !== value.replace(/=+$/, "")) {
+      // require equality to catch garbage that decoded to partial bytes.
+      if (decoded.toString("base64").replace(/=+$/, "") !== standard.replace(/=+$/, "")) {
         throw new Error("not valid base64");
       }
     } catch (cause: any) {

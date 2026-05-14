@@ -79,6 +79,22 @@ describe("SsmKekBackend", () => {
     await expect(backend.load()).rejects.toThrow(/base64|decode/i);
   });
 
+  it("accepts URL-safe base64 (RFC 4648 sec 5)", async () => {
+    // 0xfb-filled 32 bytes produces both `+` and `/` in standard base64,
+    // so the URL-safe-substituted form below exercises both replacements.
+    // Operators rotating with `openssl rand -base64 32 | tr '+/' '-_'`
+    // (and many language-native helpers) emit this shape.
+    const standard = Buffer.from(new Uint8Array(32).fill(0xfb)).toString("base64");
+    expect(standard).toMatch(/[+/]/); // sanity: the fixture actually contains the chars we're testing
+    const urlSafe = standard.replace(/\+/g, "-").replace(/\//g, "_");
+    client.responder = () => ({ Parameter: { Value: urlSafe, Version: 2 } });
+    const backend = new SsmKekBackend({ parameter: "/x", client: client as any });
+    const loaded = await backend.load();
+    expect(loaded.material.byteLength).toBe(32);
+    expect(loaded.material.bytes()[0]).toBe(0xfb);
+    expect(loaded.version).toBe(2);
+  });
+
   it("rejects when decoded length is not 32", async () => {
     const shortValue = Buffer.from(new Uint8Array(16)).toString("base64");
     client.responder = () => ({ Parameter: { Value: shortValue } });
