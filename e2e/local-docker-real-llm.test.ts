@@ -88,6 +88,10 @@ async function waitForSessionState(
 ): Promise<Session> {
   const start = Date.now();
   let last: Session = await readSession(id);
+  let lastStage = last.stage ?? "";
+  let lastStatus = last.status;
+  // Log initial state so the operator sees activity at t=0.
+  console.log(`  · t=0s  stage=${last.stage}  status=${last.status}`);
   while (!pred(last)) {
     if (Date.now() - start > timeoutMs) {
       throw new Error(
@@ -96,6 +100,14 @@ async function waitForSessionState(
     }
     await new Promise((r) => setTimeout(r, 1500));
     last = await readSession(id);
+    // Print on any state transition so 10-min waits aren't silent.
+    if ((last.stage ?? "") !== lastStage || last.status !== lastStatus) {
+      const ts = Math.round((Date.now() - start) / 1000);
+      const errSnip = last.error ? `  err=${last.error.slice(0, 80)}` : "";
+      console.log(`  · t=${ts}s  stage=${last.stage}  status=${last.status}${errSnip}`);
+      lastStage = last.stage ?? "";
+      lastStatus = last.status;
+    }
   }
   return last;
 }
@@ -133,12 +145,19 @@ async function startDocsSession(): Promise<Session> {
 
 describe.skipIf(!ENABLED)("local-docker real-Claude integration", () => {
   beforeAll(async () => {
-    // Pre-flight: server, arkd, compute=local present. Secrets are seeded by
-    // the Makefile target before the test runs; we just verify the wiring.
+    // Pre-flight: server, arkd, compute=local present, ANTHROPIC_API_KEY
+    // populated. Empty key would silently 10-min-timeout in Case A.
     expect(await probe(`${WEB_URL}/api/health`)).toBe(true);
     expect(await probe(`${ARKD_URL}/health`)).toBe(true);
     const { targets } = await rpc<{ targets: Array<{ name: string }> }>("compute/list", {});
     expect((targets ?? []).some((c) => c.name === "local")).toBe(true);
+    const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
+    if (apiKey.length === 0) {
+      throw new Error(
+        "ANTHROPIC_API_KEY is empty. Populate .env.test from prod K8s secret ark-secrets " +
+          "before running this test.",
+      );
+    }
   }, 60_000);
 
   afterAll(async () => {
@@ -152,6 +171,7 @@ describe.skipIf(!ENABLED)("local-docker real-Claude integration", () => {
     async () => {
       safeDockerRm(SIDECAR_NAME);
       const created = await startDocsSession();
+      console.log(`\n  >> Case A session ${created.id}  workflow=${created.workflow_id}`);
       expect(created.id).toMatch(/^s-/);
       expect(created.orchestrator).toBe("temporal");
       expect(created.workflow_id).toMatch(/^session-/);
@@ -184,6 +204,7 @@ describe.skipIf(!ENABLED)("local-docker real-Claude integration", () => {
 
       try {
         const created = await startDocsSession();
+        console.log(`\n  >> Case B session ${created.id} (invalid key seeded)`);
 
         // Wait for failure surface. Sidecar spawn takes ~10-30s, then SDK
         // hits the auth wall and exits non-zero; probeStatus must observe
@@ -216,6 +237,7 @@ describe.skipIf(!ENABLED)("local-docker real-Claude integration", () => {
     async () => {
       safeDockerRm(SIDECAR_NAME);
       const created = await startDocsSession();
+      console.log(`\n  >> Case C session ${created.id} (will docker-kill mid-run)`);
 
       // Wait for the sidecar to be up before killing it. Status goes
       // running once dispatch hands off to claude-agent; that's when the
