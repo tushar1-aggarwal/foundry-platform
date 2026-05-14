@@ -14,9 +14,28 @@ WORKDIR /app
 # Temporal worker SDK supports Node 18+). Avoids the Zscaler-MITM-blocked
 # nodesource pull.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        nodejs npm curl git tmux procps \
+        nodejs npm curl git tmux procps unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g tsx
+
+# AWS CLI v2 + session-manager-plugin. Required by EC2Compute.setupTransport:
+# packages/core/compute/ec2/ssm.ts:24-30 documents these as hard prereqs.
+# Supports both amd64 and arm64 (EKS nodes are amd64; Apple Silicon local builds need arm64).
+RUN ARCH="$(uname -m)" \
+  && if [ "$ARCH" = "aarch64" ]; then \
+       AWS_URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"; \
+       SMP_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_arm64/session-manager-plugin.deb"; \
+     else \
+       AWS_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"; \
+       SMP_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb"; \
+     fi \
+  && curl -fsSL "$AWS_URL" -o /tmp/awscli.zip \
+  && unzip -q /tmp/awscli.zip -d /tmp \
+  && /tmp/aws/install \
+  && rm -rf /tmp/awscli.zip /tmp/aws \
+  && curl -fsSL "$SMP_URL" -o /tmp/smp.deb \
+  && dpkg -i /tmp/smp.deb \
+  && rm /tmp/smp.deb
 # Pull kubectl from a multi-arch image (Docker Hub is Zscaler-trusted, dl.k8s.io is MITM-blocked).
 COPY --from=bitnami/kubectl:latest /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/kubectl
 COPY package.json bun.lock* ./
