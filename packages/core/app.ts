@@ -74,6 +74,7 @@ import type { TensorZeroManager } from "./router/tensorzero.js";
 import type { BlobStore } from "./storage/blob-store.js";
 import type { AppMode } from "./modes/app-mode.js";
 import { buildAppMode } from "./modes/app-mode.js";
+import { SecureBuffer, type LoadedKek } from "../secrets/index.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -95,6 +96,17 @@ export class AppContext {
 
   private _eventBusReady = false;
   private _drizzle: DrizzleClient | null = null;
+
+  /** Loaded master KEK; populated during boot(). Throws if accessed pre-boot. */
+  private _loadedKek: import("../secrets/index.js").LoadedKek | null = null;
+
+  /** Public accessor for the loaded master KEK. Throws if accessed pre-boot. */
+  get loadedKek(): import("../secrets/index.js").LoadedKek {
+    if (!this._loadedKek) {
+      throw new Error("AppContext.loadedKek accessed before boot() completed");
+    }
+    return this._loadedKek;
+  }
 
   /** Rollback config stored here so conductor can access it without globalThis. */
   rollbackConfig: import("./config.js").RollbackSettings | null = null;
@@ -130,11 +142,32 @@ export class AppContext {
     await this._initSchema(db);
     await this._seedComputeTemplates(db);
 
+    // Load the master KEK before the container is built so a misconfigured
+    // deployment fails at boot rather than at first secret read.
+    if (this.options.stubKek) {
+      this._loadedKek = this.options.stubKek;
+    } else {
+      const kekConfig = this.config.kek;
+      if (!kekConfig) {
+        throw new Error(
+          "AppContext.boot: config.kek is missing -- ARK_KEK_BACKEND is not configured",
+        );
+      }
+      const { loadMasterKey } = await import("../secrets/index.js");
+      this._loadedKek = await loadMasterKey(kekConfig);
+    }
+
     // Container + lifecycle. `buildContainer()` wires every repo, store,
     // service, and infra launcher; `lifecycle.start()` resolves + calls
     // `start()` on each launcher in canonical order. Awilix tracks every
     // resolution so `container.dispose()` later tears them down in reverse.
     this._container = buildContainer({ app: this, config: this.config, db, bootOptions: this.options });
+
+    // Register the LoadedKek as a value so downstream services (tenant-DEK,
+    // cipher, secrets resolver) can resolve it from the cradle without any
+    // direct access to AppContext. Disposal happens in shutdown() below --
+    // awilix asValue registrations are not lifecycle-managed.
+    this._container.register({ loadedKek: asValue(this._loadedKek!) });
 
     // Re-apply a test-mode override across the placeholder->real container
     // swap. Production callers never touch `_modeOverrideForTest`; tests use
@@ -233,6 +266,11 @@ export class AppContext {
     this.phase = "shutting_down";
 
     if (wasBooted) {
+      // Zero-fill the master KEK before the rest of the container tears
+      // down. SecureBuffer.dispose() is idempotent, so a future second
+      // dispose call (e.g. via a wrapping cradle entry) is safe.
+      this._loadedKek?.material.dispose();
+      this._loadedKek = null;
       // container.dispose() walks every registered disposer in reverse
       // resolution order. ServiceWiring.stop() drains pending session
       // dispatches up front so running agents are told to exit before
@@ -1032,17 +1070,27 @@ export class AppContext {
   // ── Factory ────────────────────────────────────────────────────────────
 
   /** Synchronous test AppContext -- uses well-known ports (serial tests only). */
-  static forTest(overrides?: Partial<ArkConfig>): AppContext {
+  static forTest(overrides?: Partial<ArkConfig>, options?: AppOptions): AppContext {
     const tempDir = mkdtempSync(join(tmpdir(), "ark-test-"));
     const config = loadConfig({ dirs: { ark: tempDir } as any, env: "test", ...overrides });
-    return new AppContext(config, TEST_OPTIONS);
+    return new AppContext(config, { ...TEST_OPTIONS, ...buildTestKekOption(), ...options });
   }
 
   /** Parallel-safe test AppContext -- allocates unique ports + arkDir per call. */
-  static async forTestAsync(overrides?: Partial<ArkConfig>): Promise<AppContext> {
+  static async forTestAsync(overrides?: Partial<ArkConfig>, options?: AppOptions): Promise<AppContext> {
     const config = await loadAppConfig({ profile: "test", ...overrides });
-    return new AppContext(config, TEST_OPTIONS);
+    return new AppContext(config, { ...TEST_OPTIONS, ...buildTestKekOption(), ...options });
   }
+}
+
+/**
+ * Build a deterministic stub KEK for test-mode AppContexts so `make test`
+ * never needs AWS credentials or LocalStack. Each call returns a fresh
+ * SecureBuffer (so disposal in one test doesn't leak into another).
+ */
+function buildTestKekOption(): { stubKek: LoadedKek } {
+  const material = new SecureBuffer(new Uint8Array(32).fill(0xa5));
+  return { stubKek: { material, version: 1, describe: () => "stub:forTest@v1" } };
 }
 
 /**

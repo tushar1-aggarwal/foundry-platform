@@ -77,6 +77,8 @@ export interface AppBootOptions {
   skipMetrics?: boolean;
   skipSignals?: boolean;
   cleanupOnShutdown?: boolean;
+  /** Test hook: skip KEK loading and use this pre-loaded value instead. */
+  stubKek?: import("../secrets/index.js").LoadedKek;
 }
 
 export interface Cradle {
@@ -177,6 +179,11 @@ export interface Cradle {
   users: UserManager;
   tenantClaudeAuth: TenantClaudeAuthManager;
   tenantPolicyManager: TenantPolicyManager;
+
+  // Loaded master KEK. Registered as a value during AppContext.boot().
+  // Downstream code (tenant-DEK, cipher, secrets resolver) consumes
+  // `LoadedKek`, never the backend directly.
+  loadedKek: import("../secrets/index.js").LoadedKek;
 }
 
 export type AppContainer = AwilixContainer<Cradle>;

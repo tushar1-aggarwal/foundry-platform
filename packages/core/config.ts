@@ -46,6 +46,7 @@ import { detectProfile, loadProfileDefaults } from "./config/profiles.js";
 import { readEnv, type EnvOverrides } from "./config/env-source.js";
 import { loadYamlOverrides, mergeOverrides } from "./config/yaml-source.js";
 import { validateClusterConfig, type ClusterConfig } from "./config/clusters.js";
+import { parseKekConfigFromEnv, type KekConfig } from "../secrets/index.js";
 
 export type {
   ArkProfile,
@@ -188,6 +189,17 @@ export interface ArkConfig {
     awsRegion?: string;
     awsKmsKeyId?: string;
   };
+  /**
+   * Master KEK backend configuration. Populated from `ARK_KEK_*` env vars
+   * by `parseKekConfigFromEnv` during `assemble()` whenever
+   * `ARK_KEK_BACKEND` is set. Left undefined otherwise so test runs that
+   * don't configure SSM stay quiet (the test profile installs a stub KEK
+   * via `AppContext.forTestAsync`).
+   *
+   * v1 supports only `backend: "ssm"`. See
+   * docs/superpowers/specs/2026-05-14-ssm-kek-backend.md.
+   */
+  kek?: KekConfig;
   /** Redis URL for hosted SSE bus and cross-instance pub/sub. redis://... */
   redisUrl?: string;
   /**
@@ -521,6 +533,11 @@ function assemble(defaults: ProfileDefaults, overrides: LoadConfigOptions, profi
     },
     computeTemplates: parseComputeTemplates(legacyYaml.compute_templates),
     secrets: parseSecretsConfig(legacyYaml.secrets, merged),
+    // Master KEK config -- only populated when ARK_KEK_BACKEND is set so
+    // test profiles without the env var stay quiet and use the stub KEK
+    // installed by forTestAsync. Production deployments must set
+    // ARK_KEK_BACKEND=ssm + ARK_KEK_SSM_PARAMETER or boot fails.
+    kek: process.env.ARK_KEK_BACKEND ? parseKekConfigFromEnv(process.env) : undefined,
     redisUrl: process.env.REDIS_URL ?? (legacyYaml.redis_url as string) ?? merged.redisUrl,
     git: {
       authorName:
