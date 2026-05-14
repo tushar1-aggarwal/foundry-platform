@@ -86,6 +86,23 @@ export interface K8sHandleMeta {
   kubeconfig?: string;
   /** The runtimeClassName that was set on the pod spec (KataCompute). */
   runtimeClassName?: string;
+  /** Pod IP address. Populated at provision time via K8s API. In-cluster mode uses this directly instead of port-forward. */
+  podIp?: string;
+}
+
+/**
+ * True when the conductor is running inside a Kubernetes pod AND Ark is
+ * configured in hosted mode. Both conditions must hold:
+ *   - KUBERNETES_SERVICE_HOST: injected by the kubelet into every pod.
+ *   - ARK_MODE=hosted: operator-set flag; prevents false positives when a
+ *     dev's shell inherits a kubeconfig that sets KUBERNETES_SERVICE_HOST.
+ */
+export function isInClusterHosted(): boolean {
+  return (
+    typeof process.env.KUBERNETES_SERVICE_HOST === "string" &&
+    process.env.KUBERNETES_SERVICE_HOST.length > 0 &&
+    process.env.ARK_MODE === "hosted"
+  );
 }
 
 /**

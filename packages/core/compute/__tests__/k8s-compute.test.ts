@@ -20,7 +20,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test"
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 
-import { K8sCompute, type K8sComputeDeps } from "../k8s.js";
+import { K8sCompute, isInClusterHosted, type K8sComputeDeps } from "../k8s.js";
 import { NotSupportedError, type ComputeHandle, type Snapshot } from "../types.js";
 import { AppContext } from "../../app.js";
 import { setApp, clearApp } from "../../__tests__/test-helpers.js";
@@ -432,5 +432,34 @@ describe("K8sCompute", async () => {
       };
       (await expect(c.restore(snap))).rejects.toBeInstanceOf(NotSupportedError);
     });
+  });
+});
+
+describe("isInClusterHosted", () => {
+  it("returns false when KUBERNETES_SERVICE_HOST is not set", () => {
+    const saved = process.env.KUBERNETES_SERVICE_HOST;
+    delete process.env.KUBERNETES_SERVICE_HOST;
+    expect(isInClusterHosted()).toBe(false);
+    if (saved !== undefined) process.env.KUBERNETES_SERVICE_HOST = saved;
+  });
+
+  it("returns false when only KUBERNETES_SERVICE_HOST set but ARK_MODE != hosted", () => {
+    const savedK8s = process.env.KUBERNETES_SERVICE_HOST;
+    const savedMode = process.env.ARK_MODE;
+    process.env.KUBERNETES_SERVICE_HOST = "10.0.0.1";
+    process.env.ARK_MODE = "local";
+    expect(isInClusterHosted()).toBe(false);
+    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s; else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
+  });
+
+  it("returns true when KUBERNETES_SERVICE_HOST set and ARK_MODE=hosted", () => {
+    const savedK8s = process.env.KUBERNETES_SERVICE_HOST;
+    const savedMode = process.env.ARK_MODE;
+    process.env.KUBERNETES_SERVICE_HOST = "10.0.0.1";
+    process.env.ARK_MODE = "hosted";
+    expect(isInClusterHosted()).toBe(true);
+    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s; else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
   });
 });
