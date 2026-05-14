@@ -127,6 +127,12 @@ export interface K8sComputeDeps {
   isPidAlive(pid: number): boolean;
   /** Send SIGTERM to a PID; swallows ESRCH so a stale meta is safe. */
   killProcess(pid: number): void;
+  /**
+   * Probe arkd readiness inside the pod during provision. Default: runs
+   * `kubectl exec ... -- curl http://localhost:19300/health`. Tests inject
+   * a stub that returns true immediately to avoid real kubectl invocations.
+   */
+  probeArkdInPod?(podName: string, namespace: string, kubeconfig?: string): Promise<boolean>;
 }
 
 async function defaultFetchHealth(url: string, timeoutMs: number): Promise<boolean> {
@@ -161,6 +167,15 @@ const DEFAULT_DEPS: K8sComputeDeps = {
   fetchHealth: defaultFetchHealth,
   isPidAlive,
   killProcess: defaultKillProcess,
+  probeArkdInPod: async (podName: string, namespace: string, kubeconfig?: string): Promise<boolean> => {
+    return new Promise<boolean>((resolve) => {
+      const args = ["exec", "-n", namespace, podName, "--", "curl", "-fsS", "-m", "2", `http://localhost:${19300}/health`];
+      if (kubeconfig) args.unshift("--kubeconfig", kubeconfig);
+      const probe = spawn("kubectl", args, { stdio: "ignore" });
+      probe.on("exit", (code) => resolve(code === 0));
+      probe.on("error", () => resolve(false));
+    });
+  },
 };
 
 const ARKD_POD_PORT = 19300;
@@ -287,12 +302,18 @@ export class K8sCompute implements Compute {
     //   2. arkd inside the pod actually accepts a TCP connection on :19300
     //      (Bun + CLI cold-start takes ~5-15s after container start)
     // Cap each at 2min and 1min respectively to cover slow image pulls.
+    let podIpAtProvision: string | undefined;
     const podDeadline = Date.now() + 120_000;
     while (Date.now() < podDeadline) {
       try {
         const cur = await api.readNamespacedPod({ name: podName, namespace });
-        const phase = (cur as { status?: { phase?: string } })?.status?.phase;
-        if (phase === "Running") break;
+        const phase = (cur as { status?: { phase?: string; podIP?: string } })?.status?.phase;
+        if (phase === "Running") {
+          // Capture podIP for in-cluster direct routing (F3.3).
+          const podIpRaw = (cur as { status?: { podIP?: string } })?.status?.podIP;
+          if (podIpRaw) podIpAtProvision = podIpRaw;
+          break;
+        }
         if (phase === "Failed" || phase === "Succeeded") {
           throw new Error(`pod ${podName} reached terminal phase ${phase} before Running`);
         }
@@ -304,15 +325,10 @@ export class K8sCompute implements Compute {
 
     // Probe arkd readiness via `kubectl exec ... -- curl http://localhost:19300/health`.
     // Spawns a one-shot subprocess per probe; doesn't matter for cold-start.
+    const probeArkdInPod = this.deps.probeArkdInPod ?? DEFAULT_DEPS.probeArkdInPod!;
     const arkdDeadline = Date.now() + 60_000;
     while (Date.now() < arkdDeadline) {
-      const ok = await new Promise<boolean>((resolve) => {
-        const args = ["exec", "-n", namespace, podName, "--", "curl", "-fsS", "-m", "2", `http://localhost:${ARKD_POD_PORT}/health`];
-        if (cfg.kubeconfig) args.unshift("--kubeconfig", cfg.kubeconfig);
-        const probe = spawn("kubectl", args, { stdio: "ignore" });
-        probe.on("exit", (code) => resolve(code === 0));
-        probe.on("error", () => resolve(false));
-      });
+      const ok = await probeArkdInPod(podName, namespace, cfg.kubeconfig);
       if (ok) break;
       await new Promise((r) => setTimeout(r, 1000));
     }
@@ -328,6 +344,7 @@ export class K8sCompute implements Compute {
         portForwardPid: null,
         arkdLocalPort: 0,
         kubeconfig: cfg.kubeconfig,
+        podIp: podIpAtProvision,
       },
       cfg,
     );
@@ -369,6 +386,7 @@ export class K8sCompute implements Compute {
         portForwardPid: typeof cfg.port_forward_pid === "number" ? (cfg.port_forward_pid as number) : null,
         arkdLocalPort: typeof cfg.arkd_local_port === "number" ? (cfg.arkd_local_port as number) : 0,
         kubeconfig: cfg.kubeconfig as string | undefined,
+        podIp: typeof cfg.pod_ip === "string" ? (cfg.pod_ip as string) : undefined,
       },
       cfg as K8sComputeConfig,
     );

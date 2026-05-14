@@ -110,6 +110,10 @@ function makeHarness(overrides: Partial<Harness> = {}): Harness {
             harness.calls.push({ method: "createNamespacedPod", args: [opts] });
             harness.lastPod = opts.body;
           },
+          readNamespacedPod: async (opts: { name: string; namespace: string }) => {
+            harness.calls.push({ method: "readNamespacedPod", args: [opts] });
+            return { status: { phase: "Running", podIP: "10.0.0.99" } };
+          },
           deleteNamespacedPod: async (opts: { name: string; namespace: string }) => {
             harness.calls.push({ method: "deleteNamespacedPod", args: [opts] });
           },
@@ -131,6 +135,8 @@ function makeHarness(overrides: Partial<Harness> = {}): Harness {
     killProcess: (pid: number) => {
       harness.killCalls.push(pid);
     },
+    // Stub the arkd-in-pod probe so provision() doesn't spawn real kubectl.
+    probeArkdInPod: async () => true,
   };
 
   return harness;
@@ -370,23 +376,42 @@ describe("K8sCompute", async () => {
       // PID alive, but /health probe returns false -- the most realistic
       // failure mode (kubectl up but the pod is evicted / not forwarding).
       // The reuse-path should kill and respawn.
-      const harness = makeHarness({ healthy: false });
-      const c = makeK8sCompute(harness.deps);
+      //
+      // We track a mutable state object so closures share the same reference.
+      const state = { healthy: true, spawnCount: 0, spawnedArgs: [] as string[][], killCalls: [] as number[], nextPid: 4242, nextPort: 35789 };
+
+      const c = new K8sCompute(app);
+      c.setDeps({
+        loadK8sModule: makeHarness().deps.loadK8sModule,
+        spawnPortForward: (args: string[]): ChildProcess => {
+          state.spawnedArgs.push(args);
+          state.spawnCount++;
+          // After the 2nd spawn (the respawn), make health true so the probe exits.
+          if (state.spawnCount >= 2) state.healthy = true;
+          return new FakeChildProcess(state.nextPid) as unknown as ChildProcess;
+        },
+        allocatePort: async () => state.nextPort,
+        fetchHealth: async () => state.healthy,
+        isPidAlive: () => true,
+        killProcess: (pid: number) => { state.killCalls.push(pid); },
+        probeArkdInPod: async () => true,
+      });
 
       const h = await c.provision({ tags: { name: "w" }, config: {} });
-      expect(harness.spawnedArgs).toHaveLength(1);
+      expect(state.spawnedArgs).toHaveLength(1);
       const originalPid = (h.meta as any).k8s.portForwardPid;
 
-      // Give the next spawn a different PID so the meta swap is observable.
-      harness.nextPid = 5555;
-      harness.nextPort = 60002;
+      // Simulate the tunnel going stale after provision.
+      state.healthy = false;
+      state.nextPid = 5555;
+      state.nextPort = 60002;
 
       await c.ensureReachable!(h, { app, sessionId: "s-1" });
 
       // The orphan kubectl PID must have been killed.
-      expect(harness.killCalls).toEqual([originalPid]);
+      expect(state.killCalls).toEqual([originalPid]);
       // A fresh `kubectl port-forward` was spawned.
-      expect(harness.spawnedArgs).toHaveLength(2);
+      expect(state.spawnedArgs).toHaveLength(2);
       // Meta now points at the freshly spawned PID + port.
       expect((h.meta as any).k8s.portForwardPid).toBe(5555);
       expect((h.meta as any).k8s.arkdLocalPort).toBe(60002);
@@ -461,5 +486,48 @@ describe("isInClusterHosted", () => {
     expect(isInClusterHosted()).toBe(true);
     if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s; else delete process.env.KUBERNETES_SERVICE_HOST;
     if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
+  });
+});
+
+describe("provision reads pod IP", () => {
+  it("meta.podIp is populated from pod status after provision", async () => {
+    const podIpFromApi = "10.244.1.42";
+
+    // Build a full fake API that includes readNamespacedPod returning podIP.
+    const fakeApi = {
+      readNamespace: async () => ({ metadata: { name: "ark" } }),
+      createNamespace: async () => ({}),
+      createNamespacedPod: async () => ({}),
+      readNamespacedPod: async () => ({
+        status: { phase: "Running", podIP: podIpFromApi },
+      }),
+      deleteNamespacedPod: async () => ({}),
+    };
+    const fakeK8sModule = {
+      KubeConfig: class {
+        loadFromDefault() {}
+        makeApiClient() { return fakeApi; }
+      },
+      CoreV1Api: class {},
+    };
+
+    const c = new K8sCompute(app);
+    c.setDeps({
+      loadK8sModule: async () => fakeK8sModule as any,
+      spawnPortForward: () => ({ pid: 999, stdout: null, stderr: null, on: () => {} } as any),
+      allocatePort: async () => 45678,
+      fetchHealth: async () => true, // tunnel immediately healthy
+      isPidAlive: () => true,
+      killProcess: () => {},
+      probeArkdInPod: async () => true, // stub arkd readiness check
+    });
+
+    const handle = await c.provision({
+      tags: { name: "pod-ip-test" },
+      config: { namespace: "ark", image: "test-image" },
+    });
+
+    const meta = (handle.meta as any).k8s;
+    expect(meta.podIp).toBe(podIpFromApi);
   });
 });
