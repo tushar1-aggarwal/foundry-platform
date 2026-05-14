@@ -531,3 +531,56 @@ describe("provision reads pod IP", () => {
     expect(meta.podIp).toBe(podIpFromApi);
   });
 });
+
+describe("getArkdUrl in-cluster mode", () => {
+  it("returns pod IP URL when isInClusterHosted() is true", () => {
+    const savedK8s = process.env.KUBERNETES_SERVICE_HOST;
+    const savedMode = process.env.ARK_MODE;
+    process.env.KUBERNETES_SERVICE_HOST = "10.0.0.1";
+    process.env.ARK_MODE = "hosted";
+
+    const c = new K8sCompute(app);
+    const handle: ComputeHandle = {
+      kind: "k8s" as const,
+      name: "ark-test",
+      meta: {
+        k8s: {
+          podName: "ark-test",
+          namespace: "ark",
+          portForwardPid: null,
+          arkdLocalPort: 0,
+          podIp: "10.244.1.99",
+        },
+      },
+    };
+    const url = c.getArkdUrl(handle);
+    expect(url).toBe("http://10.244.1.99:19300");
+
+    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s; else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
+  });
+
+  it("returns localhost URL when not in cluster", () => {
+    const savedK8s = process.env.KUBERNETES_SERVICE_HOST;
+    delete process.env.KUBERNETES_SERVICE_HOST;
+
+    const c = new K8sCompute(app);
+    const handle: ComputeHandle = {
+      kind: "k8s" as const,
+      name: "ark-test",
+      meta: {
+        k8s: {
+          podName: "ark-test",
+          namespace: "ark",
+          portForwardPid: null,
+          arkdLocalPort: 41845,
+          podIp: "10.244.1.99",
+        },
+      },
+    };
+    const url = c.getArkdUrl(handle);
+    expect(url).toBe("http://localhost:41845");
+
+    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s;
+  });
+});

@@ -443,6 +443,17 @@ export class K8sCompute implements Compute {
     const stepCtx = { compute: h.name, podName: meta.podName, namespace: meta.namespace };
 
     const fn = async (): Promise<void> => {
+      // In-cluster: pod IP is directly routable. Skip port-forward entirely
+      // (F3.5 adds a health probe here; for now just bail out early).
+      if (isInClusterHosted() && meta.podIp) {
+        logInfo("compute", "k8s: skipping port-forward (in-cluster mode, using pod IP)", {
+          compute: h.name,
+          podName: meta.podName,
+          podIp: meta.podIp,
+        });
+        return;
+      }
+
       // Idempotent reuse: PID alive AND arkd answers /health through the
       // recorded port. Either gate failing means we kill any orphan and
       // respawn.
@@ -558,6 +569,10 @@ export class K8sCompute implements Compute {
 
   getArkdUrl(h: ComputeHandle): string {
     const meta = this.readMeta(h);
+    if (isInClusterHosted() && meta.podIp) {
+      // In-cluster: route directly to the pod IP. No port-forward needed.
+      return `http://${meta.podIp}:${ARKD_POD_PORT}`;
+    }
     return `http://localhost:${meta.arkdLocalPort}`;
   }
 
