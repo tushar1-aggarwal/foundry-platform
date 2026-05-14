@@ -11,8 +11,11 @@ import { join } from "path";
 import type { AppContext } from "../app.js";
 import type { Executor, ExecutorStatus } from "../executor.js";
 import { getExecutor } from "../executor.js";
-import { logDebug, logInfo, logWarn } from "../observability/structured-log.js";
+import { logDebug, logError, logInfo, logWarn } from "../observability/structured-log.js";
 import { resolveComputeTarget } from "../compute-resolver.js";
+import { ArkdUnreachableError } from "../../arkd/common/index.js";
+
+const UNREACHABLE_BUDGET = 5; // consecutive unreachable probes before marking session failed
 
 /**
  * Read the exit-code sentinel for a session, if the launcher wrote one.
@@ -146,11 +149,101 @@ async function probeSessionStatus(
   return executor.status(handle);
 }
 
+/**
+ * One poller tick. Exported as _tickForTest so tests can drive ticks manually
+ * without relying on setInterval timing. NOT part of the public API.
+ *
+ * @param state - mutable per-poller state; caller must pass the same object on every tick
+ */
+export async function _tickForTest(
+  app: AppContext,
+  sessionId: string,
+  handle: string,
+  executor: Executor,
+  state: { consecutiveUnreachable: number },
+): Promise<void> {
+  // Exit-code sentinel: the launcher writes $ARK_SESSION_DIR/exit-code
+  // when the agent process exits non-zero. `exec bash` keeps the tmux
+  // pane alive for post-mortem inspection, so executor.status() still
+  // reports "running" -- we need this side-channel to flip the Ark
+  // session to "failed". Bug 3 in the session-dispatch cascade.
+  const exitCode = readExitCodeSentinel(app.config.dirs.tracks, sessionId);
+  if (exitCode !== null) {
+    app.statusPollers.stop(sessionId);
+
+    const session = await app.sessions.get(sessionId);
+    if (!session || session.status !== "running") return;
+
+    // Tail the stderr/log for a helpful reason, best-effort.
+    let tail = "";
+    try {
+      const stderrPath = join(app.config.dirs.tracks, sessionId, "stderr.log");
+      if (existsSync(stderrPath)) {
+        tail = readFileSync(stderrPath, "utf-8").split("\n").slice(-20).join("\n").trim();
+      }
+    } catch {
+      logDebug("status", "stderr tail best-effort");
+    }
+
+    const reason = tail ? `Claude exited with code ${exitCode}\n${tail}` : `Claude exited with code ${exitCode}`;
+    await app.sessions.update(sessionId, {
+      status: "failed",
+      error: reason,
+      session_id: null,
+    });
+
+    await app.events.log(sessionId, "session_failed", {
+      stage: session.stage,
+      actor: "system",
+      data: { reason: "agent exit-code sentinel", exitCode },
+    });
+
+    logInfo("session", `status-poller: ${sessionId} -> failed (exit code ${exitCode})`);
+    return;
+  }
+
+  // Probe with ArkdUnreachableError budget.
+  let status: ExecutorStatus;
+  try {
+    status = await probeSessionStatus(app, sessionId, handle, executor);
+    state.consecutiveUnreachable = 0; // reset on any successful probe
+  } catch (err: any) {
+    if (err instanceof ArkdUnreachableError) {
+      state.consecutiveUnreachable++;
+      logWarn(
+        "status",
+        `status-poller: arkd unreachable for ${sessionId} (${state.consecutiveUnreachable}/${UNREACHABLE_BUDGET}): ${err.message}`,
+      );
+      if (state.consecutiveUnreachable >= UNREACHABLE_BUDGET) {
+        app.statusPollers.stop(sessionId);
+        const session = await app.sessions.get(sessionId);
+        if (session && session.status === "running") {
+          const errMsg = `arkd unreachable: status poller could not reach arkd after ${UNREACHABLE_BUDGET} consecutive retries: ${err.message}`;
+          await app.sessions.update(sessionId, { status: "failed", error: errMsg, session_id: null });
+          await app.events.log(sessionId, "session_failed", {
+            stage: session.stage,
+            actor: "system",
+            data: { reason: "arkd unreachable", attempts: UNREACHABLE_BUDGET },
+          });
+          logError("status", `status-poller: ${sessionId} -> failed (arkd unreachable after ${UNREACHABLE_BUDGET} retries)`);
+        }
+      }
+      return;
+    }
+    logWarn("status", `polling tick failed: ${err?.message ?? err}`);
+    return;
+  }
+
+  // --- status handling (rest of tick logic follows) ---
+  return _handleStatus(app, sessionId, handle, status);
+}
+
 export function startStatusPoller(app: AppContext, sessionId: string, handle: string, executorName: string): void {
   const pollers = app.statusPollers;
   // Don't double-poll
   if (pollers.has(sessionId)) return;
 
+  const state = { consecutiveUnreachable: 0 };
   let tick = 0;
   const interval = setInterval(async () => {
     tick++;
@@ -161,133 +254,23 @@ export function startStatusPoller(app: AppContext, sessionId: string, handle: st
         return;
       }
 
-      // Exit-code sentinel: the launcher writes $ARK_SESSION_DIR/exit-code
-      // when the agent process exits non-zero. `exec bash` keeps the tmux
-      // pane alive for post-mortem inspection, so executor.status() still
-      // reports "running" -- we need this side-channel to flip the Ark
-      // session to "failed". Bug 3 in the session-dispatch cascade.
-      const exitCode = readExitCodeSentinel(app.config.dirs.tracks, sessionId);
-      if (exitCode !== null) {
-        stopStatusPoller(app, sessionId);
-
-        const session = await app.sessions.get(sessionId);
-        if (!session || session.status !== "running") return;
-
-        // Tail the stderr/log for a helpful reason, best-effort.
-        let tail = "";
-        try {
-          const stderrPath = join(app.config.dirs.tracks, sessionId, "stderr.log");
-          if (existsSync(stderrPath)) {
-            tail = readFileSync(stderrPath, "utf-8").split("\n").slice(-20).join("\n").trim();
-          }
-        } catch {
-          logDebug("status", "stderr tail best-effort");
-        }
-
-        const reason = tail ? `Claude exited with code ${exitCode}\n${tail}` : `Claude exited with code ${exitCode}`;
-        await app.sessions.update(sessionId, {
-          status: "failed",
-          error: reason,
-          session_id: null,
-        });
-
-        await app.events.log(sessionId, "session_failed", {
-          stage: session.stage,
-          actor: "system",
-          data: { reason: "agent exit-code sentinel", exitCode },
-        });
-
-        logInfo("session", `status-poller: ${sessionId} -> failed (exit code ${exitCode})`);
-        return;
-      }
-
-      const status = await probeSessionStatus(app, sessionId, handle, executor);
-
       // Every 5th tick (~15s), snapshot the process tree for observability
-      if (tick % 5 === 0 && status.state === "running") {
+      if (tick % 5 === 0) {
         try {
-          const { snapshotSessionTree } = await import("./process-tree.js");
-          const tree = await snapshotSessionTree(handle);
-          if (tree) {
-            await app.sessions.mergeConfig(sessionId, { process_tree: tree });
-          }
-        } catch {
-          logDebug("status", "best-effort");
-        }
-      }
-
-      if (status.state === "completed" || status.state === "failed" || status.state === "not_found") {
-        stopStatusPoller(app, sessionId);
-
-        const session = await app.sessions.get(sessionId);
-        if (!session || session.status !== "running") return;
-
-        // Defensive guard: with explicit stopStatusPoller calls in stage-advance,
-        // this branch should never fire on a healthy stage handoff. Kept as a
-        // safety net for direct sessions.update() calls that bypass StageAdvancer.
-        if (session.session_id && session.session_id !== handle) return;
-
-        // "not_found" means the tmux session exited (process finished) -- treat as completed
-        const newStatus = status.state === "failed" ? "failed" : "completed";
-        const error = status.state === "failed" ? (status as { error?: string }).error : null;
-
-        // Under Temporal orchestration, skip the brief "completed" write on
-        // success: external observers polling session.status for a terminal
-        // state would race the workflow's next-stage dispatch and observe
-        // the inter-stage gap as a false success. Write "ready" directly --
-        // awaitStageCompletionActivity is taught to accept "ready" as a
-        // stage-done signal. Failures still write "failed" so the workflow
-        // can surface them.
-        const writeStatus = newStatus === "completed" && session.orchestrator === "temporal" ? "ready" : newStatus;
-        await app.sessions.update(sessionId, {
-          status: writeStatus,
-          error: error ?? null,
-          session_id: null,
-        });
-
-        await app.events.log(sessionId, `session_${newStatus}`, {
-          stage: session.stage,
-          actor: "system",
-          data: { reason: "agent process exited", exitCode: (status as { exitCode?: number }).exitCode },
-        });
-
-        logInfo("session", `status-poller: ${sessionId} -> ${newStatus}`);
-
-        // Advance flow for multi-stage pipelines (same as Claude hook path).
-        // Use mediateStageHandoff instead of raw advance() so auto-dispatch fires.
-        if (newStatus === "completed") {
-          if (session.orchestrator === "temporal") {
-            // Under Temporal the workflow's awaitStageCompletionActivity
-            // sees the "ready" we wrote above and dispatches the next stage
-            // via dispatchStageActivity with the workflow's retry envelope.
-            // Running the bespoke handoff here would race that.
-            logDebug("status", `status_poller: ${sessionId} -> ready (Temporal workflow drives advancement)`);
-          } else {
-            // Bespoke path: clear error + flip back to "ready" so auto-gate
-            // doesn't reject, then run the handoff which auto-dispatches the
-            // next stage in-process.
-            await app.sessions.update(sessionId, { status: "ready", error: null });
-            try {
-              await app.sessionHooks.mediateStageHandoff(sessionId, {
-                autoDispatch: true,
-                source: "status_poller",
-              });
-            } catch (err: any) {
-              // advance may fail if flow is done
-              logWarn("status", `mediateStageHandoff failed for ${sessionId}: ${err?.message ?? err}`);
+          const session = await app.sessions.get(sessionId);
+          if (session) {
+            const { snapshotSessionTree } = await import("./process-tree.js");
+            const tree = await snapshotSessionTree(handle);
+            if (tree) {
+              await app.sessions.mergeConfig(sessionId, { process_tree: tree });
             }
           }
-        }
-
-        // Send OS notification
-        try {
-          const { sendOSNotification } = await import("../notify.js");
-          const title = newStatus === "completed" ? "Agent completed" : "Agent failed";
-          await sendOSNotification(`Ark: ${title}`, session.summary ?? sessionId);
         } catch {
           logDebug("status", "best-effort");
         }
       }
+
+      await _tickForTest(app, sessionId, handle, executor, state);
     } catch (err: any) {
       // Don't crash the poller; surface the error in structured log.
       logWarn("status", `polling tick failed: ${err?.message ?? err}`);
@@ -295,6 +278,86 @@ export function startStatusPoller(app: AppContext, sessionId: string, handle: st
   }, 3000); // Check every 3 seconds
 
   pollers.set(sessionId, interval);
+}
+
+async function _handleStatus(
+  app: AppContext,
+  sessionId: string,
+  handle: string,
+  status: ExecutorStatus,
+): Promise<void> {
+  if (status.state === "completed" || status.state === "failed" || status.state === "not_found") {
+    stopStatusPoller(app, sessionId);
+
+    const session = await app.sessions.get(sessionId);
+    if (!session || session.status !== "running") return;
+
+    // Defensive guard: with explicit stopStatusPoller calls in stage-advance,
+    // this branch should never fire on a healthy stage handoff. Kept as a
+    // safety net for direct sessions.update() calls that bypass StageAdvancer.
+    if (session.session_id && session.session_id !== handle) return;
+
+    // "not_found" means the tmux session exited (process finished) -- treat as completed
+    const newStatus = status.state === "failed" ? "failed" : "completed";
+    const error = status.state === "failed" ? (status as { error?: string }).error : null;
+
+    // Under Temporal orchestration, skip the brief "completed" write on
+    // success: external observers polling session.status for a terminal
+    // state would race the workflow's next-stage dispatch and observe
+    // the inter-stage gap as a false success. Write "ready" directly --
+    // awaitStageCompletionActivity is taught to accept "ready" as a
+    // stage-done signal. Failures still write "failed" so the workflow
+    // can surface them.
+    const writeStatus = newStatus === "completed" && session.orchestrator === "temporal" ? "ready" : newStatus;
+    await app.sessions.update(sessionId, {
+      status: writeStatus,
+      error: error ?? null,
+      session_id: null,
+    });
+
+    await app.events.log(sessionId, `session_${newStatus}`, {
+      stage: session.stage,
+      actor: "system",
+      data: { reason: "agent process exited", exitCode: (status as { exitCode?: number }).exitCode },
+    });
+
+    logInfo("session", `status-poller: ${sessionId} -> ${newStatus}`);
+
+    // Advance flow for multi-stage pipelines (same as Claude hook path).
+    // Use mediateStageHandoff instead of raw advance() so auto-dispatch fires.
+    if (newStatus === "completed") {
+      if (session.orchestrator === "temporal") {
+        // Under Temporal the workflow's awaitStageCompletionActivity
+        // sees the "ready" we wrote above and dispatches the next stage
+        // via dispatchStageActivity with the workflow's retry envelope.
+        // Running the bespoke handoff here would race that.
+        logDebug("status", `status_poller: ${sessionId} -> ready (Temporal workflow drives advancement)`);
+      } else {
+        // Bespoke path: clear error + flip back to "ready" so auto-gate
+        // doesn't reject, then run the handoff which auto-dispatches the
+        // next stage in-process.
+        await app.sessions.update(sessionId, { status: "ready", error: null });
+        try {
+          await app.sessionHooks.mediateStageHandoff(sessionId, {
+            autoDispatch: true,
+            source: "status_poller",
+          });
+        } catch (err: any) {
+          // advance may fail if flow is done
+          logWarn("status", `mediateStageHandoff failed for ${sessionId}: ${err?.message ?? err}`);
+        }
+      }
+    }
+
+    // Send OS notification
+    try {
+      const { sendOSNotification } = await import("../notify.js");
+      const title = newStatus === "completed" ? "Agent completed" : "Agent failed";
+      await sendOSNotification(`Ark: ${title}`, session.summary ?? sessionId);
+    } catch {
+      logDebug("status", "best-effort");
+    }
+  }
 }
 
 export function stopStatusPoller(app: AppContext, sessionId: string): void {

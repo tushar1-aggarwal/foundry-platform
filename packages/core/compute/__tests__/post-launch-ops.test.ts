@@ -7,7 +7,7 @@
  * legacy registry, these operations only exist on the new interfaces.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, test, beforeAll, afterAll } from "bun:test";
 
 import type { ArkdClient } from "../../../arkd/client/index.js";
 import { AppContext } from "../../app.js";
@@ -225,5 +225,60 @@ describe("ComputeHandle.getMetrics on local target", () => {
 
     const snapshot = await handle!.getMetrics!();
     expect(snapshot.metrics).toBeDefined();
+  });
+});
+
+describe("status poller retry budget", () => {
+  test("marks session failed after 5 consecutive ArkdUnreachableError probes", async () => {
+    const { ArkdUnreachableError } = await import("../../../arkd/common/index.js");
+    const { _tickForTest } = await import("../../executors/status-poller.js");
+
+    const updates: { status: string; error: string | null }[] = [];
+    const fakeApp = {
+      statusPollers: {
+        has: () => false,
+        set: () => {},
+        stop: () => {},
+      },
+      config: { dirs: { tracks: "/tmp/no-tracks-test" } },
+      pluginRegistry: { executor: () => null },
+      sessions: {
+        get: async () => ({
+          id: "s-test",
+          status: "running",
+          stage: "code",
+          orchestrator: "temporal",
+          compute_name: null,
+          session_id: "ark-handle",
+          config: null,
+        }),
+        update: async (_id: string, patch: { status: string; error: string | null }) => {
+          updates.push(patch);
+        },
+        mergeConfig: async () => {},
+      },
+      events: { log: async () => {} },
+      sessionHooks: { mediateStageHandoff: async () => {} },
+    } as any;
+
+    // Executor that always throws ArkdUnreachableError on status().
+    const unreachableExecutor = {
+      status: async () => {
+        throw new ArkdUnreachableError(
+          "arkd GET http://127.0.0.1:0 failed: ECONNREFUSED",
+          { url: "http://127.0.0.1:0", method: "GET", path: "/health", attempts: 1 },
+        );
+      },
+    } as any;
+
+    const state = { consecutiveUnreachable: 0 };
+    for (let i = 0; i < 5; i++) {
+      await _tickForTest(fakeApp, "s-test", "ark-handle", unreachableExecutor, state);
+    }
+
+    // After 5 consecutive unreachable probes, session should be marked failed.
+    expect(updates.length).toBeGreaterThanOrEqual(1);
+    expect(updates[updates.length - 1].status).toBe("failed");
+    expect(updates[updates.length - 1].error).toContain("unreachable");
   });
 });
