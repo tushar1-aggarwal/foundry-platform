@@ -43,3 +43,20 @@ export class ArkdClientTransportError extends Error {
     this.attempts = opts.attempts;
   }
 }
+
+/**
+ * Thrown when the arkd endpoint is structurally unreachable: ECONNREFUSED,
+ * ETIMEDOUT, DNS failure, or similar network-level "nothing is listening"
+ * conditions. Distinct from ArkdClientTransportError (transient socket
+ * resets on a healthy server). Callers with a retry budget (e.g. status
+ * poller) catch this to count consecutive unreachable reads.
+ */
+export class ArkdUnreachableError extends ArkdClientTransportError {
+  constructor(
+    message: string,
+    opts: { url: string; method: string; path: string; attempts: number; cause?: unknown },
+  ) {
+    super(message, opts);
+    this.name = "ArkdUnreachableError";
+  }
+}

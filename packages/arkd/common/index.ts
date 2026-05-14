@@ -7,4 +7,4 @@
 export type * from "./types.js";
 export { VERSION, DEFAULT_PORT, AUTH_EXEMPT_PATHS, SAFE_TMUX_NAME_RE, SUBSCRIBED_ACK } from "./constants.js";
 export { requireSafeTmuxName } from "./validation.js";
-export { ArkdClientError, ArkdClientTransportError } from "./errors.js";
+export { ArkdClientError, ArkdClientTransportError, ArkdUnreachableError } from "./errors.js";
