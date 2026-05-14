@@ -147,21 +147,18 @@ describe("claude-agent.probeStatus (#435)", () => {
     // had { running: false, exitCode: 1 } ready under ark-s-<sid>.
     //
     // Strategy: stub app.resolveComputeTarget to return a target whose
-    // compute.attachExistingHandle is a stub returning null -- this directly
-    // models the template-row scenario without needing test-only hooks on
-    // LocalCompute. The session carries a pre-decorated compute_handle (the
-    // per-dispatch handle written by runTargetLifecycle) whose statusProcess
-    // reports exitCode:1. The fix must consult that persisted handle instead
-    // of giving up. See status-poller.ts:129-137 for the precedent pattern.
+    // compute.attachExistingHandle is a stub returning null AND whose
+    // compute.rehydrateHandle is a stub returning a methoded handle. The
+    // session carries a RAW persisted compute_handle (kind/name/meta only --
+    // no method closures, because JSON.stringify drops them; target-resolver.ts
+    // documents this). The fix must call rehydrateHandle on the persisted
+    // state to re-attach statusProcess, not pass the raw handle directly.
+    // See status-poller.ts:129-137 for the precedent pattern.
     const session = await makeSessionPinnedToLocal("template-row-phantom-handle");
 
-    // Wire a real arkd stub so we can confirm it IS called if the fix lands.
-    // (If the fix is absent, probeStatus never reaches statusProcess.)
-    stubArkdStatusProcess({ running: false, exitCode: 1 });
-
-    // Patch session.config to carry a pre-decorated compute_handle whose
-    // statusProcess reports exitCode:1 -- this is what runTargetLifecycle
-    // persists for K8s dispatches (pod_name lives here, not on the template row).
+    // Persist a RAW handle on session.config -- kind/name/meta only, no
+    // statusProcess closure. This is what runTargetLifecycle writes via
+    // persistHandleState (target-resolver.ts) after stripping method closures.
     const sessionWithHandle = {
       ...session,
       config: {
@@ -169,14 +166,21 @@ describe("claude-agent.probeStatus (#435)", () => {
         compute_handle: {
           kind: "local" as const,
           name: "local",
-          meta: {},
-          statusProcess: async (_h: string) => ({ running: false as const, exitCode: 1 }),
+          meta: { mock_pod: "ark-mock-pod" },
         },
       },
     };
 
-    // Override resolveComputeTarget so attachExistingHandle returns null,
-    // simulating K8sCompute receiving a template config without pod_name.
+    // Track whether rehydrateHandle is called -- the fix must use it to
+    // re-attach methods. We supply a methoded handle so statusProcess works.
+    let rehydrateCalled = false;
+    const methodedHandle = {
+      kind: "local" as const,
+      name: "local",
+      meta: { mock_pod: "ark-mock-pod" },
+      statusProcess: async (_h: string) => ({ running: false as const, exitCode: 1 }),
+    } as any;
+
     const origResolve = app.resolveComputeTarget.bind(app);
     (app as any).resolveComputeTarget = async (s: any) => {
       const result = await origResolve(s);
@@ -185,6 +189,12 @@ describe("claude-agent.probeStatus (#435)", () => {
           ...result.target.compute,
           // Simulate template row: attachExistingHandle sees no pod_name -> null
           attachExistingHandle: (_row: any) => null,
+          // Rehydrate the raw persisted state into a methoded handle. This is
+          // what the fix must call to recover statusProcess.
+          rehydrateHandle: (state: any) => {
+            rehydrateCalled = true;
+            return { ...methodedHandle, meta: state.meta ?? methodedHandle.meta };
+          },
         } as any;
       }
       return result;
@@ -197,12 +207,12 @@ describe("claude-agent.probeStatus (#435)", () => {
         handle: `ark-${session.id}`,
       });
 
-      // Without the fix this returns { state: "running" }.
-      // With the fix it must consult session.config.compute_handle and return failed.
+      // Without the fix this returns { state: "running" } silently.
+      // With the fix it must rehydrate the persisted handle and return failed.
+      expect(rehydrateCalled).toBe(true);
       expect(probeResult.state).toBe("failed");
       expect((probeResult as { error?: string }).error).toMatch(/exit.*1/i);
     } finally {
-      // Restore original resolveComputeTarget
       (app as any).resolveComputeTarget = origResolve;
     }
   });
