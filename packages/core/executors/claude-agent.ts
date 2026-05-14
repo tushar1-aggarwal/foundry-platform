@@ -364,19 +364,25 @@ export const claudeAgentExecutor: Executor = {
     // "docs-k8s"), the template config has no pod_name, so
     // K8sCompute.attachExistingHandle returns null. The actual pod metadata
     // was persisted to session.config.compute_handle by runTargetLifecycle at
-    // provision time. Fall back to that persisted handle -- mirroring the
-    // precedent at status-poller.ts:129-137 -- so we can still call
-    // statusProcess and surface the real exit code instead of stalling at
-    // "running" forever.
-    const persistedHandle =
-      ((session.config as { compute_handle?: import("../compute/types.js").ComputeHandle } | null | undefined)
-        ?.compute_handle as import("../compute/types.js").ComputeHandle | undefined) ?? undefined;
+    // provision time. That persisted handle is JSON-only (method closures
+    // don't survive JSON.stringify -- see target-resolver.ts:115-133), so we
+    // can't call statusProcess on it directly; we must rehydrate via
+    // Compute.rehydrateHandle to re-attach behaviour. Without this fallback
+    // probeStatus stalls at "running" forever even after the agent exits
+    // non-zero, hanging the session until the workflow's heartbeatTimeout.
+    const persistedState = ((session.config as { compute_handle?: unknown } | null | undefined)?.compute_handle ??
+      undefined) as import("../compute/types.js").PersistedComputeHandleState | undefined;
+    const validPersistedState =
+      persistedState && typeof persistedState.kind === "string" && typeof persistedState.name === "string"
+        ? persistedState
+        : undefined;
     const computeHandle =
       target.compute.attachExistingHandle?.({
         name: compute.name,
         status: compute.status,
         config: (compute.config ?? {}) as Record<string, unknown>,
-      }) ?? persistedHandle ?? null;
+      }) ??
+      (validPersistedState ? target.compute.rehydrateHandle(validPersistedState) : null);
     if (!computeHandle?.statusProcess) {
       // Compute handle can't tell us about processes -- safest answer is
       // "still running" so we don't false-positive into completed.
