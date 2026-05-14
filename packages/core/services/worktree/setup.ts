@@ -248,7 +248,7 @@ async function setupWorktree(
   branch?: string,
 ): Promise<string | null> {
   const wtPath = join(app.config.dirs.worktrees, sessionId);
-  if (existsSync(wtPath)) {
+  if (existsSync(join(wtPath, ".git"))) {
     await applyWorktreeGitIdentity(app, wtPath);
     return wtPath;
   }
