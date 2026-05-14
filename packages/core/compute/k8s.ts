@@ -448,12 +448,29 @@ export class K8sCompute implements Compute {
     const stepCtx = { compute: h.name, podName: meta.podName, namespace: meta.namespace };
 
     const fn = async (): Promise<void> => {
-      // In-cluster: pod IP is directly routable. Skip port-forward entirely
-      // (F3.5 adds a health probe here; for now just bail out early).
+      // In-cluster: pod IP is directly routable. Probe it; throw on failure.
       if (isInClusterHosted() && meta.podIp) {
-        logInfo("compute", "k8s: skipping port-forward (in-cluster mode, using pod IP)", {
+        const clusterProbeUrl = `http://${meta.podIp}:${ARKD_POD_PORT}/health`;
+        logInfo("compute", "k8s: in-cluster mode, probing pod IP directly", {
           compute: h.name,
           podName: meta.podName,
+          podIp: meta.podIp,
+          probeUrl: clusterProbeUrl,
+        });
+        const healthy = await this.deps.fetchHealth(clusterProbeUrl, 5000);
+        if (!healthy) {
+          logError("compute", "k8s: in-cluster pod IP probe failed", {
+            compute: h.name,
+            podName: meta.podName,
+            podIp: meta.podIp,
+          });
+          throw new Error(
+            `k8s in-cluster: pod ${meta.podName} not reachable at ${meta.podIp}:${ARKD_POD_PORT} -- ` +
+            `pod may be evicted, crash-looping, or IP changed. Re-provision required.`,
+          );
+        }
+        logInfo("compute", "k8s: in-cluster pod IP probe succeeded", {
+          compute: h.name,
           podIp: meta.podIp,
         });
         return;

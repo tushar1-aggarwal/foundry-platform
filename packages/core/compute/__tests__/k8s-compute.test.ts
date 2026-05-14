@@ -628,3 +628,87 @@ describe("portForwardPid not written in cluster mode", () => {
     if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
   });
 });
+
+describe("ensureReachable in-cluster probes pod IP", () => {
+  it("probes http://<podIp>:19300/health when in cluster mode", async () => {
+    const savedK8s = process.env.KUBERNETES_SERVICE_HOST;
+    const savedMode = process.env.ARK_MODE;
+    process.env.KUBERNETES_SERVICE_HOST = "10.0.0.1";
+    process.env.ARK_MODE = "hosted";
+
+    const probed: string[] = [];
+    const c = new K8sCompute(app);
+    c.setDeps({
+      loadK8sModule: makeHarness().deps.loadK8sModule,
+      spawnPortForward: () => ({ pid: 999 } as any),
+      allocatePort: async () => 12345,
+      fetchHealth: async (url: string) => { probed.push(url); return true; },
+      isPidAlive: () => false,
+      killProcess: () => {},
+      probeArkdInPod: async () => true,
+    });
+
+    const handle: ComputeHandle = {
+      kind: "k8s" as const,
+      name: "ark-test",
+      meta: {
+        k8s: {
+          podName: "ark-test",
+          namespace: "ark",
+          portForwardPid: null,
+          arkdLocalPort: 0,
+          podIp: "10.244.2.77",
+        },
+      },
+    };
+
+    await c.ensureReachable!(handle, {});
+
+    // In cluster mode, setupPortForward probes the pod IP path directly.
+    const clusterProbe = probed.find((u) => u.includes("10.244.2.77"));
+    expect(clusterProbe).toBe("http://10.244.2.77:19300/health");
+
+    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s; else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
+  });
+
+  it("throws clear error when pod IP probe fails in cluster mode", async () => {
+    const savedK8s2 = process.env.KUBERNETES_SERVICE_HOST;
+    const savedMode2 = process.env.ARK_MODE;
+    process.env.KUBERNETES_SERVICE_HOST = "10.0.0.1";
+    process.env.ARK_MODE = "hosted";
+
+    const c2 = new K8sCompute(app);
+    c2.setDeps({
+      loadK8sModule: makeHarness().deps.loadK8sModule,
+      spawnPortForward: () => ({ pid: 999 } as any),
+      allocatePort: async () => 12345,
+      fetchHealth: async () => false, // pod unreachable
+      isPidAlive: () => false,
+      killProcess: () => {},
+      probeArkdInPod: async () => true,
+    });
+
+    const handle2: ComputeHandle = {
+      kind: "k8s" as const,
+      name: "ark-test",
+      meta: {
+        k8s: {
+          podName: "ark-test-dead",
+          namespace: "ark",
+          portForwardPid: null,
+          arkdLocalPort: 0,
+          podIp: "10.244.2.88",
+        },
+      },
+    };
+
+    const err = await c2.ensureReachable!(handle2, {}).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("10.244.2.88");
+    expect((err as Error).message).toContain("19300");
+
+    if (savedK8s2 !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s2; else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode2 !== undefined) process.env.ARK_MODE = savedMode2; else delete process.env.ARK_MODE;
+  });
+});
