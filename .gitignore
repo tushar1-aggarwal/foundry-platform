@@ -51,3 +51,4 @@ PLAN.md
 **/.DS_Store
 out/
 .env.iso
+.env.test
