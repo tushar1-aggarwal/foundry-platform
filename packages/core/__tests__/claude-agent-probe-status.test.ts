@@ -137,4 +137,73 @@ describe("claude-agent.probeStatus (#435)", () => {
 
     expect(result.state).toBeDefined();
   });
+
+  it("falls back to session.config.compute_handle when attachExistingHandle returns null (template-row bug)", async () => {
+    // Regression for the docs-flow EKS hang: session.compute_name points at
+    // a TEMPLATE compute row (e.g. "docs-k8s") whose config has no pod_name.
+    // K8sCompute.attachExistingHandle returns null for that template row, so
+    // probeStatus previously hit the `!computeHandle?.statusProcess` guard
+    // and returned { state: "running" } forever even though arkd in the pod
+    // had { running: false, exitCode: 1 } ready under ark-s-<sid>.
+    //
+    // Strategy: stub app.resolveComputeTarget to return a target whose
+    // compute.attachExistingHandle is a stub returning null -- this directly
+    // models the template-row scenario without needing test-only hooks on
+    // LocalCompute. The session carries a pre-decorated compute_handle (the
+    // per-dispatch handle written by runTargetLifecycle) whose statusProcess
+    // reports exitCode:1. The fix must consult that persisted handle instead
+    // of giving up. See status-poller.ts:129-137 for the precedent pattern.
+    const session = await makeSessionPinnedToLocal("template-row-phantom-handle");
+
+    // Wire a real arkd stub so we can confirm it IS called if the fix lands.
+    // (If the fix is absent, probeStatus never reaches statusProcess.)
+    stubArkdStatusProcess({ running: false, exitCode: 1 });
+
+    // Patch session.config to carry a pre-decorated compute_handle whose
+    // statusProcess reports exitCode:1 -- this is what runTargetLifecycle
+    // persists for K8s dispatches (pod_name lives here, not on the template row).
+    const sessionWithHandle = {
+      ...session,
+      config: {
+        ...(session.config as object),
+        compute_handle: {
+          kind: "local" as const,
+          name: "local",
+          meta: {},
+          statusProcess: async (_h: string) => ({ running: false as const, exitCode: 1 }),
+        },
+      },
+    };
+
+    // Override resolveComputeTarget so attachExistingHandle returns null,
+    // simulating K8sCompute receiving a template config without pod_name.
+    const origResolve = app.resolveComputeTarget.bind(app);
+    (app as any).resolveComputeTarget = async (s: any) => {
+      const result = await origResolve(s);
+      if (result?.target?.compute) {
+        result.target.compute = {
+          ...result.target.compute,
+          // Simulate template row: attachExistingHandle sees no pod_name -> null
+          attachExistingHandle: (_row: any) => null,
+        } as any;
+      }
+      return result;
+    };
+
+    try {
+      const probeResult = await claudeAgentExecutor.probeStatus!({
+        app,
+        session: sessionWithHandle as any,
+        handle: `ark-${session.id}`,
+      });
+
+      // Without the fix this returns { state: "running" }.
+      // With the fix it must consult session.config.compute_handle and return failed.
+      expect(probeResult.state).toBe("failed");
+      expect((probeResult as { error?: string }).error).toMatch(/exit.*1/i);
+    } finally {
+      // Restore original resolveComputeTarget
+      (app as any).resolveComputeTarget = origResolve;
+    }
+  });
 });
