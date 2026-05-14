@@ -78,7 +78,12 @@ export interface K8sHandleMeta {
   podName: string;
   /** Namespace the pod lives in. */
   namespace: string;
-  /** PID of the `kubectl port-forward` subprocess (null if currently stopped). */
+  /**
+   * PID of the `kubectl port-forward` subprocess on the current host.
+   * LOCAL-DEV ONLY -- this PID is not portable across worker pods or
+   * restarts and is always null in in-cluster mode (where pod IP is used
+   * directly). Never write this to a shared DB column in cluster mode.
+   */
   portForwardPid: number | null;
   /** Host-side loopback port mapped to arkd's :19300 inside the pod. */
   arkdLocalPort: number;
@@ -485,7 +490,8 @@ export class K8sCompute implements Compute {
       });
       const child = this.deps.spawnPortForward(args);
       meta.arkdLocalPort = arkdLocalPort;
-      meta.portForwardPid = child.pid ?? null;
+      // local-dev only: in-cluster mode never reaches this branch (early return above)
+      meta.portForwardPid = isInClusterHosted() ? null : (child.pid ?? null);
       this.writeMeta(h, meta);
 
       // kubectl port-forward exits its CLI as soon as it spawns the bg
