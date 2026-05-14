@@ -15,7 +15,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
+# --ignore-scripts: @optave/codegraph pulls in better-sqlite3 as a transitive
+# dep; its `prebuild-install` postinstall fetches a native binary from GitHub
+# releases, which Zscaler MITM corrupts during corporate-network builds.
+# better-sqlite3 is never imported in src; skipping postinstall is safe.
+RUN bun install --frozen-lockfile --production --ignore-scripts
 
 # ── Stage 2: Build ───────────────────────────────────────────────────────────
 #
@@ -35,7 +39,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock tsconfig.json ./
-RUN bun install --frozen-lockfile
+# Same --ignore-scripts rationale as deps stage (see above).
+RUN bun install --frozen-lockfile --ignore-scripts
 
 # Copy source
 COPY packages/ packages/
