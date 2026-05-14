@@ -8,6 +8,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import { recordingPath } from "../recordings.js";
+import { isRepoUrl } from "../repo-url.js";
 
 import type { Executor, LaunchOpts, LaunchResult, ExecutorStatus } from "../executor.js";
 import * as claude from "../claude/claude.js";
@@ -188,8 +189,10 @@ export const claudeCodeExecutor: Executor = {
       }
     }
     // Resolve the original repo path so MCP servers from the source repo's
-    // .mcp.json can be merged into the worktree's .mcp.json.
-    const originalRepoDir = session.repo ? resolve(session.repo) : undefined;
+    // .mcp.json can be merged into the worktree's .mcp.json. Skip resolve()
+    // for remote URLs -- they have no local path meaning and resolve() would
+    // produce a mangled path like /cwd/https:/host/...
+    const originalRepoDir = session.repo && !isRepoUrl(session.repo) ? resolve(session.repo) : undefined;
     // Runtime-declared MCP servers + flow-level connectors. Runtime is the
     // broad opt-in (every session on this runtime gets the toolbelt); flow
     // connectors add per-flow MCP tools. See connectors/resolve.ts for the

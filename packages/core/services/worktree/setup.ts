@@ -12,6 +12,7 @@ import { promisify } from "util";
 import { execFile } from "child_process";
 
 import type { AppContext } from "../../app.js";
+import { isRepoUrl } from "../../repo-url.js";
 import type { Session, Compute } from "../../../types/index.js";
 import * as claude from "../../claude/claude.js";
 import { loadRepoConfig } from "../../repo-config.js";
@@ -71,9 +72,19 @@ export async function setupSessionWorktree(
   // would chase a dangling reference.
   const repoRaw = session.repo;
   const workdirRaw = session.workdir;
-  const hasExplicitRepo = repoRaw && repoRaw !== "." && repoRaw.trim() !== "";
+  // Only treat session.repo as a local path when it's an actual existing
+  // directory. A URL string or a bare basename from a remote-repo session
+  // (e.g. "recharge-h5-mobile") must not be passed to resolve() -- the
+  // resulting mangled path (/cwd/https:/host/... or /cwd/basename) doesn't
+  // exist and arkd /process/spawn rejects it. Existence check is the oracle:
+  // - real local repos: directory exists → use it
+  // - remote-repo basenames: directory doesn't exist → fall through to workdir
+  // - URLs: caught by isRepoUrl first so we never call resolve() on them
+  const repoCandidate =
+    repoRaw && repoRaw !== "." && repoRaw.trim() !== "" && !isRepoUrl(repoRaw) ? resolve(repoRaw) : null;
+  const hasExplicitRepo = repoCandidate !== null && existsSync(repoCandidate);
   const hasExplicitWorkdir = workdirRaw && workdirRaw !== "." && workdirRaw.trim() !== "";
-  const repoSource = hasExplicitRepo ? resolve(repoRaw!) : hasExplicitWorkdir ? resolve(workdirRaw!) : resolve(".");
+  const repoSource = hasExplicitRepo ? repoCandidate : hasExplicitWorkdir ? resolve(workdirRaw!) : resolve(".");
 
   let effectiveWorkdir = repoSource;
 

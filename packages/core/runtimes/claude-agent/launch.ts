@@ -705,6 +705,7 @@ export async function runAgentSdkLaunch(opts: RunAgentSdkLaunchOpts): Promise<Ru
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const baseURL = process.env.ANTHROPIC_BASE_URL;
   const customHeaders = process.env.ANTHROPIC_CUSTOM_HEADERS;
+  const claudeCodeOauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
   // Gateway wire-format compat -------------------------------------------------
   // ARK_COMPAT is a comma-separated list of compat modes set by the executor
@@ -858,13 +859,25 @@ export async function runAgentSdkLaunch(opts: RunAgentSdkLaunchOpts): Promise<Ru
   // the SDK's hardcoded `claude-haiku-4-5-20251001`. The executor sets
   // that env var from the agent-sdk runtime YAML's `default_haiku_model`
   // field, so we just propagate process.env without special-casing it.
+  // Gateway routing (base URL + custom headers) applies regardless of auth
+  // mode -- they describe where requests go, not how they authenticate. Only
+  // the credential branches on OAuth vs API key. When OAuth is present we
+  // also strip any inherited ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN from
+  // process.env so the SDK doesn't see conflicting credentials.
   const sdkEnv: Record<string, string | undefined> = {
     ...process.env,
-    ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
     ...(effectiveBaseURL ? { ANTHROPIC_BASE_URL: effectiveBaseURL } : {}),
     ...(customHeaders ? { ANTHROPIC_CUSTOM_HEADERS: customHeaders } : {}),
+    ...(claudeCodeOauthToken
+      ? { CLAUDE_CODE_OAUTH_TOKEN: claudeCodeOauthToken }
+      : apiKey
+        ? { ANTHROPIC_API_KEY: apiKey }
+        : {}),
   };
-  if (customHeaders) {
+  if (claudeCodeOauthToken) {
+    delete sdkEnv.ANTHROPIC_API_KEY;
+    delete sdkEnv.ANTHROPIC_AUTH_TOKEN;
+  } else if (customHeaders) {
     delete sdkEnv.ANTHROPIC_AUTH_TOKEN;
   }
 

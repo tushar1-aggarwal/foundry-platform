@@ -15,6 +15,7 @@
 .PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-temporal-worker dev-docker dev-control-plane dev-control-plane-down dev-control-plane-bootstrap claude-tfy pi-tfy web desktop \
         test test-file test-e2e test-e2e-fast test-e2e-web test-e2e-web-dev test-install test-watch test-e2e-local-bespoke test-e2e-control-plane test-e2e-control-plane-up test-e2e-control-plane-down test-e2e-t6-docker test-e2e-local-real-llm test-laptop-real-llm lint lint-fix \
         format format-check \
+        dev-kill \
         docs-cli \
         build build-cli build-web build-desktop \
         package package-cli package-desktop \
@@ -137,7 +138,11 @@ DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker
 dev-docker: ## Sub-target: Postgres :15433 + Redis :6379 containers (factored out of dev-control-plane)
 	@command -v docker >/dev/null 2>&1 || { echo "Docker required. Install Docker Desktop."; exit 1; }
 	@echo "\033[1mStarting Ark dev docker (Postgres + Redis)...\033[0m"
-	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d --wait
+	# Scope to postgres+redis only. The compose file also defines `temporal-worker`,
+	# but that service depends on the Temporal server (separate `ark-temporal` project)
+	# being up at host.docker.internal:7233. `dev-control-plane` brings the worker up
+	# explicitly after `dev-temporal`; running it here would fail `--wait`.
+	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d --wait postgres redis
 	@echo ""
 	@echo "  Postgres:  postgres://ark:ark@localhost:15433/ark"
 	@echo "  Redis:     redis://localhost:6379"
@@ -154,8 +159,18 @@ dev-temporal-worker: ## Sub-target: Temporal worker on host (Node + tsx; Bun lac
 	  echo "" && \
 	  exec tsx packages/core/temporal/worker.ts
 
-dev-control-plane: dev-docker dev-temporal ## Boot full laptop dev stack -- docker + arkd + temporal worker + ark server
+dev-control-plane: dev-temporal dev-docker ## Boot full laptop dev stack -- docker + arkd + temporal worker + ark server
 	@test -f .env.control-plane || { echo ".env.control-plane missing"; exit 1; }
+	@# Ensure host-side bun deps are present. Without this, arkd/server/daemon
+	@# crash immediately with `Cannot find module '@temporalio/activity'` on a
+	@# fresh checkout (or after a clean). Matches the `dev` target's pattern.
+	@$(BUN) install --silent
+	@# Pre-build the web bundle. The server has a lazy auto-build at
+	@# `packages/core/hosted/web.ts:195` with a 30s timeout that silently
+	@# swallows errors; Vite cold builds routinely exceed that on a fresh
+	@# checkout, leaving the UI as 404s. Build explicitly so the dist is
+	@# ready when `server start` initializes its static handler.
+	@$(MAKE) build-web --no-print-directory
 	@echo ""
 	@echo "\033[1mArk dev stack -- full laptop\033[0m"
 	@set -a && . ./.env.control-plane && set +a && \
@@ -227,6 +242,31 @@ bootstrap-key: ## Mint the first admin API key (auth-required deployments)
 	  echo "Restart the daemon with ARK_AUTH_REQUIRE_TOKEN=true to enable auth."; \
 	  echo "Key is persisted in the database; it survives the restart."; \
 	  ./ark server daemon stop >/dev/null 2>&1 || true
+
+dev-kill: ## Kill processes on dev ports (covers `make dev` and `make dev-control-plane`)
+	@# `make dev` uses fixed ports (8420 web, 5173 vite, 19100 conductor,
+	@# 19300 arkd, 19400 WS). `make dev-control-plane` uses a different set
+	@# from .env.control-plane (ARK_WEB_PORT, ARK_CONDUCTOR_PORT, ARK_ARKD_PORT,
+	@# typically 8421/19101/19301). Source the env if present so the
+	@# control-plane ports are picked up automatically; if not present, they
+	@# resolve to empty and are skipped without affecting the fixed-port pass.
+	@set -a; [ -f ./.env.control-plane ] && . ./.env.control-plane; set +a; \
+	 for port in 8420 5173 19100 19300 19400 $${ARK_WEB_PORT:-} $${ARK_CONDUCTOR_PORT:-} $${ARK_ARKD_PORT:-}; do \
+	  [ -z "$$port" ] && continue; \
+	  pids=$$(lsof -ti tcp:$$port 2>/dev/null); \
+	  if [ -n "$$pids" ]; then \
+	    echo "Killing PID(s) on :$$port -> $$pids"; \
+	    kill $$pids 2>/dev/null || true; \
+	    sleep 1; \
+	    pids=$$(lsof -ti tcp:$$port 2>/dev/null); \
+	    if [ -n "$$pids" ]; then \
+	      echo "  still alive, sending SIGKILL -> $$pids"; \
+	      kill -9 $$pids 2>/dev/null || true; \
+	    fi; \
+	  else \
+	    echo "Nothing listening on :$$port"; \
+	  fi; \
+	done
 
 spike-temporal-bun: ## Run the Phase 0 Bun / Temporal worker compat spike
 	@./scripts/spike-temporal-bun.sh
