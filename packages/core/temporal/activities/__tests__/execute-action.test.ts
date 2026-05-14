@@ -49,3 +49,47 @@ describe("executeActionActivity (happy path)", () => {
     }
   });
 });
+
+describe("executeActionActivity (idempotency, real db)", () => {
+  it("calls handler exactly once when invoked twice with the same (sessionId, stageIdx, action)", async () => {
+    const app = await AppContext.forTestAsync();
+    await app.boot();
+
+    try {
+      let invocations = 0;
+      ACTION_INDEX.set("count_invocations_test", {
+        name: "count_invocations_test",
+        execute: async () => {
+          invocations += 1;
+          return { ok: true, message: `invocation ${invocations}` };
+        },
+      });
+
+      const session = await app.sessions.create({ summary: "idempotency test", flow: "noop" });
+      await app.sessions.update(session.id, { stage: "test" });
+
+      injectDeps(depsFromApp(app));
+
+      // First call: real handler fires, ledger row inserted, invocations -> 1.
+      await executeActionActivity({
+        sessionId: session.id,
+        stageIdx: 0,
+        action: "count_invocations_test",
+      });
+
+      // Second call with identical key: withIdempotency sees the existing
+      // ledger row keyed on op_kind="action:count_invocations_test" + the
+      // idempotency key, and short-circuits with the cached result.
+      await executeActionActivity({
+        sessionId: session.id,
+        stageIdx: 0,
+        action: "count_invocations_test",
+      });
+
+      expect(invocations).toBe(1);
+    } finally {
+      ACTION_INDEX.delete("count_invocations_test");
+      await app.shutdown();
+    }
+  });
+});
