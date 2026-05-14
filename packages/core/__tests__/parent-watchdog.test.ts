@@ -88,6 +88,10 @@ describe("ARK_WATCH_PARENT parent-death watchdog", async () => {
       env: {
         ...process.env,
         ARK_WATCH_PARENT: "1",
+        // ark web boots a real AppContext; without ARK_KEK_BACKEND it would
+        // refuse to boot. ARK_KEK_TEST_STUB=1 installs a deterministic stub
+        // KEK in subprocesses so integration tests don't need AWS access.
+        ARK_KEK_TEST_STUB: "1",
       },
       stdout: "pipe",
       stderr: "pipe",

@@ -146,12 +146,19 @@ export class AppContext {
     // deployment fails at boot rather than at first secret read.
     if (this.options.stubKek) {
       this._loadedKek = this.options.stubKek;
+    } else if (process.env.ARK_KEK_TEST_STUB === "1") {
+      // Test-only escape hatch for subprocess-spawning integration tests
+      // (parent-watchdog, e2e) that boot a real CLI but can't reach AWS.
+      // Production never sets this env var; it's not advertised in docs.
+      this._loadedKek = {
+        material: new SecureBuffer(new Uint8Array(32).fill(0xa5)),
+        version: 1,
+        describe: () => "stub:ARK_KEK_TEST_STUB@v1",
+      };
     } else {
       const kekConfig = this.config.kek;
       if (!kekConfig) {
-        throw new Error(
-          "AppContext.boot: config.kek is missing -- ARK_KEK_BACKEND is not configured",
-        );
+        throw new Error("AppContext.boot: config.kek is missing -- ARK_KEK_BACKEND is not configured");
       }
       const { loadMasterKey } = await import("../secrets/index.js");
       this._loadedKek = await loadMasterKey(kekConfig);
