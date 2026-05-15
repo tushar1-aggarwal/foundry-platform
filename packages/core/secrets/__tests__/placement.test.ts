@@ -144,6 +144,46 @@ describe("placeAllSecrets", () => {
     await expect(placeAllSecrets(app, fakeSession(), ctx)).rejects.toThrow(/boom/);
   });
 
+  test("envVars opt sources env-var placement from the resolver map (flat env-var entries are not re-emitted)", async () => {
+    // Seed the flat tenant table with a STALE value for FOO. The resolver-
+    // sourced envVars map carries the AUTHORITATIVE value for FOO. Placement
+    // must emit the resolver value and ignore the flat-table env-var entry.
+    await app.secrets.set("default", "FOO", "stale-tenant", { type: "env-var", metadata: {} });
+    // An unrelated env-var name in the flat table that the resolver did NOT
+    // surface -- the flat env-var loop must NOT emit it either (env-var
+    // sourcing is fully delegated to opts.envVars when present).
+    await app.secrets.set("default", "EXTRA", "leftover", { type: "env-var", metadata: {} });
+
+    const ctx = new MockPlacementCtx();
+    await placeAllSecrets(app, fakeSession(), ctx, {
+      envVars: { FOO: "resolver-value", NEWKEY: "from-resolver" },
+    });
+
+    const envCalls = ctx.calls.filter((c) => c.kind === "setEnv");
+    // FOO comes from envVars (resolver), not the flat table.
+    // NEWKEY is resolver-only (no flat-table entry) and lands.
+    // EXTRA is flat-table-only -- it MUST NOT be emitted.
+    expect(envCalls).toEqual(
+      expect.arrayContaining([
+        { kind: "setEnv", key: "FOO", value: "resolver-value" },
+        { kind: "setEnv", key: "NEWKEY", value: "from-resolver" },
+      ]),
+    );
+    expect(envCalls).toHaveLength(2);
+    expect(envCalls.find((c) => c.value === "stale-tenant")).toBeUndefined();
+    expect(envCalls.find((c) => c.key === "EXTRA")).toBeUndefined();
+  });
+
+  test("envVars opt respects narrow filter", async () => {
+    const ctx = new MockPlacementCtx();
+    await placeAllSecrets(app, fakeSession(), ctx, {
+      envVars: { ALPHA: "a", BETA: "b" },
+      narrow: new Set(["ALPHA"]),
+    });
+    const envCalls = ctx.calls.filter((c) => c.kind === "setEnv");
+    expect(envCalls).toEqual([{ kind: "setEnv", key: "ALPHA", value: "a" }]);
+  });
+
   test("non-fail-fast placer failure logs and continues (placeholder for Phase 3)", async () => {
     // Phase 1 only registers env-var, which is in FAIL_FAST. The non-fail-fast
     // branch is exercised once generic-blob lands in Phase 3. Sentinel assertion

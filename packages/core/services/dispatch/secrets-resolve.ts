@@ -12,6 +12,14 @@
  * if the resolver couldn't produce them. The runtime-level YAML
  * allowlist is dropped entirely.
  *
+ * Post-resolver/placement integration: `resolve()` still returns `.env`
+ * for backwards compatibility and so the assert-present check has
+ * something to test against, but the dispatch path (`buildLaunchEnv`)
+ * no longer merges that env into the launch env -- buildLaunchEnv runs
+ * the hierarchical resolver independently and feeds its env to
+ * `placeAllSecrets`, which is now the single env-var source. Only
+ * `.error` from `resolve()` is consumed downstream.
+ *
  * `teamChain` is loaded by the injected `teamChainLoader` callback (Open
  * question B option 2 in PLAN.md). In tests that don't wire one in, the
  * loader is treated as returning `[]`, so the resolver falls back to

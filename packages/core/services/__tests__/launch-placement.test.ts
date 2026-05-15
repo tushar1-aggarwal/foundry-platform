@@ -45,6 +45,8 @@ function makeDeps(): Parameters<typeof buildLaunchEnv>[0] {
     runtimes: app.runtimes,
     materializeClaudeAuth: async () => ({ env: {}, credsSecretName: null, credsSecretNamespace: null }),
     getApp: () => app,
+    secrets: app.secrets,
+    teamChainLoader: async () => [],
   };
 }
 
@@ -82,11 +84,11 @@ describe("buildLaunchEnv with placeAllSecrets wiring", () => {
     expect(result.placement).toBeDefined();
   });
 
-  it("hierarchical resolver returns every tenant secret (stage secrets: is assert-only)", async () => {
-    // Phase 2: the YAML `secrets:` block on a stage no longer filters which
-    // tenant secrets land on the env. The backend is the source of truth;
-    // stage `secrets:` declares which names MUST resolve. Both WANTED and
-    // EXTRA live at tenant scope and both show up on the launch env.
+  it("hierarchical resolver surfaces every tenant secret when no stage narrow is set", async () => {
+    // With placement as the env-var authority, the narrow filter (union
+    // of stageDef.secrets + runtime.secrets) restricts which env vars
+    // land on the launch env. When neither stage nor runtime declares
+    // anything, narrow is undefined and every tenant secret flows through.
     await app.secrets.set(tenant(), "WANTED", "yes", { type: "env-var", metadata: {} });
     await app.secrets.set(tenant(), "EXTRA", "no", { type: "env-var", metadata: {} });
 
@@ -105,9 +107,8 @@ describe("buildLaunchEnv with placeAllSecrets wiring", () => {
     });
     const fetched = (await app.sessions.get(session.id))!;
 
-    // Stage requires WANTED; resolver still surfaces EXTRA because tenant
-    // is the source of truth in Phase 2.
-    const stageDef = { name: "stage-x", secrets: ["WANTED"] } as any;
+    // stageDef has no `secrets:` list, so narrow stays undefined.
+    const stageDef = { name: "stage-x" } as any;
     const deps = makeDeps();
     const secrets = new StageSecretResolver({
       secrets: app.secrets,
@@ -118,6 +119,44 @@ describe("buildLaunchEnv with placeAllSecrets wiring", () => {
     expect(result.error).toBeUndefined();
     expect(result.env.WANTED).toBe("yes");
     expect(result.env.EXTRA).toBe("no");
+  });
+
+  it("stage `secrets:` narrow filter restricts resolver-sourced env vars", async () => {
+    // Post resolver/placement integration, the union of stage + runtime
+    // secret names continues to apply on top of the resolver output:
+    // when stage declares `secrets: ["WANTED"]`, EXTRA is dropped even
+    // though it lives at tenant scope. (Stage YAML stays assert-only for
+    // the purposes of failing dispatch on missing keys; the narrow filter
+    // applies post-resolve.)
+    await app.secrets.set(tenant(), "WANTED", "yes", { type: "env-var", metadata: {} });
+    await app.secrets.set(tenant(), "EXTRA", "no", { type: "env-var", metadata: {} });
+
+    await app.computes.insert({
+      name: "narrow-target-2",
+      compute_kind: "local",
+      isolation_kind: "direct",
+      status: "running",
+      config: {},
+    } as any);
+
+    const session = await app.sessions.create({
+      summary: "test session",
+      flow: "quick",
+      compute_name: "narrow-target-2",
+    });
+    const fetched = (await app.sessions.get(session.id))!;
+
+    const stageDef = { name: "stage-x", secrets: ["WANTED"] } as any;
+    const deps = makeDeps();
+    const secrets = new StageSecretResolver({
+      secrets: app.secrets,
+      config: app.config,
+    });
+    const result = await buildLaunchEnv(deps, secrets, fetched, stageDef, "test-only-runtime", () => {});
+
+    expect(result.error).toBeUndefined();
+    expect(result.env.WANTED).toBe("yes");
+    expect(result.env.EXTRA).toBeUndefined();
   });
 
   it("returns the placement ctx so dispatch can forward it through to flushPlacement", async () => {
