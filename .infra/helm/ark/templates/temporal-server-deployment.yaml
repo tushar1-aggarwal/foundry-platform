@@ -18,6 +18,46 @@ spec:
         {{- include "ark.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: temporal-server
     spec:
+      initContainers:
+        # Wait for the schema_version table to exist in both temporal databases
+        # so the server doesn't crashloop during initial install. The schema
+        # Job populates it; with external postgres the operator has done so
+        # before install.
+        - name: wait-for-schema
+          image: postgres:16-alpine
+          env:
+            - name: PGHOST
+              value: {{ include "ark.postgresqlHost" . | quote }}
+            - name: PGPORT
+              value: {{ include "ark.postgresqlPort" . | quote }}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ .Values.temporal.persistence.secretKeys.username }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ .Values.temporal.persistence.secretKeys.password }}
+            - name: TEMPORAL_DB
+              value: {{ .Values.temporal.persistence.database | quote }}
+            - name: VISIBILITY_DB
+              value: {{ .Values.temporal.persistence.visibilityDatabase | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              # schema_version is created by temporal-sql-tool setup-schema.
+              until psql -d "$TEMPORAL_DB" -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='schema_version'" 2>/dev/null | grep -q 1; do
+                echo "waiting for temporal schema..."
+                sleep 2
+              done
+              until psql -d "$VISIBILITY_DB" -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='schema_version'" 2>/dev/null | grep -q 1; do
+                echo "waiting for visibility schema..."
+                sleep 2
+              done
+              echo "schemas ready"
       containers:
         - name: temporal-server
           image: "{{ .Values.temporal.server.image.repository }}:{{ .Values.temporal.server.image.tag }}"

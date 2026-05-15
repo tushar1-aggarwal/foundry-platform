@@ -5,10 +5,12 @@ temporal_visibility databases. It runs only when postgresql.enabled (the chart
 owns the postgres). With an external postgres the operator must provision
 these out-of-band.
 
-Hook ordering: postgres StatefulSet is a regular install resource, so this
-job runs post-install (NOT pre-install) -- pre-install would deadlock waiting
-for a postgres that helm hasn't created yet. The temporal-server Deployment
-may crashloop briefly until the schema job (weight 5) finishes.
+This is a regular Job (NOT a helm hook) so it participates in the main install
+ordering graph: postgres -> bootstrap -> schema -> temporal-server. An init
+container waits for postgres TCP before the main container runs psql. The Job
+name carries .Release.Revision so `helm upgrade` can create a fresh Job (Job
+specs are immutable -- the previous-revision Job stays behind with its own
+ttlSecondsAfterFinished).
 */ -}}
 {{- $pwdKey := .Values.temporal.persistence.secretKeys.password }}
 {{- $userKey := .Values.temporal.persistence.secretKeys.username }}
@@ -21,10 +23,9 @@ may crashloop briefly until the schema job (weight 5) finishes.
 {{- end }}
 {{- $masterSecret := include "ark.temporalBootstrapMasterSecret" . }}
 {{- if not $existing }}
-# Conditionally rendered: only created on first install (when lookup returns nil).
-# On upgrades the existing Secret is preserved untouched, so the password stays
-# stable and running server pods keep working. To force rotation, manually delete
-# this Secret in the cluster and re-run `helm upgrade`.
+# First-install only: chart-managed temporal DB credentials. On upgrades the
+# existing Secret is preserved untouched (lookup returned non-nil above), so
+# the password stays stable.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -42,21 +43,15 @@ stringData:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: temporal-db-bootstrap
+  name: temporal-db-bootstrap-r{{ .Release.Revision | default 1 }}
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-db-bootstrap
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "1"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "argocd.argoproj.io/hook": PostSync
-    "argocd.argoproj.io/sync-wave": "1"
-    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
 spec:
   backoffLimit: 5
   activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
@@ -64,6 +59,27 @@ spec:
         app.kubernetes.io/component: temporal-db-bootstrap
     spec:
       restartPolicy: Never
+      initContainers:
+        - name: wait-for-postgres
+          image: "{{ .Values.temporal.dbBootstrap.image.repository }}:{{ .Values.temporal.dbBootstrap.image.tag }}"
+          env:
+            - name: PGHOST
+              value: {{ include "ark.postgresqlHost" . | quote }}
+            - name: PGPORT
+              value: {{ include "ark.postgresqlPort" . | quote }}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $masterSecret }}
+                  key: {{ .Values.temporal.dbBootstrap.masterSecretKeys.username }}
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; do
+                echo "waiting for postgres at $PGHOST:$PGPORT..."
+                sleep 2
+              done
       containers:
         - name: bootstrap
           image: "{{ .Values.temporal.dbBootstrap.image.repository }}:{{ .Values.temporal.dbBootstrap.image.tag }}"
@@ -96,16 +112,6 @@ spec:
             - -c
             - |
               set -eo pipefail
-              # Wait for postgres to be reachable. In-cluster postgres comes up
-              # in parallel with this job; external postgres should already be
-              # up but we still tolerate flaps.
-              for i in $(seq 1 60); do
-                if pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; then
-                  break
-                fi
-                echo "waiting for postgres at $PGHOST:$PGPORT... ($i)"
-                sleep 2
-              done
               # Create or reset password for the temporal role (idempotent).
               psql -v ON_ERROR_STOP=1 -d postgres -c "
                 DO \$do\$

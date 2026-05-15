@@ -1,21 +1,26 @@
 {{- if and .Values.localstack.enabled .Values.s3.bucket }}
+{{- /*
+Idempotent S3 bucket creation against in-cluster LocalStack.
+
+Regular Job (NOT a helm hook) so it participates in the main install graph and
+helm --wait correctly observes its completion. Init container waits for the
+LocalStack edge port; main container creates the bucket via awscli.
+
+Job name carries .Release.Revision so `helm upgrade` re-runs (e.g. when the
+bucket name changes); ttlSecondsAfterFinished cleans up old revisions.
+*/ -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: localstack-init
+  name: localstack-init-r{{ .Release.Revision | default 1 }}
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: localstack-init
-  annotations:
-    # Post-install hook: LocalStack must be reachable before we can create
-    # the bucket. `s3 mb` is idempotent against an existing bucket.
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "0"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 3
-  activeDeadlineSeconds: 180
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
@@ -23,6 +28,21 @@ spec:
         app.kubernetes.io/component: localstack-init
     spec:
       restartPolicy: Never
+      initContainers:
+        - name: wait-for-localstack
+          image: curlimages/curl:latest
+          env:
+            - name: LOCALSTACK_URL
+              value: {{ include "ark.s3Endpoint" . | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              until curl -sf "$LOCALSTACK_URL/_localstack/health" >/dev/null 2>&1; do
+                echo "waiting for localstack..."
+                sleep 2
+              done
+              echo "localstack healthy"
       containers:
         - name: init
           image: amazon/aws-cli:2
@@ -40,15 +60,6 @@ spec:
             - -c
             - |
               set -e
-              # Wait for LocalStack edge port to be ready.
-              for i in $(seq 1 30); do
-                if aws s3 ls >/dev/null 2>&1; then
-                  break
-                fi
-                echo "waiting for localstack... ($i)"
-                sleep 3
-              done
-              # Idempotent bucket creation.
               if aws s3api head-bucket --bucket {{ .Values.s3.bucket | quote }} 2>/dev/null; then
                 echo "bucket {{ .Values.s3.bucket }} exists"
               else

@@ -1,3 +1,4 @@
 [tools]
 bun = "1"   # latest 1.x; matches Dockerfile oven/bun:1.3 baseline
 node = "20" # matches CI actions/setup-node@v4
+helm = "3"  # used by make dev-k8s-local

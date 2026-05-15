@@ -1,35 +1,30 @@
-{{- /* Always emitted -- Temporal server cannot start without its schema. */ -}}
+{{- /*
+Temporal schema setup + migration. Always emitted -- the server cannot start
+without its schema.
+
+Regular Job (NOT a helm hook) so it participates in the main install ordering
+graph: postgres -> bootstrap (if in-cluster) -> schema -> temporal-server.
+
+Init container waits for the temporal database to exist (created by the
+bootstrap Job, or pre-provisioned by the operator when postgresql.enabled=false).
+The main container connects via the temporal role (its credentials live in
+temporal.persistence.existingSecret).
+
+Job name carries .Release.Revision so `helm upgrade` re-runs migrations on new
+chart versions; ttlSecondsAfterFinished cleans up old revisions.
+*/ -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: temporal-schema
+  name: temporal-schema-r{{ .Release.Revision | default 1 }}
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-schema
-  annotations:
-    # update-schema is a no-op when schema is already current, so re-runs
-    # are cheap and safe.
-    #
-    # With in-cluster postgres the schema job must run POST-install because
-    # the postgres StatefulSet is a regular install resource that doesn't
-    # exist during pre-install. With external postgres pre-install is fine
-    # (and preserves the no-crashloop server boot operators are used to).
-    {{- if .Values.postgresql.enabled }}
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "5"
-    "argocd.argoproj.io/hook": PostSync
-    "argocd.argoproj.io/sync-wave": "5"
-    {{- else }}
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": "-10"
-    "argocd.argoproj.io/hook": PreSync
-    "argocd.argoproj.io/sync-wave": "-10"
-    {{- end }}
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
 spec:
-  backoffLimit: {{ .Values.temporal.schemaJob.backoffLimit }}
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
@@ -37,6 +32,44 @@ spec:
         app.kubernetes.io/component: temporal-schema
     spec:
       restartPolicy: Never
+      initContainers:
+        # Wait until the temporal database exists. With in-cluster postgres the
+        # bootstrap Job creates it; with external postgres the operator has
+        # already created it before install.
+        - name: wait-for-temporal-db
+          image: postgres:16-alpine
+          env:
+            - name: PGHOST
+              value: {{ include "ark.postgresqlHost" . | quote }}
+            - name: PGPORT
+              value: {{ include "ark.postgresqlPort" . | quote }}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ .Values.temporal.persistence.secretKeys.username }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporal.persistence.existingSecret }}
+                  key: {{ .Values.temporal.persistence.secretKeys.password }}
+            - name: TEMPORAL_DB
+              value: {{ .Values.temporal.persistence.database | quote }}
+            - name: VISIBILITY_DB
+              value: {{ .Values.temporal.persistence.visibilityDatabase | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              until psql -d "$TEMPORAL_DB" -c 'SELECT 1' >/dev/null 2>&1; do
+                echo "waiting for temporal database $TEMPORAL_DB..."
+                sleep 2
+              done
+              until psql -d "$VISIBILITY_DB" -c 'SELECT 1' >/dev/null 2>&1; do
+                echo "waiting for visibility database $VISIBILITY_DB..."
+                sleep 2
+              done
+              echo "both temporal databases reachable"
       containers:
         - name: schema
           image: "{{ .Values.temporal.schemaJob.image.repository }}:{{ .Values.temporal.schemaJob.image.tag }}"
@@ -49,15 +82,6 @@ spec:
             - name: SQL_TLS_DISABLE_HOST_VERIFICATION
               value: "true"
             {{- end }}
-            # DDL (CREATE TABLE / CREATE INDEX) breaks under pgbouncer
-            # transaction-pool mode, so the schema tool MUST connect directly to
-            # the RDS endpoint, not via the runtime pgbouncer host that the
-            # server uses. For pilots without pgbouncer the two values are the
-            # same -- but this isolation makes the chart correct for any account
-            # that adds pgbouncer later.
-            # Schema DDL connects directly to the postgres backing Temporal.
-            # In-cluster postgres (postgresql.enabled) and external postgres
-            # both work; the helper resolves to the right host/port.
             - name: SQL_HOST
               value: {{ include "ark.postgresqlHost" . | quote }}
             - name: SQL_PORT
@@ -79,23 +103,10 @@ spec:
               set -e
               DB={{ .Values.temporal.persistence.database }}
               VDB={{ .Values.temporal.persistence.visibilityDatabase }}
-              {{ if .Values.temporal.server.tls.enabled }}# RDS requires SSL: --tls --tls-disable-host-verification passed to every sql-tool call below.{{ end }}
-
-              # Wait for postgres TCP socket -- in-cluster postgres comes up in
-              # parallel with this job.
-              for i in $(seq 1 60); do
-                if (exec 3<>/dev/tcp/$SQL_HOST/$SQL_PORT) 2>/dev/null; then
-                  exec 3>&-
-                  break
-                fi
-                echo "waiting for postgres at $SQL_HOST:$SQL_PORT... ($i)"
-                sleep 2
-              done
+              {{ if .Values.temporal.server.tls.enabled }}# TLS: --tls --tls-disable-host-verification on every sql-tool call below.{{ end }}
 
               # Idempotent setup helper: succeed cleanly if the schema_version
-              # table already exists; surface any other error (perms,
-              # connectivity, syntax) loudly so the Job fails for a real cause
-              # rather than silently swallowing it.
+              # table already exists; surface any other error loudly.
               run_setup() {
                 local db="$1"
                 local out
@@ -103,8 +114,6 @@ spec:
                   echo "$out"
                   return 0
                 fi
-                # `setup-schema` errors with `relation "schema_version" already exists`
-                # (or close variants) on already-initialized databases.
                 if echo "$out" | grep -qiE 'already exists|already initialized'; then
                   echo "Schema for $db already initialized, skipping setup."
                   return 0

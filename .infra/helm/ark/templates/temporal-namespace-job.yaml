@@ -1,25 +1,29 @@
-{{- /* Always emitted -- workers fail without their namespace. */ -}}
+{{- /*
+Idempotent namespace creation. Always emitted -- temporal-worker fails without
+its namespace registered.
+
+Regular Job (NOT a helm hook) so it sits in the main install graph after
+temporal-server. Init container waits for the temporal-server gRPC port to be
+open; the main container calls `temporal operator namespace create` which is
+already idempotent.
+
+Job name carries .Release.Revision so `helm upgrade` re-runs (in case the
+namespaces list changed); ttlSecondsAfterFinished cleans up old revisions.
+*/ -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: temporal-namespace
+  name: temporal-namespace-r{{ .Release.Revision | default 1 }}
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-namespace
-  annotations:
-    # Post-install: server must be up before we can call its API.
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "argocd.argoproj.io/hook": PostSync
-    "argocd.argoproj.io/sync-wave": "10"
-    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
 spec:
   backoffLimit: 3
   # Hard ceiling so a hung temporal CLI call (partial TCP connection, image
-  # pull stall) cannot block the ArgoCD post-install phase indefinitely.
-  activeDeadlineSeconds: 300
+  # pull stall) cannot block the install indefinitely.
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
@@ -27,6 +31,31 @@ spec:
         app.kubernetes.io/component: temporal-namespace
     spec:
       restartPolicy: Never
+      initContainers:
+        # Wait until temporal-server's frontend is responding. Health-check via
+        # the temporal CLI tolerates the period where the gRPC port is open but
+        # the cluster membership ring is still settling.
+        - name: wait-for-temporal-server
+          image: "{{ .Values.temporal.namespaceJob.image.repository }}:{{ .Values.temporal.namespaceJob.image.tag }}"
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: "{{ .Values.temporal.serverServiceName }}:7233"
+            - name: TEMPORAL_CLI_ADDRESS
+              value: "{{ .Values.temporal.serverServiceName }}:7233"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              for i in $(seq 1 180); do
+                if temporal operator cluster health --address "$TEMPORAL_ADDRESS" >/dev/null 2>&1; then
+                  echo "temporal-server healthy"
+                  exit 0
+                fi
+                echo "waiting for temporal-server... ($i)"
+                sleep 2
+              done
+              echo "temporal-server health check failed after 360s" >&2
+              exit 1
       containers:
         - name: namespace
           image: "{{ .Values.temporal.namespaceJob.image.repository }}:{{ .Values.temporal.namespaceJob.image.tag }}"
@@ -40,15 +69,6 @@ spec:
             - -c
             - |
               set -e
-              # Wait up to 90s for server to be reachable.
-              for i in $(seq 1 30); do
-                if temporal operator cluster health --address "$TEMPORAL_ADDRESS" >/dev/null 2>&1; then
-                  break
-                fi
-                echo "waiting for temporal-server... ($i)"
-                sleep 3
-              done
-              # Idempotent namespace creation.
               {{- range .Values.temporal.namespaces }}
               if temporal operator namespace describe {{ . | quote }} >/dev/null 2>&1; then
                 echo "namespace {{ . }} exists"
