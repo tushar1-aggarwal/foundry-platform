@@ -28,14 +28,18 @@ test.afterAll(async () => {
 
 async function goToCompute() {
   await page.click('nav button:has-text("Compute")');
-  await expect(page.locator("h1")).toContainText("Compute");
+  // Scope by text. Plain `locator("h1")` matches multiple h1s during the
+  // lazy-route transition (previous SessionsPage's sr-only + dashboard h1
+  // remain mounted while the ComputePage chunk loads), and Playwright's
+  // strict-mode rejects multi-element locators without auto-retrying.
+  await expect(page.locator("h1", { hasText: "Compute" })).toBeVisible();
 }
 
 // -- Compute page rendering ---------------------------------------------------
 
 test("compute page shows title and New Compute button", async () => {
   await goToCompute();
-  await expect(page.locator("h1")).toContainText("Compute");
+  await expect(page.locator("h1", { hasText: "Compute" })).toBeVisible();
   await expect(page.locator('button:has-text("New Compute")')).toBeVisible();
 });
 

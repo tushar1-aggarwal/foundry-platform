@@ -184,7 +184,7 @@ test("session detail pane renders the current flow stage", async () => {
   await page.reload();
   await page.waitForSelector("nav", { timeout: 15_000 });
   await page.click('nav button:has-text("Sessions")');
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 
   // Open the session detail pane.
   await page.locator(`text=${summary}`).first().click();
@@ -222,7 +222,7 @@ test("session flow field survives a web UI reload", async () => {
   await page.reload();
   await page.waitForSelector("nav", { timeout: 15_000 });
   await page.click('nav button:has-text("Sessions")');
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 
   await page.locator(`text=${summary}`).first().click();
   // The detail pane renders a Conversation tab (unique to SessionDetail).

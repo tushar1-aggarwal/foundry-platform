@@ -141,7 +141,7 @@ async function goToCostsFresh(): Promise<void> {
   await page.goto(ws.baseUrl);
   await page.waitForSelector("nav", { timeout: 30_000 });
   await page.click('nav button:has-text("Costs")');
-  await expect(page.locator("h1")).toContainText("Costs");
+  await expect(page.locator("h1", { hasText: "Costs" })).toBeVisible();
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

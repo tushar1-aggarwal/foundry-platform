@@ -34,7 +34,7 @@ test.afterAll(async () => {
 
 async function goToSessions() {
   await page.click('nav button:has-text("Sessions")');
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 }
 
 // -- Open session detail panel ------------------------------------------------

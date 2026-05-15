@@ -30,7 +30,7 @@ test.afterAll(async () => {
 
 test("agents page shows builtin agents", async () => {
   await page.click('nav button:has-text("Agents")');
-  await expect(page.locator("h1")).toContainText("Agents");
+  await expect(page.locator("h1", { hasText: "Agents" })).toBeVisible();
 
   // The agents list should have items -- builtin agents like worker, planner, etc.
   // Each agent shows as a clickable row with the agent name and a "builtin" badge
@@ -48,7 +48,7 @@ test("agents page shows builtin agents", async () => {
 
 test("click agent shows detail panel with configuration", async () => {
   await page.click('nav button:has-text("Agents")');
-  await expect(page.locator("h1")).toContainText("Agents");
+  await expect(page.locator("h1", { hasText: "Agents" })).toBeVisible();
 
   // Click on the worker agent in the list
   await page.locator("text=worker").first().click();
@@ -73,7 +73,7 @@ test("agents RPC returns expected fields", async () => {
 
 test("flows page shows builtin flows", async () => {
   await page.click('nav button:has-text("Flows")');
-  await expect(page.locator("h1")).toContainText("Flows");
+  await expect(page.locator("h1", { hasText: "Flows" })).toBeVisible();
 
   // Verify via RPC that flows are returned
   const data = await ws.rpc("flow/list");
@@ -87,7 +87,7 @@ test("flows page shows builtin flows", async () => {
 
 test("click flow shows detail with stages", async () => {
   await page.click('nav button:has-text("Flows")');
-  await expect(page.locator("h1")).toContainText("Flows");
+  await expect(page.locator("h1", { hasText: "Flows" })).toBeVisible();
 
   // Get a flow that has stages from the RPC
   const flowData = await ws.rpc("flow/list");

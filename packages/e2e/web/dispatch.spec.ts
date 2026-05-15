@@ -31,7 +31,7 @@ test.setTimeout(120_000);
 
 async function goToSessions() {
   await page.click('nav button:has-text("Sessions")');
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 }
 
 /** Create a session via RPC and return the session ID */

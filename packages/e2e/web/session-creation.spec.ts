@@ -29,14 +29,14 @@ test.afterAll(async () => {
 
 async function goToSessions() {
   await page.click('nav button:has-text("Sessions")');
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 }
 
 // -- Navigate to Sessions page ------------------------------------------------
 
 test("sessions page is accessible from sidebar", async () => {
   await goToSessions();
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 });
 
 // -- Open New Session form ----------------------------------------------------
