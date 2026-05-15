@@ -131,6 +131,25 @@ export function assertValidSecretName(name: string): void {
 }
 
 /**
+ * Regex for valid scope segments (tenant id, team segment, user id) used by
+ * the hierarchical secrets resolver. Lowercase kebab-case, 1..63 chars --
+ * matches BLOB_NAME_RE so the same lexical constraint is reused for any
+ * value that becomes a path segment under `/ark/`.
+ */
+export const SCOPE_SEGMENT_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+export function assertValidScopeSegment(segment: string, fieldName = "scope segment"): void {
+  if (typeof segment !== "string" || segment.length === 0) {
+    throw new Error(`Invalid ${fieldName}: must be a non-empty string`);
+  }
+  if (!SCOPE_SEGMENT_RE.test(segment)) {
+    throw new Error(
+      `Invalid ${fieldName} '${segment}': must match [a-z0-9][a-z0-9-]{0,62} (lowercase kebab-case, <= 63 chars)`,
+    );
+  }
+}
+
+/**
  * Regex for valid blob names. Lower-case kebab-case so blobs are visually
  * distinct from string secrets in listings (e.g. `claude-subscription` vs
  * `ANTHROPIC_API_KEY`) and safe to use as path components + k8s Secret
