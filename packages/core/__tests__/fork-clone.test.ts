@@ -20,7 +20,7 @@ describe("forkSession (shallow)", () => {
 
     const result = await getApp().sessionLifecycle.fork(original.id);
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
 
     const forked = await getApp().sessions.get(result.sessionId);
     expect(forked).not.toBeNull();
@@ -38,7 +38,7 @@ describe("forkSession (shallow)", () => {
 
     const result = await getApp().sessionLifecycle.fork(original.id);
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
 
     const forked = await getApp().sessions.get(result.sessionId);
     expect(forked!.claude_session_id).toBeFalsy();
@@ -47,14 +47,14 @@ describe("forkSession (shallow)", () => {
   it("auto-generates unique name when no new name given", async () => {
     const original = await getApp().sessions.create({ summary: "my-task" });
     const result = await getApp().sessionLifecycle.fork(original.id);
-    if (!result.ok) return;
+    if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
     expect((await getApp().sessions.get(result.sessionId))!.summary).toBe("my-task (fork)");
   });
 
   it("uses provided name", async () => {
     const original = await getApp().sessions.create({ summary: "my-task" });
     const result = await getApp().sessionLifecycle.fork(original.id, "new-name");
-    if (!result.ok) return;
+    if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
     expect((await getApp().sessions.get(result.sessionId))!.summary).toBe("new-name");
   });
 
@@ -76,7 +76,7 @@ describe("cloneSession (deep)", () => {
 
     const result = await getApp().sessionLifecycle.clone(original.id);
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
 
     const cloned = await getApp().sessions.get(result.sessionId);
     expect(cloned!.repo).toBe("my-repo");
@@ -93,7 +93,7 @@ describe("cloneSession (deep)", () => {
 
     const result = await getApp().sessionLifecycle.clone(original.id);
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
 
     const cloned = await getApp().sessions.get(result.sessionId);
     expect(cloned!.claude_session_id).toBe("claude-abc-123");

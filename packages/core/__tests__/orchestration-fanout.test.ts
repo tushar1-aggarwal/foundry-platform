@@ -145,7 +145,7 @@ describe("fork (single child)", async () => {
     const parent = await getApp().sessions.create({ summary: "parent", repo: "/r" });
     const result = await fork(getApp(), parent.id, "subtask", { dispatch: false });
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
 
     const child = (await getApp().sessions.get(result.sessionId))!;
     expect(child.parent_id).toBe(parent.id);
@@ -164,7 +164,7 @@ describe("fork (single child)", async () => {
     const a = await fork(getApp(), parent.id, "a", { dispatch: false });
     const b = await fork(getApp(), parent.id, "b", { dispatch: false });
     expect(a.ok && b.ok).toBe(true);
-    if (!a.ok || !b.ok) return;
+    if (!a.ok || !b.ok) throw new Error(`fork failed: a=${a.ok ? "ok" : a.message}, b=${b.ok ? "ok" : b.message}`);
     const ca = (await getApp().sessions.get(a.sessionId))!;
     const cb = (await getApp().sessions.get(b.sessionId))!;
     expect(ca.fork_group).toBe(cb.fork_group);

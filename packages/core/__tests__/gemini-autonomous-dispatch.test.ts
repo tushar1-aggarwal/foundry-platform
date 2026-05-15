@@ -78,12 +78,9 @@ describe("Gemini runtime resolution", () => {
     const agent = resolveAgentWithRuntime(app, "worker", session, {});
 
     // Without an override, resolution honours the agent YAML's `runtime:` field.
-    // worker.yaml defaults to claude-agent (the in-process Anthropic SDK
-    // runtime); historical YAMLs used "claude" / "claude-code" before the
-    // 2026-04 retire. Either is fine -- the assertion is "no override =>
-    // whatever the agent declared".
+    // worker.yaml is canonical and ships with `runtime: claude-agent`.
     expect(agent).not.toBeNull();
-    expect(["claude-agent", "claude-code", "claude", undefined]).toContain(agent!._resolved_runtime_type ?? undefined);
+    expect(agent!._resolved_runtime_type).toBe("claude-agent");
   });
 });
 
