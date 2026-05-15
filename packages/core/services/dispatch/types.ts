@@ -196,6 +196,18 @@ export interface DispatchDeps {
   statusPollers: StatusPollerRegistry;
   config: ArkConfig;
   secrets: SecretsCapability;
+  /**
+   * Hierarchical-resolver team-chain loader. Returns the dispatching
+   * user's team chain (most-specific segment first) for the given
+   * Session. The resolver uses this to walk
+   * `/ark/<tid>/teams/<chain[k]>/<KEY>` in precedence order.
+   *
+   * Optional because (a) tests don't always wire it, and (b) the
+   * single-tenant CLI dispatch path has no logged-in user so an empty
+   * chain is the correct answer. When absent or returning `[]`, the
+   * resolver falls back to user-prefix + tenant-prefix only.
+   */
+  teamChainLoader?: (session: Session) => Promise<string[]>;
 
   // Hosted-mode optional
   getScheduler: () => SessionScheduler | null;
