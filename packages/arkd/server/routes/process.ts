@@ -160,12 +160,18 @@ async function spawnProcess(req: ProcessSpawnReq): Promise<ProcessSpawnRes> {
   }
 
   const wantPipes = Boolean(req.logPath);
+  // Minimal EC2 / systemd unit environments often inherit a PATH-less
+  // process.env. The spawned child then can't find `git`, `bash`, or any
+  // other tool resolved by name. Fall back to a standard system PATH so
+  // arkd's `Bun.spawn` works on stripped-down hosts.
+  const baseEnv = { ...process.env, ...(req.env ?? {}) } as Record<string, string>;
+  if (!baseEnv.PATH) baseEnv.PATH = "/usr/local/bin:/usr/bin:/bin";
   let child: SpawnedProc;
   try {
     child = Bun.spawn({
       cmd: [req.cmd, ...req.args],
       cwd: req.workdir,
-      env: { ...process.env, ...(req.env ?? {}) } as Record<string, string>,
+      env: baseEnv,
       stdout: wantPipes ? "pipe" : "ignore",
       stderr: wantPipes ? "pipe" : "ignore",
     });
