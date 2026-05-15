@@ -174,7 +174,18 @@ const DEFAULT_DEPS: K8sComputeDeps = {
   killProcess: defaultKillProcess,
   probeArkdInPod: async (podName: string, namespace: string, kubeconfig?: string): Promise<boolean> => {
     return new Promise<boolean>((resolve) => {
-      const args = ["exec", "-n", namespace, podName, "--", "curl", "-fsS", "-m", "2", `http://localhost:${19300}/health`];
+      const args = [
+        "exec",
+        "-n",
+        namespace,
+        podName,
+        "--",
+        "curl",
+        "-fsS",
+        "-m",
+        "2",
+        `http://localhost:${19300}/health`,
+      ];
       if (kubeconfig) args.unshift("--kubeconfig", kubeconfig);
       const probe = spawn("kubectl", args, { stdio: "ignore" });
       probe.on("exit", (code) => resolve(code === 0));
@@ -466,7 +477,7 @@ export class K8sCompute implements Compute {
           });
           throw new Error(
             `k8s in-cluster: pod ${meta.podName} not reachable at ${meta.podIp}:${ARKD_POD_PORT} -- ` +
-            `pod may be evicted, crash-looping, or IP changed. Re-provision required.`,
+              `pod may be evicted, crash-looping, or IP changed. Re-provision required.`,
           );
         }
         logInfo("compute", "k8s: in-cluster pod IP probe succeeded", {

@@ -350,9 +350,7 @@ export function buildClaudeArgs(
   let resolvedModel = agent.model;
   if (opts?.app && agent.model && agent.runtime) {
     try {
-      const runtimeDef = opts.app.runtimes?.get?.(agent.runtime) as
-        | { compat?: readonly string[] }
-        | undefined;
+      const runtimeDef = opts.app.runtimes?.get?.(agent.runtime) as { compat?: readonly string[] } | undefined;
       const compat = runtimeDef?.compat;
       const slug = resolveProviderSlug(opts.app.models, agent.model, compat, opts.projectRoot);
       if (slug) resolvedModel = slug;

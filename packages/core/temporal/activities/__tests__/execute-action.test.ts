@@ -134,7 +134,9 @@ describe("executeActionActivity (error classification + bypass + guard)", () => 
     let caught: unknown = null;
     try {
       await executeActionActivity({ sessionId: "s-missing", stageIdx: 0, action: "create_pr" });
-    } catch (e) { caught = e; }
+    } catch (e) {
+      caught = e;
+    }
 
     expect(caught).toBeInstanceOf(ApplicationFailure);
     expect((caught as ApplicationFailure).nonRetryable).toBe(true);
@@ -162,7 +164,9 @@ describe("executeActionActivity (error classification + bypass + guard)", () => 
             stageIdx: 0,
             action: "always_fails_test",
           });
-        } catch (e) { caught = e; }
+        } catch (e) {
+          caught = e;
+        }
 
         expect(caught).toBeInstanceOf(ApplicationFailure);
         expect((caught as ApplicationFailure).nonRetryable).toBe(true);
@@ -180,7 +184,9 @@ describe("executeActionActivity (error classification + bypass + guard)", () => 
     // Register an action that throws a raw transient error (no "validation|not found" keywords).
     ACTION_INDEX.set("transient_throw_test", {
       name: "transient_throw_test",
-      execute: async () => { throw new Error("connection ECONNRESET to postgres"); },
+      execute: async () => {
+        throw new Error("connection ECONNRESET to postgres");
+      },
     });
     try {
       const app = await AppContext.forTestAsync();
@@ -193,7 +199,9 @@ describe("executeActionActivity (error classification + bypass + guard)", () => 
         let caught: unknown = null;
         try {
           await executeActionActivity({ sessionId: session.id, stageIdx: 0, action: "transient_throw_test" });
-        } catch (e) { caught = e; }
+        } catch (e) {
+          caught = e;
+        }
 
         expect(caught).not.toBeInstanceOf(ApplicationFailure);
         expect((caught as Error).message).toMatch(/ECONNRESET/);
@@ -239,7 +247,9 @@ describe("executeActionActivity (error classification + bypass + guard)", () => 
     let caught: unknown = null;
     try {
       await executeActionActivity({ sessionId: "s-1", stageIdx: 0, action: "close_ticket" });
-    } catch (e) { caught = e; }
+    } catch (e) {
+      caught = e;
+    }
 
     expect(caught).toBeInstanceOf(ApplicationFailure);
     expect((caught as ApplicationFailure).nonRetryable).toBe(true);

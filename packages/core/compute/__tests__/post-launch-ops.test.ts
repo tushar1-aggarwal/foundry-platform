@@ -264,10 +264,12 @@ describe("status poller retry budget", () => {
     // Executor that always throws ArkdUnreachableError on status().
     const unreachableExecutor = {
       status: async () => {
-        throw new ArkdUnreachableError(
-          "arkd GET http://127.0.0.1:0 failed: ECONNREFUSED",
-          { url: "http://127.0.0.1:0", method: "GET", path: "/health", attempts: 1 },
-        );
+        throw new ArkdUnreachableError("arkd GET http://127.0.0.1:0 failed: ECONNREFUSED", {
+          url: "http://127.0.0.1:0",
+          method: "GET",
+          path: "/health",
+          attempts: 1,
+        });
       },
     } as any;
 

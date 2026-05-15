@@ -151,7 +151,9 @@ export const claudeCodeExecutor: Executor = {
             name: compute.name,
             status: compute.status,
             config: (compute.config ?? {}) as Record<string, unknown>,
-          }) ?? persistedHandle ?? null)
+          }) ??
+          persistedHandle ??
+          null)
         : null;
 
     // Setup worktree + trust (dynamic import to avoid circular dependency)

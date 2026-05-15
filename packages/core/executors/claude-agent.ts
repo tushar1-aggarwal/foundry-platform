@@ -381,8 +381,7 @@ export const claudeAgentExecutor: Executor = {
         name: compute.name,
         status: compute.status,
         config: (compute.config ?? {}) as Record<string, unknown>,
-      }) ??
-      (validPersistedState ? target.compute.rehydrateHandle(validPersistedState) : null);
+      }) ?? (validPersistedState ? target.compute.rehydrateHandle(validPersistedState) : null);
     if (!computeHandle?.statusProcess) {
       // Compute handle can't tell us about processes -- safest answer is
       // "still running" so we don't false-positive into completed.

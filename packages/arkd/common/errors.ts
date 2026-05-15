@@ -52,10 +52,7 @@ export class ArkdClientTransportError extends Error {
  * poller) catch this to count consecutive unreachable reads.
  */
 export class ArkdUnreachableError extends ArkdClientTransportError {
-  constructor(
-    message: string,
-    opts: { url: string; method: string; path: string; attempts: number; cause?: unknown },
-  ) {
+  constructor(message: string, opts: { url: string; method: string; path: string; attempts: number; cause?: unknown }) {
     super(message, opts);
     this.name = "ArkdUnreachableError";
   }

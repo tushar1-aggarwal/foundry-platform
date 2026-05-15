@@ -134,7 +134,9 @@ async function probeSessionStatus(
             name: computeRow.name,
             status: computeRow.status,
             config: computeRow.config ?? {},
-          }) ?? persistedHandle ?? null;
+          }) ??
+          persistedHandle ??
+          null;
         if (computeHandle) {
           const agent = target.isolation.attachAgent(target.compute, computeHandle, handle);
           const running = await agent.checkAlive();
@@ -225,7 +227,10 @@ export async function _tickForTest(
             actor: "system",
             data: { reason: "arkd unreachable", attempts: UNREACHABLE_BUDGET },
           });
-          logError("status", `status-poller: ${sessionId} -> failed (arkd unreachable after ${UNREACHABLE_BUDGET} retries)`);
+          logError(
+            "status",
+            `status-poller: ${sessionId} -> failed (arkd unreachable after ${UNREACHABLE_BUDGET} retries)`,
+          );
         }
       }
       return;

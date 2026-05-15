@@ -378,7 +378,14 @@ describe("K8sCompute", async () => {
       // The reuse-path should kill and respawn.
       //
       // We track a mutable state object so closures share the same reference.
-      const state = { healthy: true, spawnCount: 0, spawnedArgs: [] as string[][], killCalls: [] as number[], nextPid: 4242, nextPort: 35789 };
+      const state = {
+        healthy: true,
+        spawnCount: 0,
+        spawnedArgs: [] as string[][],
+        killCalls: [] as number[],
+        nextPid: 4242,
+        nextPort: 35789,
+      };
 
       const c = new K8sCompute(app);
       c.setDeps({
@@ -393,7 +400,9 @@ describe("K8sCompute", async () => {
         allocatePort: async () => state.nextPort,
         fetchHealth: async () => state.healthy,
         isPidAlive: () => true,
-        killProcess: (pid: number) => { state.killCalls.push(pid); },
+        killProcess: (pid: number) => {
+          state.killCalls.push(pid);
+        },
         probeArkdInPod: async () => true,
       });
 
@@ -474,8 +483,10 @@ describe("isInClusterHosted", () => {
     process.env.KUBERNETES_SERVICE_HOST = "10.0.0.1";
     process.env.ARK_MODE = "local";
     expect(isInClusterHosted()).toBe(false);
-    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s; else delete process.env.KUBERNETES_SERVICE_HOST;
-    if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
+    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s;
+    else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode !== undefined) process.env.ARK_MODE = savedMode;
+    else delete process.env.ARK_MODE;
   });
 
   it("returns true when KUBERNETES_SERVICE_HOST set and ARK_MODE=hosted", () => {
@@ -484,8 +495,10 @@ describe("isInClusterHosted", () => {
     process.env.KUBERNETES_SERVICE_HOST = "10.0.0.1";
     process.env.ARK_MODE = "hosted";
     expect(isInClusterHosted()).toBe(true);
-    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s; else delete process.env.KUBERNETES_SERVICE_HOST;
-    if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
+    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s;
+    else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode !== undefined) process.env.ARK_MODE = savedMode;
+    else delete process.env.ARK_MODE;
   });
 });
 
@@ -506,7 +519,9 @@ describe("provision reads pod IP", () => {
     const fakeK8sModule = {
       KubeConfig: class {
         loadFromDefault() {}
-        makeApiClient() { return fakeApi; }
+        makeApiClient() {
+          return fakeApi;
+        }
       },
       CoreV1Api: class {},
     };
@@ -514,7 +529,7 @@ describe("provision reads pod IP", () => {
     const c = new K8sCompute(app);
     c.setDeps({
       loadK8sModule: async () => fakeK8sModule as any,
-      spawnPortForward: () => ({ pid: 999, stdout: null, stderr: null, on: () => {} } as any),
+      spawnPortForward: () => ({ pid: 999, stdout: null, stderr: null, on: () => {} }) as any,
       allocatePort: async () => 45678,
       fetchHealth: async () => true, // tunnel immediately healthy
       isPidAlive: () => true,
@@ -556,8 +571,10 @@ describe("getArkdUrl in-cluster mode", () => {
     const url = c.getArkdUrl(handle);
     expect(url).toBe("http://10.244.1.99:19300");
 
-    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s; else delete process.env.KUBERNETES_SERVICE_HOST;
-    if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
+    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s;
+    else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode !== undefined) process.env.ARK_MODE = savedMode;
+    else delete process.env.ARK_MODE;
   });
 
   it("returns localhost URL when not in cluster", () => {
@@ -596,7 +613,10 @@ describe("portForwardPid not written in cluster mode", () => {
     const c = new K8sCompute(app);
     c.setDeps({
       loadK8sModule: makeHarness().deps.loadK8sModule,
-      spawnPortForward: () => { spawnCalled = true; return { pid: 777 } as any; },
+      spawnPortForward: () => {
+        spawnCalled = true;
+        return { pid: 777 } as any;
+      },
       allocatePort: async () => 12345,
       fetchHealth: async () => true,
       isPidAlive: () => true,
@@ -624,8 +644,10 @@ describe("portForwardPid not written in cluster mode", () => {
     expect(spawnCalled).toBe(false); // no port-forward spawned in cluster mode
     expect((handle.meta as any).k8s.portForwardPid).toBeNull();
 
-    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s; else delete process.env.KUBERNETES_SERVICE_HOST;
-    if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
+    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s;
+    else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode !== undefined) process.env.ARK_MODE = savedMode;
+    else delete process.env.ARK_MODE;
   });
 });
 
@@ -640,9 +662,12 @@ describe("ensureReachable in-cluster probes pod IP", () => {
     const c = new K8sCompute(app);
     c.setDeps({
       loadK8sModule: makeHarness().deps.loadK8sModule,
-      spawnPortForward: () => ({ pid: 999 } as any),
+      spawnPortForward: () => ({ pid: 999 }) as any,
       allocatePort: async () => 12345,
-      fetchHealth: async (url: string) => { probed.push(url); return true; },
+      fetchHealth: async (url: string) => {
+        probed.push(url);
+        return true;
+      },
       isPidAlive: () => false,
       killProcess: () => {},
       probeArkdInPod: async () => true,
@@ -668,8 +693,10 @@ describe("ensureReachable in-cluster probes pod IP", () => {
     const clusterProbe = probed.find((u) => u.includes("10.244.2.77"));
     expect(clusterProbe).toBe("http://10.244.2.77:19300/health");
 
-    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s; else delete process.env.KUBERNETES_SERVICE_HOST;
-    if (savedMode !== undefined) process.env.ARK_MODE = savedMode; else delete process.env.ARK_MODE;
+    if (savedK8s !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s;
+    else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode !== undefined) process.env.ARK_MODE = savedMode;
+    else delete process.env.ARK_MODE;
   });
 
   it("throws clear error when pod IP probe fails in cluster mode", async () => {
@@ -681,7 +708,7 @@ describe("ensureReachable in-cluster probes pod IP", () => {
     const c2 = new K8sCompute(app);
     c2.setDeps({
       loadK8sModule: makeHarness().deps.loadK8sModule,
-      spawnPortForward: () => ({ pid: 999 } as any),
+      spawnPortForward: () => ({ pid: 999 }) as any,
       allocatePort: async () => 12345,
       fetchHealth: async () => false, // pod unreachable
       isPidAlive: () => false,
@@ -708,7 +735,9 @@ describe("ensureReachable in-cluster probes pod IP", () => {
     expect((err as Error).message).toContain("10.244.2.88");
     expect((err as Error).message).toContain("19300");
 
-    if (savedK8s2 !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s2; else delete process.env.KUBERNETES_SERVICE_HOST;
-    if (savedMode2 !== undefined) process.env.ARK_MODE = savedMode2; else delete process.env.ARK_MODE;
+    if (savedK8s2 !== undefined) process.env.KUBERNETES_SERVICE_HOST = savedK8s2;
+    else delete process.env.KUBERNETES_SERVICE_HOST;
+    if (savedMode2 !== undefined) process.env.ARK_MODE = savedMode2;
+    else delete process.env.ARK_MODE;
   });
 });
