@@ -292,6 +292,23 @@ export class FileSecretsProvider implements SecretsCapability {
     return out;
   }
 
+  async listAt(_prefix: string): Promise<{ name: string }[]> {
+    throw new Error("FileSecretsProvider.listAt: NotImplemented");
+  }
+
+  async batchGet(_paths: string[]): Promise<Record<string, string>> {
+    throw new Error("FileSecretsProvider.batchGet: NotImplemented");
+  }
+
+  async setAtPath(
+    _tenantId: string,
+    _fullPath: string,
+    _value: string,
+    _opts?: { description?: string; type?: SecretType; metadata?: Record<string, string> },
+  ): Promise<void> {
+    throw new Error("FileSecretsProvider.setAtPath: NotImplemented");
+  }
+
   // ── Blob surface (multi-file secrets) ──────────────────────────────────
   //
   // Blobs live under `${arkDir}/secrets/<tenantId>/<blobName>/<file>` with

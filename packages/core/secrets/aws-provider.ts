@@ -300,6 +300,23 @@ export class AwsSecretsProvider implements SecretsCapability {
     return out;
   }
 
+  async listAt(_prefix: string): Promise<{ name: string }[]> {
+    throw new Error("AwsSecretsProvider.listAt: NotImplemented");
+  }
+
+  async batchGet(_paths: string[]): Promise<Record<string, string>> {
+    throw new Error("AwsSecretsProvider.batchGet: NotImplemented");
+  }
+
+  async setAtPath(
+    _tenantId: string,
+    _fullPath: string,
+    _value: string,
+    _opts?: { description?: string; type?: SecretType; metadata?: Record<string, string> },
+  ): Promise<void> {
+    throw new Error("AwsSecretsProvider.setAtPath: NotImplemented");
+  }
+
   // ── Blob surface (multi-file secrets) ──────────────────────────────────
   //
   // Each file in a blob is a distinct SSM SecureString parameter under

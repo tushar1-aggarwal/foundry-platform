@@ -69,6 +69,43 @@ export interface SecretsCapability {
    */
   resolveMany(tenantId: string, names: string[]): Promise<Record<string, string>>;
 
+  // ── Hierarchical-resolver discovery surface ─────────────────────────────
+  // These two methods power packages/secrets/resolver. Unlike `list`/`get`/
+  // `resolveMany`, they operate on FULL paths (`/ark/<tid>/...`) rather than
+  // tenant-scoped leaf names, and they SILENTLY skip missing paths instead
+  // of throwing -- discovery is allowed to enumerate paths that may not
+  // resolve to a value.
+
+  /**
+   * List secret-shaped entries whose full path starts with `prefix`.
+   * Returns objects carrying the full path as `name`. No values are
+   * returned -- this is a discovery API. Blob namespaces (e.g.
+   * `/ark/<tid>/blobs/...`) and internal sentinels are excluded.
+   */
+  listAt(prefix: string): Promise<{ name: string }[]>;
+
+  /**
+   * Fetch values for every full path in `paths` in a single call. Paths
+   * that do not exist are ABSENT from the returned map (no throw -- this
+   * is the contract diff vs `resolveMany`). Backends are free to internally
+   * chunk requests; callers should treat order in `paths` as significant
+   * only for their own bookkeeping, not for the response.
+   */
+  batchGet(paths: string[]): Promise<Record<string, string>>;
+
+  /**
+   * Optional sibling of `set` that accepts a pre-validated FULL path. Used
+   * by the CLI to write user-/team-scoped secrets without weakening the
+   * leaf-name regex on `set()`. Backends that don't implement this can be
+   * exercised only via `set()` (tenant-scoped leaf names).
+   */
+  setAtPath?(
+    tenantId: string,
+    fullPath: string,
+    value: string,
+    opts?: { description?: string; type?: SecretType; metadata?: Record<string, string> },
+  ): Promise<void>;
+
   // ── Blob (multi-file) secrets ───────────────────────────────────────────
   // A "blob" is a named bag of files (filename -> bytes), stored atomically
   // under a single blob name. Used for the claude subscription credentials
