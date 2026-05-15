@@ -60,7 +60,10 @@ export interface LaunchEnvResult {
  * materialization may also emit a k8s Secret side-effect (credsSecretName).
  */
 export async function buildLaunchEnv(
-  deps: Pick<DispatchDeps, "computes" | "materializeClaudeAuth" | "runtimes" | "getApp" | "secrets" | "teamChainLoader">,
+  deps: Pick<
+    DispatchDeps,
+    "computes" | "materializeClaudeAuth" | "runtimes" | "getApp" | "secrets" | "teamChainLoader"
+  >,
   secrets: StageSecretResolver,
   session: Session,
   stageDef: StageDefinition | null,
@@ -88,10 +91,7 @@ export async function buildLaunchEnv(
   let resolvedEnvVars: Record<string, string>;
   try {
     const resolver = new HierarchicalSecretResolver(deps.secrets);
-    resolvedEnvVars = await resolver.resolveAll(
-      { tenant_id: tenantId, user_id: session.user_id ?? null },
-      teamChain,
-    );
+    resolvedEnvVars = await resolver.resolveAll({ tenant_id: tenantId, user_id: session.user_id ?? null }, teamChain);
   } catch (err: unknown) {
     return { env: {}, error: `Secret resolution failed: ${(err as Error)?.message ?? String(err)}` };
   }

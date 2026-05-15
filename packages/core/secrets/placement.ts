@@ -109,9 +109,7 @@ export async function placeAllSecrets(
   const stringNamesToResolve = opts.envVars
     ? stringSelected.filter((r) => r.type !== "env-var").map((r) => r.name)
     : stringSelected.map((r) => r.name);
-  const stringValues = stringNamesToResolve.length
-    ? await app.secrets.resolveMany(tenantId, stringNamesToResolve)
-    : {};
+  const stringValues = stringNamesToResolve.length ? await app.secrets.resolveMany(tenantId, stringNamesToResolve) : {};
 
   for (const ref of stringSelected) {
     // When `opts.envVars` is provided, env-var-typed placement was handled

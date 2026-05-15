@@ -53,98 +53,95 @@ function makeDeps(): Parameters<typeof buildLaunchEnv>[0] {
   };
 }
 
-describe(
-  "buildLaunchEnv end-to-end (hierarchical resolver -> placement)",
-  () => {
-    it("user-scope wins, tenant-only surfaces, ssh-private-key queues file ops, no path-shaped env names", async () => {
-      const tid = tenant();
-      const setAtPath = app.secrets.setAtPath;
-      if (typeof setAtPath !== "function") {
-        throw new Error("FileSecretsProvider must implement setAtPath for this test");
+describe("buildLaunchEnv end-to-end (hierarchical resolver -> placement)", () => {
+  it("user-scope wins, tenant-only surfaces, ssh-private-key queues file ops, no path-shaped env names", async () => {
+    const tid = tenant();
+    const setAtPath = app.secrets.setAtPath;
+    if (typeof setAtPath !== "function") {
+      throw new Error("FileSecretsProvider must implement setAtPath for this test");
+    }
+
+    // Tenant + user scopes for the same key. User must win.
+    await setAtPath.call(app.secrets, tid, `/ark/${tid}/tenant/SHARED_KEY`, "tenant-value", {
+      type: "env-var",
+      metadata: {},
+    });
+    await setAtPath.call(app.secrets, tid, `/ark/${tid}/users/u1/SHARED_KEY`, "user-value", {
+      type: "env-var",
+      metadata: {},
+    });
+    // Tenant-only key.
+    await setAtPath.call(app.secrets, tid, `/ark/${tid}/tenant/TENANT_ONLY`, "tenant-only-value", {
+      type: "env-var",
+      metadata: {},
+    });
+
+    // One typed-blob secret -- ssh-private-key. Stored via the legacy
+    // `set()` surface (its name passes assertValidSecretName).
+    await app.secrets.set(tid, "GH_DEPLOY_KEY", "PRIVATE_KEY_BODY", {
+      type: "ssh-private-key",
+      metadata: { host: "github.com" },
+    });
+
+    // Replace the ssh placer with one that doesn't shell out to ssh-keyscan.
+    const stubSshPlacer = _makeSshPrivateKeyPlacer({
+      runKeyScan: async () => Buffer.from("github.com ssh-rsa AAAA...\n"),
+    });
+    __test_registerPlacer("ssh-private-key", stubSshPlacer);
+
+    try {
+      // A compute row the session points at -- placement runs only when
+      // a compute is resolved.
+      await app.computes.insert({
+        name: "smoke-target",
+        compute_kind: "local",
+        isolation_kind: "direct",
+        status: "running",
+        config: {},
+      } as any);
+
+      const session = await app.sessions.create({
+        summary: "smoke",
+        flow: "quick",
+        compute_name: "smoke-target",
+      });
+      // Stamp the session with user_id=u1 so the resolver walks the user prefix.
+      await app.sessions.update(session.id, { user_id: "u1" } as any);
+      const fetched = (await app.sessions.get(session.id))!;
+
+      const deps = makeDeps();
+      const secrets = new StageSecretResolver({
+        secrets: app.secrets,
+        config: app.config,
+        teamChainLoader: async () => [],
+      });
+
+      const result = await buildLaunchEnv(deps, secrets, fetched, null, "test-runtime", () => {});
+
+      expect(result.error).toBeUndefined();
+      expect(result.env.SHARED_KEY).toBe("user-value");
+      expect(result.env.TENANT_ONLY).toBe("tenant-only-value");
+      // No path-shaped env names.
+      for (const k of Object.keys(result.env)) {
+        expect(k).not.toContain("/");
       }
 
-      // Tenant + user scopes for the same key. User must win.
-      await setAtPath.call(app.secrets, tid, `/ark/${tid}/tenant/SHARED_KEY`, "tenant-value", {
-        type: "env-var",
-        metadata: {},
-      });
-      await setAtPath.call(app.secrets, tid, `/ark/${tid}/users/u1/SHARED_KEY`, "user-value", {
-        type: "env-var",
-        metadata: {},
-      });
-      // Tenant-only key.
-      await setAtPath.call(app.secrets, tid, `/ark/${tid}/tenant/TENANT_ONLY`, "tenant-only-value", {
-        type: "env-var",
-        metadata: {},
-      });
-
-      // One typed-blob secret -- ssh-private-key. Stored via the legacy
-      // `set()` surface (its name passes assertValidSecretName).
-      await app.secrets.set(tid, "GH_DEPLOY_KEY", "PRIVATE_KEY_BODY", {
-        type: "ssh-private-key",
-        metadata: { host: "github.com" },
-      });
-
-      // Replace the ssh placer with one that doesn't shell out to ssh-keyscan.
-      const stubSshPlacer = _makeSshPrivateKeyPlacer({
-        runKeyScan: async () => Buffer.from("github.com ssh-rsa AAAA...\n"),
-      });
-      __test_registerPlacer("ssh-private-key", stubSshPlacer);
-
-      try {
-        // A compute row the session points at -- placement runs only when
-        // a compute is resolved.
-        await app.computes.insert({
-          name: "smoke-target",
-          compute_kind: "local",
-          isolation_kind: "direct",
-          status: "running",
-          config: {},
-        } as any);
-
-        const session = await app.sessions.create({
-          summary: "smoke",
-          flow: "quick",
-          compute_name: "smoke-target",
-        });
-        // Stamp the session with user_id=u1 so the resolver walks the user prefix.
-        await app.sessions.update(session.id, { user_id: "u1" } as any);
-        const fetched = (await app.sessions.get(session.id))!;
-
-        const deps = makeDeps();
-        const secrets = new StageSecretResolver({
-          secrets: app.secrets,
-          config: app.config,
-          teamChainLoader: async () => [],
-        });
-
-        const result = await buildLaunchEnv(deps, secrets, fetched, null, "test-runtime", () => {});
-
-        expect(result.error).toBeUndefined();
-        expect(result.env.SHARED_KEY).toBe("user-value");
-        expect(result.env.TENANT_ONLY).toBe("tenant-only-value");
-        // No path-shaped env names.
-        for (const k of Object.keys(result.env)) {
-          expect(k).not.toContain("/");
-        }
-
-        // Placement ctx exists and the ssh placer queued at least one file op.
-        const placement = result.placement as DeferredPlacementCtx | undefined;
-        expect(placement).toBeInstanceOf(DeferredPlacementCtx);
-        expect(placement!.hasDeferred()).toBe(true);
-        const writes = placement!.queuedOps.filter((op) => op.kind === "writeFile");
-        // ssh-private-key placer writes one private-key file plus appends to
-        // ~/.ssh/config and ~/.ssh/known_hosts -- only writeFile counts here.
-        expect(writes.length).toBeGreaterThanOrEqual(1);
-      } finally {
-        __test_registerPlacer("ssh-private-key", sshPrivateKeyPlacer);
-      }
-    }, 180_000);
-  },
-  // bail-on-first: tests in this file share a real AppContext; a failing
-  // assertion would otherwise leak partial state into subsequent cases.
-  // bun:test honours the per-test timeout above; no extra cfg needed.
-);
+      // Placement ctx exists and the ssh placer queued at least one file op.
+      const placement = result.placement as DeferredPlacementCtx | undefined;
+      expect(placement).toBeInstanceOf(DeferredPlacementCtx);
+      expect(placement!.hasDeferred()).toBe(true);
+      const writes = placement!.queuedOps.filter((op) => op.kind === "writeFile");
+      // ssh-private-key placer writes one private-key file plus appends to
+      // ~/.ssh/config and ~/.ssh/known_hosts -- only writeFile counts here.
+      expect(writes.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      __test_registerPlacer("ssh-private-key", sshPrivateKeyPlacer);
+    }
+  }, 180_000);
+});
+// bail-on-first: tests in this file share a real AppContext; a failing
+// assertion would otherwise leak partial state into subsequent cases.
+// bun:test honours the per-test timeout above; no extra cfg needed.
 
 /*
 # Manual smoke (operator-run)
