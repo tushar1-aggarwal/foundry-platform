@@ -12,7 +12,7 @@
 #   make build         Build native macOS binary + Electron app
 #   make package       Package everything for distribution
 
-.PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-temporal-worker dev-docker dev-control-plane dev-control-plane-down dev-control-plane-bootstrap claude-tfy pi-tfy web desktop \
+.PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-temporal-worker dev-docker dev-control-plane dev-control-plane-down dev-control-plane-bootstrap dev-k8s-local dev-k8s-local-down claude-tfy pi-tfy web desktop \
         test test-file test-e2e test-e2e-fast test-e2e-web test-e2e-web-dev test-install test-watch test-e2e-local-bespoke test-e2e-control-plane test-e2e-control-plane-up test-e2e-control-plane-down test-e2e-t6-docker test-e2e-local-real-llm test-laptop-real-llm lint lint-fix \
         format format-check \
         dev-kill \
@@ -201,6 +201,37 @@ dev-control-plane-down: ## Stop everything: containers + any host processes stil
 	    pid=$$(lsof -nP -iTCP:$$port -sTCP:LISTEN -t 2>/dev/null | head -1); \
 	    if [ -n "$$pid" ]; then echo "killing PID $$pid on :$$port"; kill $$pid 2>/dev/null || true; fi; \
 	  done
+
+dev-k8s-local: ## Deploy full ark control plane to local OrbStack k8s (LocalStack + Temporal + Postgres + Redis in-cluster)
+	@test -n "$$ANTHROPIC_API_KEY" || { echo 'ANTHROPIC_API_KEY must be set'; exit 1; }
+	@kubectl config use-context orbstack >/dev/null
+	@echo "Building ark image (tag: local)..."
+	docker build -t ark:local .
+	@echo "Deploying helm release..."
+	helm upgrade --install ark .infra/helm/ark \
+		--namespace ark --create-namespace \
+		--set controlPlane.image.tag=local \
+		--set controlPlane.image.pullPolicy=Never \
+		--set controlPlane.auth.enabled=false \
+		--set workers.image.tag=local \
+		--set workers.image.pullPolicy=Never \
+		--set localstack.enabled=true \
+		--set s3.bucket=ark-local \
+		--set s3.region=us-east-1 \
+		--set temporal.server.tls.enabled=false \
+		--set ingress.enabled=false \
+		--set llm.anthropicApiKey="$$ANTHROPIC_API_KEY" \
+		--wait --timeout 10m
+	@echo ""
+	@echo "Stack deployed. To access:"
+	@echo "  kubectl -n ark port-forward svc/ark-control-plane 8420:8420 &"
+	@echo "  kubectl -n ark port-forward svc/temporal-ui 8088:8080 &"
+	@echo "  open http://localhost:8420"
+
+dev-k8s-local-down: ## Tear down the local k8s deployment
+	@helm uninstall ark --namespace ark || true
+	@kubectl -n ark delete pvc --all --ignore-not-found
+	@kubectl delete namespace ark --ignore-not-found
 
 dev-control-plane-bootstrap: ## One-time: register `compute/create local` so dispatch can run
 	@test -f .env.control-plane || { echo ".env.control-plane missing"; exit 1; }

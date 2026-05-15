@@ -1,7 +1,15 @@
-{{- if and .Values.temporal.enabled .Values.temporal.dbBootstrap.enabled }}
-{{- if .Values.temporal.persistence.secretManagerKey -}}
-{{- fail "temporal.dbBootstrap.enabled is mutually exclusive with temporal.persistence.secretManagerKey. With dbBootstrap the chart manages the K8s Secret directly (random password preserved via lookup); with secretManagerKey ExternalSecrets pulls it from AWS Secrets Manager. Pick one." -}}
-{{- end }}
+{{- if .Values.postgresql.enabled }}
+{{- /*
+The temporal-db-bootstrap Job creates the `temporal` role and the temporal/
+temporal_visibility databases. It runs only when postgresql.enabled (the chart
+owns the postgres). With an external postgres the operator must provision
+these out-of-band.
+
+Hook ordering: postgres StatefulSet is a regular install resource, so this
+job runs post-install (NOT pre-install) -- pre-install would deadlock waiting
+for a postgres that helm hasn't created yet. The temporal-server Deployment
+may crashloop briefly until the schema job (weight 5) finishes.
+*/ -}}
 {{- $pwdKey := .Values.temporal.persistence.secretKeys.password }}
 {{- $userKey := .Values.temporal.persistence.secretKeys.username }}
 {{- $existing := lookup "v1" "Secret" .Values.namespace .Values.temporal.persistence.existingSecret }}
@@ -11,7 +19,7 @@
 {{- else }}
   {{- $pwd = randAlphaNum 32 }}
 {{- end }}
-{{- $masterSecret := .Values.temporal.dbBootstrap.masterSecretName | default (printf "%s-secrets" (include "ark.fullname" .)) }}
+{{- $masterSecret := include "ark.temporalBootstrapMasterSecret" . }}
 {{- if not $existing }}
 # Conditionally rendered: only created on first install (when lookup returns nil).
 # On upgrades the existing Secret is preserved untouched, so the password stays
@@ -25,13 +33,6 @@ metadata:
   labels:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-db-credentials
-  annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": "-30"
-    "helm.sh/hook-delete-policy": before-hook-creation
-    "argocd.argoproj.io/hook": PreSync
-    "argocd.argoproj.io/sync-wave": "-30"
-    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation
 type: Opaque
 stringData:
   {{ $userKey }}: temporal
@@ -47,15 +48,15 @@ metadata:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-db-bootstrap
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": "-25"
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "argocd.argoproj.io/hook": PreSync
-    "argocd.argoproj.io/sync-wave": "-25"
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/sync-wave": "1"
     "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
 spec:
-  backoffLimit: 3
-  activeDeadlineSeconds: 300
+  backoffLimit: 5
+  activeDeadlineSeconds: 600
   template:
     metadata:
       labels:
@@ -78,9 +79,9 @@ spec:
                   name: {{ $masterSecret }}
                   key: {{ .Values.temporal.dbBootstrap.masterSecretKeys.password }}
             - name: PGHOST
-              value: {{ .Values.postgresql.external.host | quote }}
+              value: {{ include "ark.postgresqlHost" . | quote }}
             - name: PGPORT
-              value: {{ .Values.postgresql.external.port | quote }}
+              value: {{ include "ark.postgresqlPort" . | quote }}
             - name: TEMPORAL_PWD
               valueFrom:
                 secretKeyRef:
@@ -95,6 +96,16 @@ spec:
             - -c
             - |
               set -eo pipefail
+              # Wait for postgres to be reachable. In-cluster postgres comes up
+              # in parallel with this job; external postgres should already be
+              # up but we still tolerate flaps.
+              for i in $(seq 1 60); do
+                if pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; then
+                  break
+                fi
+                echo "waiting for postgres at $PGHOST:$PGPORT... ($i)"
+                sleep 2
+              done
               # Create or reset password for the temporal role (idempotent).
               psql -v ON_ERROR_STOP=1 -d postgres -c "
                 DO \$do\$

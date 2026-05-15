@@ -24,11 +24,6 @@ controlPlane:
   router:
     enabled: true
     policy: balanced
-  # Hosted mode rejects FsSnapshotStore at boot and demands an S3SnapshotStore
-  # impl that is still TODO upstream. Setting this to true bypasses the check.
-  # Safe ONLY at replicaCount=1 (single-pod snapshots don't need cross-pod
-  # visibility). Flip off the day the S3 snapshot store implementation lands.
-  devAllowLocalHostedStorage: false
 
 # -- Workers
 workers:
@@ -52,6 +47,8 @@ workers:
     runtimeClassName: kata-fc
 
 # -- PostgreSQL
+# Shared by the control plane (ark database) AND Temporal (temporal +
+# temporal_visibility databases, temporal role). One server, multiple databases.
 postgresql:
   enabled: true            # set false to use external
   image: postgres:16-alpine
@@ -65,7 +62,7 @@ postgresql:
     host: ""
     port: 5432
     database: ark
-    existingSecret: ""      # K8s secret with DATABASE_URL
+    existingSecret: ""      # K8s secret with DATABASE_URL + DB_USERNAME/DB_PASSWORD
 
 # -- Redis
 redis:
@@ -77,10 +74,29 @@ redis:
     port: 6379
     existingSecret: ""
 
+# -- LocalStack (S3 emulator for dev / local k8s)
+# When enabled, deploys LocalStack in-cluster and points the control plane and
+# Temporal worker at it via ARK_S3_ENDPOINT. When disabled, falls back to
+# `localstack.external.endpoint`; if that is empty too, the control plane uses
+# real AWS S3 (default SDK behavior).
+localstack:
+  enabled: false
+  image: localstack/localstack:3
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  external:
+    endpoint: ""            # e.g. http://localstack.corp:4566
+
 # -- S3 backend for ark blob storage (hosted mode). When `bucket` is set,
 # control-plane and temporal-worker get ARK_BLOB_BACKEND=s3 + ARK_S3_BUCKET/
-# REGION/PREFIX env vars. Leave bucket empty to opt out (boot will then fail
-# in hosted mode unless controlPlane.devAllowLocalHostedStorage=true).
+# REGION/PREFIX env vars. When the resolved S3 endpoint is non-empty (via
+# localstack.enabled or localstack.external.endpoint), the chart also wires
+# ARK_S3_ENDPOINT + AWS_ENDPOINT_URL_S3 + ARK_S3_PATH_STYLE=true.
 s3:
   bucket: ""
   region: ""
@@ -117,22 +133,17 @@ externalSecret:
 tensorZero:
   enabled: false
 
-# -- Temporal (workflow orchestration for hosted/control-plane mode)
-# Shipped as part of the main chart, not a sub-chart. The persistence layer
-# (RDS + pgbouncer) is provisioned by Ops outside Helm; see
-# `docs/superpowers/specs/2026-05-12-temporal-helm-gap-design.md`.
-#
-# Off by default so `helm lint` / `helm template` succeed without an account
-# overlay. The production overlay (`values-production.yaml`) flips this on
-# and each account values file must supply `temporal.persistence.host`.
+# -- Temporal (workflow orchestration; always deployed -- Phase 3 dispatch
+# is workflow-driven). Persistence runs on the same Postgres server as the
+# control plane (resolved via ark.postgresqlHost/ark.postgresqlPort), with
+# its own role + dedicated databases.
 temporal:
-  enabled: false
   # Default namespace passed to Ark control plane / worker.
-  namespace: ark-prod
+  namespace: ark
   # All namespaces created by the post-install Job. The default namespace
   # MUST appear in this list.
   namespaces:
-    - ark-prod
+    - ark
   # Single task queue name used when taskQueueAssignments is empty.
   taskQueue: ark.default.stages
   # Comma-separated task queues for sharded workers. Empty means use taskQueue.
@@ -154,36 +165,24 @@ temporal:
         cpu: 2000m
         memory: 4Gi
     tls:
-      enabled: true             # RDS requires SSL; set false only for local/dev clusters without TLS
+      enabled: true             # external/RDS Postgres typically requires SSL; flip false for in-cluster Postgres or local clusters
 
-  # Persistence -- shared RDS via Ops-provisioned pgbouncer.
+  # Persistence -- shared with the control-plane Postgres (host/port resolved
+  # from postgresql.* via ark.postgresqlHost/Port). Temporal still owns its
+  # own role + databases.
   persistence:
-    host: ""                           # pgbouncer host; required per env.
-    port: 6432
     database: temporal
     visibilityDatabase: temporal_visibility
     existingSecret: temporal-db-credentials
     secretKeys:
       username: POSTGRES_USER
       password: POSTGRES_PWD
-    # AWS Secrets Manager key (path or ARN) holding POSTGRES_USER/PWD for the
-    # temporal role. When set AND externalSecret.enabled=true, the chart
-    # materializes the K8s Secret named in `existingSecret` via an
-    # ExternalSecret. Leave empty to manage that K8s Secret out-of-band.
-    secretManagerKey: ""
 
-  # Optional: bootstrap Job to create the `temporal` role + temporal/
-  # temporal_visibility databases on RDS. Runs as pre-install,pre-upgrade
-  # hook (weight -25, before schema migration at -10). Uses master DB
-  # credentials from `masterSecretName` (defaults to <release>-secrets, which
-  # holds the RDS-managed rotated master from ExternalSecret).
-  #
-  # When enabled, the chart manages `temporal-db-credentials` directly: a
-  # random password is generated on first install and preserved across
-  # upgrades via `lookup`. Mutually exclusive with persistence.secretManagerKey
-  # (which would have ExternalSecrets manage the same K8s Secret instead).
+  # Bootstrap Job: creates the `temporal` role + temporal/temporal_visibility
+  # databases. Runs only when postgresql.enabled (chart-owned database). When
+  # postgresql.enabled=false the operator is responsible for provisioning
+  # these out-of-band against their external Postgres.
   dbBootstrap:
-    enabled: false
     masterSecretName: ""
     masterSecretKeys:
       username: DB_USERNAME
@@ -195,7 +194,6 @@ temporal:
   # Helm Job: temporal-sql-tool setup-schema + update-schema.
   # Runs on pre-install AND pre-upgrade. Idempotent.
   schemaJob:
-    enabled: true
     image:
       repository: temporalio/admin-tools
       tag: "1.27"
@@ -206,7 +204,6 @@ temporal:
 
   # Helm Job: post-install, creates namespaces idempotently.
   namespaceJob:
-    enabled: true
     image:
       repository: temporalio/admin-tools
       tag: "1.27"

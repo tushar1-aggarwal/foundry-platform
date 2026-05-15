@@ -1,20 +1,20 @@
-{{- if .Values.temporal.ui.enabled }}
+{{- if .Values.localstack.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: temporal-ui
+  name: {{ include "ark.localstackServiceName" . }}
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "ark.labels" . | nindent 4 }}
-    app.kubernetes.io/component: temporal-ui
+    app.kubernetes.io/component: localstack
 spec:
   type: ClusterIP
   selector:
     {{- include "ark.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: temporal-ui
+    app.kubernetes.io/component: localstack
   ports:
-    - name: http
-      port: 8080
-      targetPort: http
+    - name: edge
+      port: 4566
+      targetPort: edge
       protocol: TCP
 {{- end }}

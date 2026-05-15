@@ -94,6 +94,8 @@ spec:
             # Hosted mode requires storage.blobBackend=s3 (LocalDiskBlobStore
             # is pod-ephemeral and rejected at boot in di/storage.ts). Plumbed
             # from .Values.s3 so chart consumers don't have to duplicate it.
+            # ARK_S3_ENDPOINT / AWS_ENDPOINT_URL_S3 / ARK_S3_PATH_STYLE come
+            # from the configmap when LocalStack is wired.
             - name: ARK_BLOB_BACKEND
               value: "s3"
             - name: ARK_S3_BUCKET
@@ -104,14 +106,15 @@ spec:
             - name: ARK_S3_PREFIX
               value: {{ .Values.s3.prefix | quote }}
             {{- end }}
+            # LocalStack accepts any credentials; supply dummy values so the
+            # AWS SDK chain doesn't fall through to IMDS lookups inside the
+            # pod (which would hang then 404).
+            {{- if include "ark.s3Endpoint" . }}
+            - name: AWS_ACCESS_KEY_ID
+              value: "test"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "test"
             {{- end }}
-            {{- if .Values.controlPlane.devAllowLocalHostedStorage }}
-            # Hosted mode also requires an S3SnapshotStore implementation; the
-            # only documented bypass is this dev flag. Acceptable today only
-            # for replicaCount=1; revisit when the S3 snapshot store impl
-            # lands upstream and flip this off for multi-replica.
-            - name: ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE
-              value: "1"
             {{- end }}
           {{- if or .Values.llm.anthropicApiKey .Values.llm.existingSecret }}
             - name: ANTHROPIC_API_KEY

@@ -1,0 +1,58 @@
+{{- if and .Values.localstack.enabled .Values.s3.bucket }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: localstack-init
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+    app.kubernetes.io/component: localstack-init
+  annotations:
+    # Post-install hook: LocalStack must be reachable before we can create
+    # the bucket. `s3 mb` is idempotent against an existing bucket.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        {{- include "ark.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: localstack-init
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: init
+          image: amazon/aws-cli:2
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: "test"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "test"
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.s3.region | default "us-east-1" | quote }}
+            - name: AWS_ENDPOINT_URL
+              value: {{ include "ark.s3Endpoint" . | quote }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              # Wait for LocalStack edge port to be ready.
+              for i in $(seq 1 30); do
+                if aws s3 ls >/dev/null 2>&1; then
+                  break
+                fi
+                echo "waiting for localstack... ($i)"
+                sleep 3
+              done
+              # Idempotent bucket creation.
+              if aws s3api head-bucket --bucket {{ .Values.s3.bucket | quote }} 2>/dev/null; then
+                echo "bucket {{ .Values.s3.bucket }} exists"
+              else
+                aws s3 mb s3://{{ .Values.s3.bucket }}
+                echo "bucket {{ .Values.s3.bucket }} created"
+              fi
+{{- end }}

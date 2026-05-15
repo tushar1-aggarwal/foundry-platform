@@ -18,7 +18,8 @@ data:
   {{- if $redisUrl }}
   REDIS_URL: {{ $redisUrl | quote }}
   {{- end }}
-  {{- if .Values.temporal.enabled }}
+  # Temporal is structural -- always emitted. Hosted/control-plane mode always
+  # routes dispatch through Temporal workflows (Phase 3).
   ARK_TEMPORAL_ORCHESTRATION: "true"
   ARK_TEMPORAL_SERVER_URL: "{{ .Values.temporal.serverServiceName }}:7233"
   ARK_TEMPORAL_NAMESPACE: {{ .Values.temporal.namespace | quote }}
@@ -26,4 +27,11 @@ data:
   {{- if .Values.temporal.taskQueueAssignments }}
   ARK_TEMPORAL_TASK_QUEUE_ASSIGNMENTS: {{ .Values.temporal.taskQueueAssignments | quote }}
   {{- end }}
+  {{- $s3Endpoint := include "ark.s3Endpoint" . }}
+  {{- if $s3Endpoint }}
+  # When LocalStack (or any S3-compatible endpoint) is wired, force path-style
+  # URLs -- LocalStack does not support virtual-host style addressing.
+  ARK_S3_ENDPOINT: {{ $s3Endpoint | quote }}
+  AWS_ENDPOINT_URL_S3: {{ $s3Endpoint | quote }}
+  ARK_S3_PATH_STYLE: "true"
   {{- end }}

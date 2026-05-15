@@ -1,4 +1,4 @@
-{{- if and .Values.temporal.enabled .Values.temporal.namespaceJob.enabled }}
+{{- /* Always emitted -- workers fail without their namespace. */ -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -57,4 +57,3 @@ spec:
                 echo "namespace {{ . }} created"
               fi
               {{- end }}
-{{- end }}

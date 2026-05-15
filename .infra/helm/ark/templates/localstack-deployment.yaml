@@ -1,0 +1,54 @@
+{{- if .Values.localstack.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ark.localstackServiceName" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+    app.kubernetes.io/component: localstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ark.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: localstack
+  template:
+    metadata:
+      labels:
+        {{- include "ark.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: localstack
+    spec:
+      containers:
+        - name: localstack
+          image: {{ .Values.localstack.image | quote }}
+          ports:
+            - name: edge
+              containerPort: 4566
+              protocol: TCP
+          env:
+            # SERVICES is empty -> LocalStack lazily loads what's used. We only
+            # need s3 today; setting it explicitly trims the boot footprint.
+            - name: SERVICES
+              value: "s3"
+            - name: DEBUG
+              value: "0"
+            - name: PERSISTENCE
+              value: "0"
+          readinessProbe:
+            httpGet:
+              path: /_localstack/health
+              port: edge
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /_localstack/health
+              port: edge
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.localstack.resources | nindent 12 }}
+{{- end }}

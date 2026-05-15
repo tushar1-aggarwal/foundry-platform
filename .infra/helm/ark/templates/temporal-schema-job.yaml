@@ -1,4 +1,4 @@
-{{- if and .Values.temporal.enabled .Values.temporal.schemaJob.enabled }}
+{{- /* Always emitted -- Temporal server cannot start without its schema. */ -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -8,14 +8,25 @@ metadata:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-schema
   annotations:
-    # Run before any server pods come up, on every install and upgrade.
     # update-schema is a no-op when schema is already current, so re-runs
     # are cheap and safe.
+    #
+    # With in-cluster postgres the schema job must run POST-install because
+    # the postgres StatefulSet is a regular install resource that doesn't
+    # exist during pre-install. With external postgres pre-install is fine
+    # (and preserves the no-crashloop server boot operators are used to).
+    {{- if .Values.postgresql.enabled }}
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/sync-wave": "5"
+    {{- else }}
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
     "argocd.argoproj.io/hook": PreSync
     "argocd.argoproj.io/sync-wave": "-10"
+    {{- end }}
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
     "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
 spec:
   backoffLimit: {{ .Values.temporal.schemaJob.backoffLimit }}
@@ -44,10 +55,13 @@ spec:
             # server uses. For pilots without pgbouncer the two values are the
             # same -- but this isolation makes the chart correct for any account
             # that adds pgbouncer later.
+            # Schema DDL connects directly to the postgres backing Temporal.
+            # In-cluster postgres (postgresql.enabled) and external postgres
+            # both work; the helper resolves to the right host/port.
             - name: SQL_HOST
-              value: {{ .Values.postgresql.external.host | quote }}
+              value: {{ include "ark.postgresqlHost" . | quote }}
             - name: SQL_PORT
-              value: {{ .Values.postgresql.external.port | quote }}
+              value: {{ include "ark.postgresqlPort" . | quote }}
             - name: SQL_USER
               valueFrom:
                 secretKeyRef:
@@ -66,6 +80,17 @@ spec:
               DB={{ .Values.temporal.persistence.database }}
               VDB={{ .Values.temporal.persistence.visibilityDatabase }}
               {{ if .Values.temporal.server.tls.enabled }}# RDS requires SSL: --tls --tls-disable-host-verification passed to every sql-tool call below.{{ end }}
+
+              # Wait for postgres TCP socket -- in-cluster postgres comes up in
+              # parallel with this job.
+              for i in $(seq 1 60); do
+                if (exec 3<>/dev/tcp/$SQL_HOST/$SQL_PORT) 2>/dev/null; then
+                  exec 3>&-
+                  break
+                fi
+                echo "waiting for postgres at $SQL_HOST:$SQL_PORT... ($i)"
+                sleep 2
+              done
 
               # Idempotent setup helper: succeed cleanly if the schema_version
               # table already exists; surface any other error (perms,
@@ -94,4 +119,3 @@ spec:
               run_setup "$VDB"
               temporal-sql-tool {{ if .Values.temporal.server.tls.enabled }}--tls --tls-disable-host-verification {{ end }}--db "$VDB" update-schema --schema-dir schema/postgresql/v12/visibility/versioned
               echo "Schema setup + update complete for $DB and $VDB."
-{{- end }}
