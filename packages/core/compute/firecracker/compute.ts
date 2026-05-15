@@ -51,6 +51,7 @@ import type {
 // ^ compute/types.ts -- the Compute/Isolation abstractions.
 import { NotSupportedError } from "../types.js";
 import { cloneWorkspaceViaArkd } from "../workspace-clone.js";
+import { resolveAgentIdentityForRemoteCompute } from "../git-identity.js";
 import { provisionStep } from "../../services/provisioning-steps.js";
 import { FirecrackerPlacementCtx } from "./placement-ctx.js";
 import type { PlacementCtx } from "../../secrets/placement-types.js";
@@ -393,12 +394,18 @@ export class FirecrackerCompute implements Compute {
     if (!opts.source || !opts.remoteWorkdir) return;
     const arkdUrl = this.getArkdUrl(h);
     const arkdToken = process.env.ARK_ARKD_TOKEN ?? null;
+    const branch = opts.branch ?? `ark-${opts.sessionId}`;
+    const identity = await resolveAgentIdentityForRemoteCompute(this.app, this.app.tenantId ?? "default");
     await this.cloneHelper({
       arkdUrl,
       arkdToken,
       source: opts.source,
       remoteWorkdir: opts.remoteWorkdir,
+      branch,
+      authorName: identity.name,
+      authorEmail: identity.email,
     });
+    await this.app.sessions.update(opts.sessionId, { workdir: opts.remoteWorkdir, branch });
   }
 
   // ── flushPlacement ──────────────────────────────────────────────────────

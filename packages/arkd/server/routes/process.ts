@@ -24,7 +24,7 @@ import { json } from "../helpers.js";
 import { requireSafeTmuxName } from "../../common/validation.js";
 import { SAFE_TMUX_NAME_RE } from "../../common/constants.js";
 import { type RouteCtx } from "../route-ctx.js";
-import { logDebug, logInfo, logWarn } from "../../../core/observability/structured-log.js";
+import { logDebug, logError, logInfo, logWarn } from "../../../core/observability/structured-log.js";
 import type {
   ProcessSpawnReq,
   ProcessSpawnRes,
@@ -202,11 +202,21 @@ async function spawnProcess(req: ProcessSpawnReq): Promise<ProcessSpawnRes> {
   void child.exited.then((code) => {
     entry.exited = true;
     entry.exitCode = typeof code === "number" ? code : null;
-    logInfo("compute", "arkd /process/spawn: child exited", {
-      handle: req.handle,
-      pid: child.pid,
-      exitCode: entry.exitCode,
-    });
+    if (entry.exitCode !== null && entry.exitCode !== 0) {
+      logError("compute", "arkd /process/spawn: child exited with non-zero code", {
+        handle: req.handle,
+        pid: child.pid,
+        exitCode: entry.exitCode,
+        cmd: req.cmd,
+        workdir: req.workdir,
+      });
+    } else {
+      logInfo("compute", "arkd /process/spawn: child exited", {
+        handle: req.handle,
+        pid: child.pid,
+        exitCode: entry.exitCode,
+      });
+    }
   });
 
   // Drain stdout / stderr to the log file when requested. We write both

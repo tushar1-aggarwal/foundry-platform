@@ -15,6 +15,7 @@ describe("arkd public barrels", () => {
       "AUTH_EXEMPT_PATHS",
       "ArkdClientError",
       "ArkdClientTransportError",
+      "ArkdUnreachableError",
       "DEFAULT_PORT",
       "SAFE_TMUX_NAME_RE",
       "SUBSCRIBED_ACK",

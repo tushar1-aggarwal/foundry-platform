@@ -283,6 +283,7 @@ export function resolveAgentWithRuntime(
 // ── Build claude CLI args ───────────────────────────────────────────────────
 
 import * as claude from "../claude/claude.js";
+import { resolveProviderSlug } from "../models/resolver.js";
 
 export function buildClaudeArgs(
   agent: AgentDefinition,
@@ -335,8 +336,32 @@ export function buildClaudeArgs(
     }
   }
 
+  // Resolve the agent's model alias/id to the provider-qualified slug the
+  // configured LLM gateway expects. Without this step the launcher gets the
+  // raw alias (e.g. "haiku") which `MODEL_MAP` upgrades to the
+  // Anthropic-direct slug (e.g. "claude-haiku-4-5-20251001"). That slug works
+  // against api.anthropic.com but is rejected by gateways in bedrock-compat
+  // mode (TrueFoundry / direct Bedrock) which expect
+  // `pi-agentic/global.anthropic.claude-haiku-4-5-20251001-v1-0` etc. The
+  // model catalog already carries per-provider slugs; consult it here when
+  // `opts.app` is available so the runtime's `compat` modes drive slug
+  // selection. Without an AppContext (test/sub-process callers) fall back to
+  // the raw `agent.model` and let `MODEL_MAP` do its old thing.
+  let resolvedModel = agent.model;
+  if (opts?.app && agent.model && agent.runtime) {
+    try {
+      const runtimeDef = opts.app.runtimes?.get?.(agent.runtime) as { compat?: readonly string[] } | undefined;
+      const compat = runtimeDef?.compat;
+      const slug = resolveProviderSlug(opts.app.models, agent.model, compat, opts.projectRoot);
+      if (slug) resolvedModel = slug;
+    } catch {
+      // Catalog miss or store error -- fall through to the raw model alias.
+      // The legacy `MODEL_MAP` path inside `claude.buildArgs` still applies.
+    }
+  }
+
   return claude.buildArgs({
-    model: agent.model,
+    model: resolvedModel,
     maxTurns: agent.max_turns,
     systemPrompt,
     mcpServers: agent.mcp_servers,

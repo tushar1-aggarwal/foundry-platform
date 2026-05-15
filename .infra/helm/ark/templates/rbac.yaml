@@ -1,0 +1,56 @@
+{{- /*
+RBAC for the ark service account.
+
+K8sCompute provisions a per-session pod for each agent launch:
+  - pods: create/delete/get/list/watch
+  - pods/exec: create  (kubectl exec into the session pod via tmux attach)
+  - pods/log: get      (log streaming back to the conductor)
+
+The dispatch path also materialises per-session claude auth as a
+short-lived k8s Secret picked up by the agent pod:
+  - secrets: create/delete/get
+
+All resources are namespace-scoped (Role + RoleBinding); ark never needs
+cluster-wide permissions today.
+*/}}
+{{- if .Values.serviceAccount.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "ark.serviceAccountName" . }}-compute
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "ark.serviceAccountName" . }}-compute
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "ark.serviceAccountName" . }}-compute
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "ark.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
+{{- end }}

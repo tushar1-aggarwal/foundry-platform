@@ -12,7 +12,7 @@
  * they're trivially unit-testable and don't widen the dispatcher class surface.
  */
 
-import { mkdirSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "fs";
 import { join } from "path";
 import { promisify } from "util";
 import { execFile } from "child_process";
@@ -20,6 +20,7 @@ import { execFile } from "child_process";
 import { logWarn } from "../../observability/structured-log.js";
 import { detectInjection } from "../../session/prompt-guard.js";
 import { buildAuthedHttpsUrl } from "../git/auth-url.js";
+import { isRepoUrl } from "../../repo-url.js";
 import type { DispatchDeps, DispatchResult } from "./types.js";
 import type { Session } from "../../../types/index.js";
 
@@ -109,15 +110,6 @@ export async function maybeHandleActionStage(
 }
 
 /**
- * Detect git URL shape: SCP-like (`git@host:path`), HTTP(S), SSH, or git
- * protocol. Used to route a URL pasted into `session.repo` through the
- * remote-clone path instead of treating it as a local filesystem path.
- */
-function isGitUrl(s: string): boolean {
-  return /^(git@[^:]+:|https?:\/\/|ssh:\/\/|git\+(ssh|https?):\/\/|git:\/\/)/i.test(s);
-}
-
-/**
  * Clone a remote repo into the worktrees dir. Two trigger paths:
  *
  *   1. `session.config.remoteRepo` is set (the explicit `--remote-repo`
@@ -149,25 +141,68 @@ export async function cloneRemoteRepoIfNeeded(
   session: Session,
   log: (msg: string) => void,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  // Pick the source URL: explicit remoteRepo wins; otherwise treat
+  // Pick the source URL: explicit config.remoteRepo wins; otherwise treat
   // session.repo as a URL when it looks like one. Local paths (the
   // existing-checkout use case) skip the clone entirely.
   const repoField = typeof session.repo === "string" ? session.repo : "";
-  const remoteUrl = (session.config?.remoteRepo as string | undefined) ?? (isGitUrl(repoField) ? repoField : undefined);
+  const remoteUrl =
+    (session.config?.remoteRepo as string | undefined) ?? (repoField && isRepoUrl(repoField) ? repoField : undefined);
   if (!remoteUrl || session.workdir) return { ok: true };
 
-  // Hosted dispatch normally defers cloning to the compute target. Laptop-hosted
-  // mode (ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE=1) lets the conductor handle it,
-  // because the conductor and worker are the same host and LocalCompute has no
-  // prepareWorkspace impl -- without this the clone never happens.
-  if (deps.getApp().mode.kind === "hosted" && process.env.ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE !== "1") {
+  // Hosted dispatch ALWAYS defers cloning to the compute target. The dispatcher
+  // pod is a coordinator, not a workspace owner: its filesystem is ephemeral,
+  // potentially multi-replica, and shared across tenants. The agent runs in a
+  // separate compute pod whose in-pod arkd performs the clone with tenant
+  // auth injected (see executors/claude-agent.ts + executors/claude-code.ts
+  // cloneSource handling).
+  if (deps.getApp().mode.kind === "hosted") {
     log("Skipping conductor-side remote-repo clone in hosted mode (deferred to compute target)");
     return { ok: true };
   }
   const sessionId = session.id;
+  const tmpDir = join(deps.config.dirs.ark, "worktrees", sessionId);
+
+  // Retry-safe: a prior dispatch may have left tmpDir behind (partial clone,
+  // or full clone that never persisted `session.workdir` due to a crash
+  // between `git clone` and the DB update). Reuse only when the clone is
+  // fully landed (HEAD resolves to a commit); otherwise wipe and re-clone.
+  // `git clone` refuses non-empty destinations with "fatal: destination
+  // path '...' already exists and is not an empty directory."
+  if (existsSync(tmpDir)) {
+    let reusable = false;
+    if (existsSync(join(tmpDir, ".git"))) {
+      try {
+        await execFileAsync("git", ["-C", tmpDir, "rev-parse", "--verify", "HEAD"], { timeout: 5_000 });
+        reusable = true;
+      } catch {
+        // .git exists but HEAD doesn't resolve -- partial / interrupted clone.
+      }
+    }
+    if (reusable) {
+      log(`Reusing existing clone at ${tmpDir} (skipping re-clone)`);
+      // Update BOTH workdir and repo so setupSessionWorktree's later
+      // `resolve(session.repo)` lands on the cloned dir instead of
+      // re-resolving the URL as a path (mirrors the clone-success branch).
+      await deps.sessions.update(sessionId, { workdir: tmpDir, repo: tmpDir });
+      const updated = await deps.sessions.get(sessionId);
+      if (updated) {
+        (session as { workdir: string | null }).workdir = updated.workdir;
+        (session as { repo: string | null }).repo = updated.repo;
+      }
+      return { ok: true };
+    }
+    try {
+      if (readdirSync(tmpDir).length > 0) {
+        log(`Removing stale / partial clone contents at ${tmpDir} before re-clone`);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    } catch (e: any) {
+      logWarn("session", `cloneRemoteRepoIfNeeded: failed to clean ${tmpDir}: ${e?.message ?? e}`);
+    }
+  }
+
   log(`Cloning remote repo: ${remoteUrl}`);
   try {
-    const tmpDir = join(deps.config.dirs.ark, "worktrees", sessionId);
     mkdirSync(tmpDir, { recursive: true });
     // Inject tenant-scoped basic-auth creds (BITBUCKET_TOKEN/USERNAME,
     // GITHUB_TOKEN) into the URL for hosts we know how to authenticate.

@@ -53,6 +53,15 @@ spec:
             - configMapRef:
                 name: {{ include "ark.fullname" . }}-config
           env:
+            # In-cluster Kubernetes API CA trust. @kubernetes/client-node
+            # picks up the in-cluster context fine, but Bun's TLS stack does
+            # not auto-load the service-account CA the way kubectl does --
+            # without this, K8sCompute.provision (and any other in-cluster
+            # K8s API call) fails with "unable to verify the first
+            # certificate". The file is mounted automatically when a service
+            # account is attached to the pod.
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
             {{- if and (not .Values.postgresql.enabled) .Values.postgresql.external.host }}
             # External Postgres -- DB_USERNAME/DB_PASSWORD from the
             # RDS-managed secret (rotating). DATABASE_URL is built at

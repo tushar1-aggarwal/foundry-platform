@@ -8,6 +8,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import { recordingPath } from "../recordings.js";
+import { isRepoUrl } from "../repo-url.js";
 
 import type { Executor, LaunchOpts, LaunchResult, ExecutorStatus } from "../executor.js";
 import * as claude from "../claude/claude.js";
@@ -15,6 +16,8 @@ import * as tmux from "../infra/tmux.js";
 import { discoverWorkspacePorts } from "../compute/isolation/ports.js";
 import { hasDevcontainerConfig } from "../compute/isolation/devcontainer.js";
 import { logWarn } from "../observability/structured-log.js";
+import { buildAuthedHttpsUrl } from "../services/git/auth-url.js";
+import type { ComputeHandle } from "../compute/types.js";
 
 /**
  * Default home directory on EC2 / k8s remote hosts. Used as the
@@ -130,13 +133,27 @@ export const claudeCodeExecutor: Executor = {
     // one. The lifecycle re-runs `attachExistingHandle` itself; we only
     // need the handle here so `compute.resolveWorkdir(handle, session)`
     // and `compute.buildLaunchEnv` can read off `handle.meta`.
+    //
+    // Fallback to `session.config.compute_handle` when `attachExistingHandle`
+    // returns null. K8sCompute.attachExistingHandle returns null when the
+    // row config has no `pod_name` -- which is the case when `session.compute_name`
+    // points at the template (e.g. `docs-k8s`) rather than the per-session
+    // instance. The conductor persists the provisioned handle to
+    // session.config.compute_handle, so use that as the source of truth for
+    // path resolution. Without this fallback the launcher's `cd` falls back
+    // to REMOTE_HOME ("/home/ubuntu") instead of the cloned workdir, and
+    // the agent exits immediately because the launch.sh runs `cd
+    // /home/ubuntu` before claude can start.
+    const persistedHandle = (session.config as { compute_handle?: ComputeHandle } | null | undefined)?.compute_handle;
     const previewHandle =
       target && compute
         ? (target.compute.attachExistingHandle?.({
             name: compute.name,
             status: compute.status,
             config: (compute.config ?? {}) as Record<string, unknown>,
-          }) ?? null)
+          }) ??
+          persistedHandle ??
+          null)
         : null;
 
     // Setup worktree + trust (dynamic import to avoid circular dependency)
@@ -174,8 +191,10 @@ export const claudeCodeExecutor: Executor = {
       }
     }
     // Resolve the original repo path so MCP servers from the source repo's
-    // .mcp.json can be merged into the worktree's .mcp.json.
-    const originalRepoDir = session.repo ? resolve(session.repo) : undefined;
+    // .mcp.json can be merged into the worktree's .mcp.json. Skip resolve()
+    // for remote URLs -- they have no local path meaning and resolve() would
+    // produce a mangled path like /cwd/https:/host/...
+    const originalRepoDir = session.repo && !isRepoUrl(session.repo) ? resolve(session.repo) : undefined;
     // Runtime-declared MCP servers + flow-level connectors. Runtime is the
     // broad opt-in (every session on this runtime gets the toolbelt); flow
     // connectors add per-flow MCP tools. See connectors/resolve.ts for the
@@ -436,7 +455,13 @@ export const claudeCodeExecutor: Executor = {
       // `session.config.remoteRepo`); fall back to `session.repo` for
       // co-located compute kinds. Null suppresses prepare-workspace --
       // bare-worktree dispatch surfaces the misconfig at the agent stage.
-      const cloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo ?? null;
+      //
+      // For private HTTPS remotes (Bitbucket/GitHub) inject tenant-scoped
+      // basic-auth into the URL so the pod's `git clone` authenticates --
+      // the in-pod arkd has no git credential helper. `buildAuthedHttpsUrl`
+      // returns the URL unchanged for non-https or unknown hosts.
+      const rawCloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo ?? null;
+      const cloneSource = rawCloneSource ? await buildAuthedHttpsUrl(app, session, rawCloneSource) : null;
 
       log("Launching on remote...");
       // `remoteWorkdir` is null on the no-resolveWorkdir fallback (so
@@ -460,7 +485,7 @@ export const claudeCodeExecutor: Executor = {
         },
         {
           prepareCtx: { workdir: agentWorkdir, onLog: log },
-          workspace: { source: cloneSource, remoteWorkdir },
+          workspace: { source: cloneSource, remoteWorkdir, branch: session.branch ?? null },
           placement: opts.placement,
           computeStatus: compute.status,
         },

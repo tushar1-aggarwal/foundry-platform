@@ -20,6 +20,7 @@ import type { OrchestrationDeps } from "../../services/deps.js";
 import type { BlobStore } from "../../storage/blob-store.js";
 import type { ComputeService } from "../../services/compute.js";
 import type { AppContext } from "../../app.js";
+import { ModelService } from "../../models/ModelService.js";
 import { resolveAgentWithRuntime, buildClaudeArgs as buildClaudeArgsHelper } from "../../agent/agent.js";
 import { getExecutor } from "../../executor.js";
 import { buildTaskWithHandoff, extractSubtasks } from "../../services/task-builder.js";
@@ -165,7 +166,18 @@ export function buildDispatchDeps(orchDeps: OrchestrationDeps): TemporalDispatch
     // which short-circuits that branch.
     computeService: stubComputeService(),
 
-    // models is optional -- omit; raw agent.model flows through in that case.
+    // Pass the model catalog through so `applyStageModelAndResolveSlug` can
+    // turn agent.model (an id or alias from the YAML) into the concrete
+    // provider slug for the runtime's `compat:` (e.g. "haiku" + bedrock ->
+    // "pi-agentic/global.anthropic.claude-haiku-4-5-..."). Omitting this
+    // was the root cause of every Temporal-dispatched session hitting TFY
+    // 403 with an unresolved id -- the FileModelStore had the slug, the
+    // dispatch chain just never asked.
+    //
+    // `applyStageModelAndResolveSlug` calls `deps.models.resolveSlug(...)`
+    // which is a ModelService method, not a ModelStore method -- wrap the
+    // store in a ModelService so the call sites see the right surface.
+    models: orchDeps.app?.models ? new ModelService(orchDeps.app.models) : undefined,
 
     // ── Hosted-mode scheduler ────────────────────────────────────────────────
     // Return null: the Temporal worker does not carry an AppContext-bound

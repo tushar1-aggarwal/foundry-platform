@@ -7,6 +7,7 @@
  */
 
 import { logDebug } from "../../observability/structured-log.js";
+import { isRepoUrl } from "../../repo-url.js";
 import type { DispatchDeps, DispatchResult } from "./types.js";
 import type { Session } from "../../../types/index.js";
 
@@ -37,7 +38,7 @@ export class HostedDispatcher {
       await client.launchAgent({
         sessionName,
         script,
-        workdir: session.workdir ?? session.repo ?? ".",
+        workdir: session.workdir ?? (session.repo && !isRepoUrl(session.repo) ? session.repo : "."),
       });
       await this.deps.sessions.update(sessionId, {
         status: "running",

@@ -154,15 +154,25 @@ export class AppContext {
       this._container.register(wrapped);
     }
 
-    // Eagerly resolve the cluster of stores whose hosted-mode contract is
-    // "no local-disk fallback" so a misconfigured deployment fails at boot
-    // with a clear error rather than at first session/pause or first input
-    // upload (potentially under load). The factories themselves contain the
-    // real configuration check; we just trip them here so awilix surfaces
-    // the throw before lifecycle.start() spins up the conductor.
+    // Eagerly resolve the blob store at boot: it's used on every session
+    // (tracks, inputs, transcripts), so a misconfigured deployment is better
+    // off failing here than at first upload under load.
+    //
+    // The snapshot store stays lazy. Today's hosted deployments run on
+    // K8sCompute, which advertises capabilities.snapshot=false and throws
+    // NotSupportedError from snapshot()/restore(). The pause-with-snapshot
+    // path short-circuits before touching the store, so the store is never
+    // read. Eagerly resolving it here was a defensive sanity check that
+    // turned out to guard an unreachable door -- it forced every hosted
+    // deployment to either implement S3SnapshotStore (still TODO) or carry
+    // the ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE bypass.
+    //
+    // The factory's throw at di/runtime.ts is preserved: any future caller
+    // that actually invokes app.snapshotStore on a snapshot-capable compute
+    // will get the same operator-facing error this eager resolve used to
+    // produce.
     if (this.mode.kind === "hosted") {
       this._container.resolve("blobStore");
-      this._container.resolve("snapshotStore");
     }
 
     await this._container.cradle.lifecycle.start();

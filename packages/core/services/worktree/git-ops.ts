@@ -6,7 +6,7 @@
  * behavior change.
  */
 
-import { existsSync } from "fs";
+import { existsSync, rmSync } from "fs";
 import { join } from "path";
 import { promisify } from "util";
 import { execFile } from "child_process";
@@ -14,6 +14,7 @@ import { execFile } from "child_process";
 import type { AppContext } from "../../app.js";
 import { logDebug, logError, logInfo, logWarn } from "../../observability/structured-log.js";
 import { createWorktreePR } from "./pr.js";
+import { effectiveRepo } from "./effective-repo.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -134,16 +135,24 @@ export async function worktreeDiff(
   // Use the repo's actual default branch when the caller didn't pin one.
   // Hard-coding "main" misses repos whose default is `develop` / `master`
   // and silently produces empty diffs.
-  const baseBranch = opts?.base ?? (await detectDefaultBranch(repo)) ?? DEFAULT_BASE_BRANCH;
+  //
+  // Cwd selection: worktree dir is the right anchor in both local-repo
+  // (worktrees share the parent .git, so origin refs are accessible) and
+  // remote-repo (the clone IS the workdir) modes. Falling back to
+  // `session.repo` only when wtDir is missing avoids the "fatal: cannot
+  // change to '<basename>'" log noise when session.repo is the synthesised
+  // basename from a URL.
+  const gitCwd = existsSync(wtDir) ? wtDir : repo;
+  const baseBranch = opts?.base ?? (await detectDefaultBranch(gitCwd)) ?? DEFAULT_BASE_BRANCH;
 
   try {
     // Get diff stat
-    const { stdout: stat } = await execFileAsync("git", ["-C", repo, "diff", "--stat", `${baseBranch}...${branch}`], {
+    const { stdout: stat } = await execFileAsync("git", ["-C", gitCwd, "diff", "--stat", `${baseBranch}...${branch}`], {
       encoding: "utf-8",
     });
 
     // Get full diff (truncated to 50KB)
-    const { stdout: fullDiff } = await execFileAsync("git", ["-C", repo, "diff", `${baseBranch}...${branch}`], {
+    const { stdout: fullDiff } = await execFileAsync("git", ["-C", gitCwd, "diff", `${baseBranch}...${branch}`], {
       encoding: "utf-8",
       maxBuffer: 1024 * 1024,
     });
@@ -152,7 +161,7 @@ export async function worktreeDiff(
     // Parse shortstat for counts
     const { stdout: shortstat } = await execFileAsync(
       "git",
-      ["-C", repo, "diff", "--shortstat", `${baseBranch}...${branch}`],
+      ["-C", gitCwd, "diff", "--shortstat", `${baseBranch}...${branch}`],
       { encoding: "utf-8" },
     );
     // "3 files changed, 42 insertions(+), 7 deletions(-)"
@@ -165,14 +174,14 @@ export async function worktreeDiff(
     try {
       const { stdout: diffNames } = await execFileAsync(
         "git",
-        ["-C", repo, "diff", "--name-only", `${baseBranch}...${branch}`],
+        ["-C", gitCwd, "diff", "--name-only", `${baseBranch}...${branch}`],
         { encoding: "utf-8" },
       );
       const files = diffNames.trim().split("\n").filter(Boolean);
       const fileHashes: Record<string, string> = {};
       for (const file of files) {
         try {
-          const { stdout: hash } = await execFileAsync("git", ["-C", repo, "rev-parse", `${branch}:${file}`], {
+          const { stdout: hash } = await execFileAsync("git", ["-C", gitCwd, "rev-parse", `${branch}:${file}`], {
             encoding: "utf-8",
           });
           fileHashes[file] = hash.trim();
@@ -249,7 +258,7 @@ export async function rebaseOntoBase(
   const session = await app.sessions.get(sessionId);
   if (!session) return { ok: false, message: `Session ${sessionId} not found` };
 
-  const repo = session.repo;
+  const repo = effectiveRepo(session);
   if (!repo) return { ok: false, message: "Session has no repo" };
 
   // Local-side cwd for the local-dispatch path. The remote dispatcher
@@ -333,6 +342,14 @@ export async function finishWorktree(
   const wtDir = join(app.config.dirs.worktrees, sessionId);
   const isWorktree = existsSync(wtDir);
 
+  // Remote-repo mode: session.repo is the URL basename, not a local path,
+  // so the clone at session.workdir IS the upstream. There's no separate
+  // source repo and no `git worktree` relationship -- all git operations
+  // target the clone directly, and cleanup means `rm -rf` of the clone
+  // rather than `git worktree remove`.
+  const isRemoteRepoMode = !existsSync(repo);
+  const gitRepoCwd = isRemoteRepoMode ? workdir : repo;
+
   // Get the branch name from the worktree
   let branch: string | null = session.branch;
   if (!branch && isWorktree) {
@@ -365,9 +382,13 @@ export async function finishWorktree(
     // Still cleanup worktree after PR creation
     if (isWorktree) {
       try {
-        await execFileAsync("git", ["-C", repo, "worktree", "remove", wtDir, "--force"], {
-          encoding: "utf-8",
-        });
+        if (isRemoteRepoMode) {
+          rmSync(wtDir, { recursive: true, force: true });
+        } else {
+          await execFileAsync("git", ["-C", gitRepoCwd, "worktree", "remove", wtDir, "--force"], {
+            encoding: "utf-8",
+          });
+        }
       } catch (e: any) {
         logError("session", `finishWorktree: remove worktree failed: ${e?.message ?? e}`);
       }
@@ -384,17 +405,17 @@ export async function finishWorktree(
   if (!opts?.noMerge) {
     try {
       // Checkout target branch in the main repo
-      await execFileAsync("git", ["-C", repo, "checkout", targetBranch], {
+      await execFileAsync("git", ["-C", gitRepoCwd, "checkout", targetBranch], {
         encoding: "utf-8",
       });
       // Merge the worktree branch
-      await execFileAsync("git", ["-C", repo, "merge", branch, "--no-edit"], {
+      await execFileAsync("git", ["-C", gitRepoCwd, "merge", branch, "--no-edit"], {
         encoding: "utf-8",
       });
     } catch {
       // Abort merge on conflict to preserve state
       try {
-        await execFileAsync("git", ["-C", repo, "merge", "--abort"], {
+        await execFileAsync("git", ["-C", gitRepoCwd, "merge", "--abort"], {
           encoding: "utf-8",
         });
       } catch {
@@ -407,12 +428,17 @@ export async function finishWorktree(
     }
   }
 
-  // 3. Remove worktree
+  // 3. Remove worktree. In remote-repo mode the clone IS the workdir, so
+  // there's no `git worktree` registry to unlink -- just `rm -rf` the dir.
   if (isWorktree) {
     try {
-      await execFileAsync("git", ["-C", repo, "worktree", "remove", wtDir, "--force"], {
-        encoding: "utf-8",
-      });
+      if (isRemoteRepoMode) {
+        rmSync(wtDir, { recursive: true, force: true });
+      } else {
+        await execFileAsync("git", ["-C", gitRepoCwd, "worktree", "remove", wtDir, "--force"], {
+          encoding: "utf-8",
+        });
+      }
     } catch (e: any) {
       logError("session", `finishWorktree: remove worktree failed: ${e?.message ?? e}`);
     }
@@ -421,13 +447,13 @@ export async function finishWorktree(
   // 4. Delete branch (unless --keep-branch)
   if (!opts?.keepBranch && branch !== targetBranch) {
     try {
-      await execFileAsync("git", ["-C", repo, "branch", "-d", branch], {
+      await execFileAsync("git", ["-C", gitRepoCwd, "branch", "-d", branch], {
         encoding: "utf-8",
       });
     } catch {
       // Branch may not exist or not be fully merged -- try force delete
       try {
-        await execFileAsync("git", ["-C", repo, "branch", "-D", branch], {
+        await execFileAsync("git", ["-C", gitRepoCwd, "branch", "-D", branch], {
           encoding: "utf-8",
         });
       } catch {

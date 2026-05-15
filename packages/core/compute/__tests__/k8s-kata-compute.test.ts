@@ -65,6 +65,10 @@ function makeHarness(): Harness {
             harness.calls.push({ method: "createNamespacedPod", args: [opts] });
             harness.lastPod = opts.body;
           },
+          // K8sCompute.provision() polls this until `status.phase === "Running"`.
+          // Returning Running immediately short-circuits the 2-min wait loop;
+          // podIP populates the in-cluster routing path used by setupPortForward.
+          readNamespacedPod: async () => ({ status: { phase: "Running", podIP: "10.0.0.1" } }),
           deleteNamespacedPod: async (opts: any) => {
             harness.calls.push({ method: "deleteNamespacedPod", args: [opts] });
           },
@@ -77,7 +81,15 @@ function makeHarness(): Harness {
     loadK8sModule: async () => fakeModule as any,
     spawnPortForward: () => new FakeChildProcess() as unknown as ChildProcess,
     allocatePort: async () => 45678,
-  };
+    // Default fetchHealth does real network probes against localhost:<port>/health,
+    // which never answers in unit-test land. K8sCompute.setupPortForward polls
+    // /health for up to 60s, so without this stub every provision() call times
+    // out at the 5s per-test cap. Returning true short-circuits to the success
+    // branch immediately.
+    fetchHealth: async () => true,
+    // Same idea for the in-pod arkd readiness probe (60s cap via 1s sleeps).
+    probeArkdInPod: async () => true,
+  } as Partial<K8sComputeDeps> as K8sComputeDeps;
   return harness;
 }
 

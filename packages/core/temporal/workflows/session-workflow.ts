@@ -1,4 +1,12 @@
-import { proxyActivities, defineSignal, setHandler, condition, workflowInfo, startChild } from "@temporalio/workflow";
+import {
+  proxyActivities,
+  defineSignal,
+  setHandler,
+  condition,
+  workflowInfo,
+  startChild,
+  CancellationScope,
+} from "@temporalio/workflow";
 import type * as acts from "../activities/index.js";
 import type { SessionWorkflowInput } from "../types.js";
 import { stageWorkflow } from "./stage-workflow.js";
@@ -21,6 +29,14 @@ const {
   retry: { maximumAttempts: 2, initialInterval: "1s", backoffCoefficient: 2 },
 });
 
+// Cleanup activity gets its own proxy config: short timeout + single attempt.
+// A stuck destroy must not extend the workflow's lifetime indefinitely.
+const { destroyComputeActivity } = proxyActivities<typeof acts>({
+  startToCloseTimeout: "2 minutes",
+  heartbeatTimeout: "30 seconds",
+  retry: { maximumAttempts: 1 },
+});
+
 export const approveReviewGateSignal = defineSignal<[{ sessionId: string }]>("approveReviewGate");
 export const rejectReviewGateSignal = defineSignal<[{ sessionId: string; reason: string }]>("rejectReviewGate");
 
@@ -35,149 +51,167 @@ export async function sessionWorkflow(input: SessionWorkflowInput): Promise<void
     rejected = p.reason;
   });
 
-  await startSessionActivity(input);
-  await projectSessionActivity({ sessionId: input.sessionId, patch: { status: "ready" } });
+  try {
+    await startSessionActivity(input);
+    await projectSessionActivity({ sessionId: input.sessionId, patch: { status: "ready" } });
 
-  const flow = await loadFlowActivity({ flowName: input.flowName });
+    const flow = await loadFlowActivity({ flowName: input.flowName });
 
-  for (const stageIdx of flow.topoOrder) {
-    const stage = flow.stages[stageIdx];
-    const kind = classifyStage(stage);
+    for (const stageIdx of flow.topoOrder) {
+      const stage = flow.stages[stageIdx];
+      const kind = classifyStage(stage);
 
-    // Review gate: park on signal -- durable across worker / server restart.
-    // Use status="ready" while parked (matches the local bespoke behavior --
-    // bespoke leaves the row at status=ready when the agent for the new
-    // review_gate stage has nothing to dispatch). External callers tell the
-    // gate state apart by `stage.type === "review_gate"` (or `gate === "manual"`)
-    // rather than a status flag.
-    if (kind === "review_gate") {
-      await projectStageActivity({
-        sessionId: input.sessionId,
-        stageIdx,
-        patch: { status: "ready" },
-      });
-      await condition(() => approved || rejected !== null);
-      if (rejected !== null) {
+      // Review gate: park on signal -- durable across worker / server restart.
+      // Use status="ready" while parked (matches the local bespoke behavior --
+      // bespoke leaves the row at status=ready when the agent for the new
+      // review_gate stage has nothing to dispatch). External callers tell the
+      // gate state apart by `stage.type === "review_gate"` (or `gate === "manual"`)
+      // rather than a status flag.
+      if (kind === "review_gate") {
         await projectStageActivity({
           sessionId: input.sessionId,
           stageIdx,
-          patch: { status: "rejected", error: rejected },
+          patch: { status: "ready" },
+        });
+        await condition(() => approved || rejected !== null);
+        if (rejected !== null) {
+          await projectStageActivity({
+            sessionId: input.sessionId,
+            stageIdx,
+            patch: { status: "rejected", error: rejected },
+          });
+          await projectSessionActivity({
+            sessionId: input.sessionId,
+            patch: { status: "failed", error: rejected },
+          });
+          return;
+        }
+        // Reset both gate signals for the next review_gate in the same flow.
+        // Forgetting `rejected = null` makes the next gate exit immediately
+        // via the `rejected !== null` branch since the variable still holds
+        // the prior gate's reason.
+        approved = false;
+        rejected = null;
+        await projectStageActivity({
+          sessionId: input.sessionId,
+          stageIdx,
+          patch: { status: "completed" },
+        });
+        continue;
+      }
+
+      // Fan-out: spawn child stageWorkflow instances in parallel, join via Promise.all.
+      if (kind === "fan_out") {
+        const subtasks: any[] = (stage as any).subtasks ?? [];
+        await projectStageActivity({
+          sessionId: input.sessionId,
+          stageIdx,
+          patch: { status: "fanning_out" },
+        });
+        const childPromises = subtasks.map((sub: any, j: number) =>
+          startChild(stageWorkflow, {
+            workflowId: `${input.sessionId}-${stage.name}-${j}`,
+            taskQueue: workflowInfo().taskQueue,
+            args: [
+              {
+                parentSessionId: input.sessionId,
+                childSessionId: sub.sessionId ?? `${input.sessionId}-${stage.name}-${j}`,
+                tenantId: input.tenantId,
+                stageIdx,
+                stageName: stage.name,
+                task: sub.task ?? "",
+                agent: sub.agent,
+              },
+            ],
+          }).then((handle) => handle.result()),
+        );
+        const results = await Promise.all(childPromises);
+        const failed = results.find((r) => r.status !== "completed");
+        await projectStageActivity({
+          sessionId: input.sessionId,
+          stageIdx,
+          patch: { status: failed ? "failed" : "completed" },
+        });
+        if (failed) {
+          await projectSessionActivity({
+            sessionId: input.sessionId,
+            patch: { status: "failed" },
+          });
+          return;
+        }
+        continue;
+      }
+
+      // Linear/DAG stage: dispatch + await completion.
+      await resolveComputeForStageActivity({ sessionId: input.sessionId, stageIdx });
+      await provisionComputeActivity({ sessionId: input.sessionId, computeName: "local" });
+      await projectStageActivity({
+        sessionId: input.sessionId,
+        stageIdx,
+        patch: { status: "dispatching" },
+      });
+
+      let launch: import("../types.js").DispatchStageResult;
+      try {
+        launch = await dispatchStageActivity({ sessionId: input.sessionId, stageIdx });
+      } catch (err) {
+        await projectStageActivity({
+          sessionId: input.sessionId,
+          stageIdx,
+          patch: { status: "failed", error: String((err as Error)?.message ?? err) },
         });
         await projectSessionActivity({
           sessionId: input.sessionId,
-          patch: { status: "failed", error: rejected },
+          patch: { status: "failed", error: String((err as Error)?.message ?? err) },
         });
-        return;
+        throw err;
       }
-      // Reset both gate signals for the next review_gate in the same flow.
-      // Forgetting `rejected = null` makes the next gate exit immediately
-      // via the `rejected !== null` branch since the variable still holds
-      // the prior gate's reason.
-      approved = false;
-      rejected = null;
+
       await projectStageActivity({
         sessionId: input.sessionId,
         stageIdx,
-        patch: { status: "completed" },
+        patch: { status: "running", ...launch },
       });
-      continue;
-    }
 
-    // Fan-out: spawn child stageWorkflow instances in parallel, join via Promise.all.
-    if (kind === "fan_out") {
-      const subtasks: any[] = (stage as any).subtasks ?? [];
+      const result = await awaitStageCompletionActivity({
+        sessionId: input.sessionId,
+        stageIdx,
+        timeoutMs: 3_600_000,
+      });
       await projectStageActivity({
         sessionId: input.sessionId,
         stageIdx,
-        patch: { status: "fanning_out" },
-      });
-      const childPromises = subtasks.map((sub: any, j: number) =>
-        startChild(stageWorkflow, {
-          workflowId: `${input.sessionId}-${stage.name}-${j}`,
-          taskQueue: workflowInfo().taskQueue,
-          args: [
-            {
-              parentSessionId: input.sessionId,
-              childSessionId: sub.sessionId ?? `${input.sessionId}-${stage.name}-${j}`,
-              tenantId: input.tenantId,
-              stageIdx,
-              stageName: stage.name,
-              task: sub.task ?? "",
-              agent: sub.agent,
-            },
-          ],
-        }).then((handle) => handle.result()),
-      );
-      const results = await Promise.all(childPromises);
-      const failed = results.find((r) => r.status !== "completed");
-      await projectStageActivity({
-        sessionId: input.sessionId,
-        stageIdx,
-        patch: { status: failed ? "failed" : "completed" },
-      });
-      if (failed) {
-        await projectSessionActivity({
-          sessionId: input.sessionId,
-          patch: { status: "failed" },
-        });
-        return;
-      }
-      continue;
-    }
-
-    // Linear/DAG stage: dispatch + await completion.
-    await resolveComputeForStageActivity({ sessionId: input.sessionId, stageIdx });
-    await provisionComputeActivity({ sessionId: input.sessionId, computeName: "local" });
-    await projectStageActivity({
-      sessionId: input.sessionId,
-      stageIdx,
-      patch: { status: "dispatching" },
-    });
-
-    let launch: import("../types.js").DispatchStageResult;
-    try {
-      launch = await dispatchStageActivity({ sessionId: input.sessionId, stageIdx });
-    } catch (err) {
-      await projectStageActivity({
-        sessionId: input.sessionId,
-        stageIdx,
-        patch: { status: "failed", error: String((err as Error)?.message ?? err) },
-      });
-      await projectSessionActivity({
-        sessionId: input.sessionId,
-        patch: { status: "failed", error: String((err as Error)?.message ?? err) },
-      });
-      throw err;
-    }
-
-    await projectStageActivity({
-      sessionId: input.sessionId,
-      stageIdx,
-      patch: { status: "running", ...launch },
-    });
-
-    const result = await awaitStageCompletionActivity({
-      sessionId: input.sessionId,
-      stageIdx,
-      timeoutMs: 3_600_000,
-    });
-    await projectStageActivity({
-      sessionId: input.sessionId,
-      stageIdx,
-      patch: { status: result.status },
-    });
-
-    if (result.status !== "completed") {
-      await projectSessionActivity({
-        sessionId: input.sessionId,
         patch: { status: result.status },
       });
-      return;
-    }
-  }
 
-  await projectSessionActivity({
-    sessionId: input.sessionId,
-    patch: { status: "completed" },
-  });
+      if (result.status !== "completed") {
+        await projectSessionActivity({
+          sessionId: input.sessionId,
+          patch: { status: result.status },
+        });
+        return;
+      }
+    }
+
+    await projectSessionActivity({
+      sessionId: input.sessionId,
+      patch: { status: "completed" },
+    });
+  } finally {
+    // Reap the session's provisioned compute on every terminal path:
+    // success, stage-failure return, thrown error, cancellation, or
+    // workflowExecutionTimeout. nonCancellable keeps the destroy from
+    // being aborted by the same cancel that's running this finally.
+    // The inner try/catch is a last-ditch swallow for Temporal-level
+    // failures (startToCloseTimeout, worker crash) that the activity body
+    // itself cannot catch -- session state is already final by this
+    // point, so we let the workflow complete cleanly regardless.
+    await CancellationScope.nonCancellable(async () => {
+      try {
+        await destroyComputeActivity({ sessionId: input.sessionId });
+      } catch {
+        /* swallow: cleanup-on-exit must not abort workflow close */
+      }
+    });
+  }
 }

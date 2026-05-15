@@ -155,6 +155,19 @@ jobs:
     name: e2e (hosted docs-flow + temporal)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # DISABLED: the docker stack this job stands up requires the
+    # temporal-worker image to build inside GHA, which in turn pulls
+    # session-manager-plugin from s3.amazonaws.com and AWS CLI from
+    # Docker Hub. Network conditions in GHA make this flaky and the
+    # corresponding production deploy (pai-risk-mlops-platform EKS) is
+    # K8s-only -- 0 EC2 targets -- so SSM-based port-forward is dead
+    # code at runtime. Re-enable when:
+    #   (a) an EC2 compute target is reintroduced to production, OR
+    #   (b) the temporal-worker image build is migrated to a pre-built
+    #       multi-arch image hosted in our ECR (no inline curl from S3).
+    # The hosted-mode dispatch arc is otherwise covered live via
+    # /ark-build-smoke-ec2 against the real cluster.
+    if: false
 
     steps:
       - uses: actions/checkout@v4

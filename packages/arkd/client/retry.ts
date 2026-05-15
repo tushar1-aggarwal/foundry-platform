@@ -7,7 +7,7 @@
  * before wrapping in ArkdClientTransportError.
  */
 
-import { ArkdClientError, ArkdClientTransportError } from "../common/errors.js";
+import { ArkdClientError, ArkdClientTransportError, ArkdUnreachableError } from "../common/errors.js";
 
 /**
  * Recognize transient transport-level fetch failures: a stale pooled
@@ -28,6 +28,26 @@ export function isTransientTransportError(e: unknown): boolean {
     msg.includes("ECONNREFUSED") ||
     msg.includes("EPIPE") ||
     msg.includes("fetch failed")
+  );
+}
+
+/**
+ * Returns true when the error indicates the endpoint is structurally
+ * unreachable (nothing listening, DNS failure, connection timeout) as
+ * opposed to a transient socket reset on an otherwise-healthy server.
+ */
+export function isUnreachableError(e: unknown): boolean {
+  if (e instanceof ArkdClientError) return false;
+  const msg = (e as { message?: string })?.message ?? String(e);
+  // Bun uses "ConnectionRefused", Node uses "ECONNREFUSED"; check both.
+  return (
+    msg.includes("ECONNREFUSED") ||
+    msg.includes("ConnectionRefused") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("ENOTFOUND") ||
+    msg.includes("EAI_AGAIN") ||
+    msg.includes("Unable to connect") ||
+    (msg.includes("timeout") && !msg.includes("socket connection was closed"))
   );
 }
 
@@ -65,11 +85,13 @@ export async function fetchWithRetry(
       // staring at the failure in the UI) can tell *which* request
       // failed without spelunking through stack frames. Original
       // error is preserved as `cause`.
-      throw new ArkdClientTransportError(
+      const baseMsg =
         `arkd ${method} ${url} failed after ${attempt + 1} attempt(s): ` +
-          `${(e as { message?: string })?.message ?? String(e)}`,
-        { url, method, path, attempts: attempt + 1, cause: e },
-      );
+        `${(e as { message?: string })?.message ?? String(e)}`;
+      if (isUnreachableError(e)) {
+        throw new ArkdUnreachableError(baseMsg, { url, method, path, attempts: attempt + 1, cause: e });
+      }
+      throw new ArkdClientTransportError(baseMsg, { url, method, path, attempts: attempt + 1, cause: e });
     } finally {
       clearTimeout(t);
     }

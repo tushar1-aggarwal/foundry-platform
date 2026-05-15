@@ -40,6 +40,11 @@ spec:
               containerPort: 19300
               protocol: TCP
           env:
+            # In-cluster Kubernetes API CA trust. Required for status-poller
+            # and any post-launch op that rehydrates a K8s compute handle.
+            # Same rationale as control-plane-deployment.yaml.
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
             - name: ARK_CONTROL_PLANE_URL
               value: "http://{{ include "ark.fullname" . }}-control-plane:{{ .Values.controlPlane.ports.web }}"
             - name: ARK_WORKER_CAPACITY

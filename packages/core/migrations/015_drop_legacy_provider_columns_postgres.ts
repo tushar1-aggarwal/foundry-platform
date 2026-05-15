@@ -11,7 +11,36 @@ async function ddl(db: DatabaseAdapter, sql: string): Promise<void> {
   await db.exec(sql);
 }
 
+async function columnExists(db: DatabaseAdapter, table: string, column: string): Promise<boolean> {
+  const row = (await db
+    .prepare(
+      `SELECT 1 AS present FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2 LIMIT 1`,
+    )
+    .get(table, column)) as { present: number } | undefined;
+  return !!row;
+}
+
 export async function applyPostgresDropLegacyProviderColumns(db: DatabaseAdapter): Promise<void> {
+  // 0. Ensure compute_templates has compute_kind + isolation_kind before we
+  //    touch them. Postgres supports ADD COLUMN IF NOT EXISTS natively.
+  await ddl(db, "ALTER TABLE compute_templates ADD COLUMN IF NOT EXISTS compute_kind TEXT NOT NULL DEFAULT 'local'");
+  await ddl(db, "ALTER TABLE compute_templates ADD COLUMN IF NOT EXISTS isolation_kind TEXT NOT NULL DEFAULT 'direct'");
+
+  // Backfill compute_kind from provider only when the legacy provider column
+  // still exists. Fresh installs that used the new initPostgresSchema (which
+  // never included provider) skip this no-op safely.
+  const hasPgProvider = await columnExists(db, "compute_templates", "provider");
+  if (hasPgProvider) {
+    await db
+      .prepare(
+        `UPDATE compute_templates
+          SET compute_kind = provider
+          WHERE compute_kind = 'local' AND provider IS NOT NULL AND provider != ''`,
+      )
+      .run();
+  }
+
   // 1. Firecracker data fixup. Idempotent. Coerces both
   //    `local + firecracker-in-container` AND `ec2 + firecracker-in-container`
   //    (the previously coerced legacy "firecracker as isolation" shapes) onto

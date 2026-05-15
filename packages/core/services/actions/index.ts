@@ -25,7 +25,7 @@ const ACTIONS: readonly ActionHandler[] = [
   ...(process.env.ARK_ENABLE_TEST_ACTIONS ? [flakyPrAction] : []),
 ];
 
-const ACTION_INDEX: Map<string, ActionHandler> = (() => {
+export const ACTION_INDEX: Map<string, ActionHandler> = (() => {
   const m = new Map<string, ActionHandler>();
   for (const a of ACTIONS) {
     m.set(a.name, a);
