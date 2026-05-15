@@ -163,6 +163,8 @@ function mkDeps(secretsStub: SecretsCapability): Parameters<typeof buildLaunchEn
         secrets: secretsStub,
         config: cfg,
       }) as any,
+    secrets: secretsStub,
+    teamChainLoader: async () => [],
   };
 }
 

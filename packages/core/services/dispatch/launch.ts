@@ -21,6 +21,7 @@ import type { Executor, LaunchResult } from "../../executor.js";
 import type { PlacementCtx } from "../../secrets/placement-types.js";
 import { DeferredPlacementCtx } from "../../secrets/deferred-placement-ctx.js";
 import { placeAllSecrets } from "../../secrets/placement.js";
+import { HierarchicalSecretResolver } from "../../../secrets/resolver/index.js";
 import { logDebug, logWarn } from "../../observability/structured-log.js";
 
 export interface LaunchEnvResult {
@@ -41,31 +42,59 @@ export interface LaunchEnvResult {
 
 /**
  * Build the merged env we hand to executor.launch(). Order:
- *   1. Stage + runtime secrets (first wins on name collision; stage beats runtime).
- *   2. Tenant-level claude auth (wins over secrets -- operators who set
- *      ANTHROPIC_API_KEY on the tenant expect it to be authoritative).
- *   3. Typed-secret placement (Phase 1: only runs when the provider implements
- *      `buildPlacementCtx`). Merges any env vars the placers set into the
- *      launch env. The legacy paths above stay -- placement is *additive* in
- *      Phase 1; Phase 3 will retire the redundant paths.
+ *   1. Hierarchical resolver env -- walked user -> team -> tenant under
+ *      `/ark/<tid>/...`. Placement is the sole env-var source. The
+ *      legacy `secretEnv.env` from StageSecretResolver.resolve() is no
+ *      longer merged here -- StageSecretResolver still runs for the
+ *      `assertPresent` check (stage YAML `secrets:` is assert-only) and
+ *      we consume only its `.error`.
+ *   2. Typed-secret placement -- env-var-typed secrets land via the
+ *      resolver-sourced map passed as `envVars`; typed-blob secrets
+ *      (ssh-private-key, kubeconfig, generic-blob) still iterate the
+ *      flat tenant table inside `placeAllSecrets`.
+ *   3. Tenant-level claude auth -- merged LAST so operators who set
+ *      ANTHROPIC_API_KEY on the tenant get the documented precedence
+ *      over the resolver-sourced value.
  *
  * A missing secret surfaces as `error`; callers fail dispatch. Claude auth
  * materialization may also emit a k8s Secret side-effect (credsSecretName).
  */
 export async function buildLaunchEnv(
-  deps: Pick<DispatchDeps, "computes" | "materializeClaudeAuth" | "runtimes" | "getApp">,
+  deps: Pick<DispatchDeps, "computes" | "materializeClaudeAuth" | "runtimes" | "getApp" | "secrets" | "teamChainLoader">,
   secrets: StageSecretResolver,
   session: Session,
   stageDef: StageDefinition | null,
   runtime: string,
   log: (msg: string) => void,
 ): Promise<LaunchEnvResult> {
-  // Resolve secrets declared on the stage + the runtime and merge them
-  // into the launch env. Stage secrets win over runtime secrets on name
-  // conflict. A missing secret fails dispatch with a clear message --
-  // we never silently drop an env var the agent depends on.
+  // StageSecretResolver still runs for the assert-present check against
+  // stage YAML `secrets:`. We discard its `.env` (the resolver below is
+  // the authoritative env-var source) and only honour `.error`.
   const secretEnv = await secrets.resolve(session, stageDef, runtime, log);
   if (secretEnv.error) return { env: {}, error: secretEnv.error };
+
+  // Resolve the effective env-var set hierarchically. Independent of
+  // StageSecretResolver -- this is the single source for env-var values
+  // landing on the launch env.
+  const app = deps.getApp();
+  const tenantId = session.tenant_id ?? app.config?.authSection?.defaultTenant ?? "default";
+  let teamChain: string[] = [];
+  try {
+    const loader = deps.teamChainLoader;
+    if (loader) teamChain = (await loader(session)) ?? [];
+  } catch (err: unknown) {
+    logWarn("session", `buildLaunchEnv: teamChainLoader failed: ${(err as Error)?.message ?? String(err)}`);
+  }
+  let resolvedEnvVars: Record<string, string>;
+  try {
+    const resolver = new HierarchicalSecretResolver(deps.secrets);
+    resolvedEnvVars = await resolver.resolveAll(
+      { tenant_id: tenantId, user_id: session.user_id ?? null },
+      teamChain,
+    );
+  } catch (err: unknown) {
+    return { env: {}, error: `Secret resolution failed: ${(err as Error)?.message ?? String(err)}` };
+  }
 
   // Tenant-level claude auth materialization. Runs BEFORE we read the
   // compute row for launch so any `credsSecretName` mutation lands before
@@ -79,7 +108,7 @@ export async function buildLaunchEnv(
     log(`Materialized subscription blob as k8s Secret '${claudeAuth.credsSecretName}'`);
   }
 
-  const env: Record<string, string> = { ...secretEnv.env, ...claudeAuth.env };
+  const env: Record<string, string> = {};
   let placement: PlacementCtx | undefined;
 
   // Typed-secret placement.
@@ -98,7 +127,6 @@ export async function buildLaunchEnv(
   // SSM) treat the queued ops as a no-op.
   if (computeForAuth) {
     try {
-      const app = deps.getApp();
       const stageSecrets = stageDef?.secrets ?? [];
       let runtimeSecrets: string[] = [];
       try {
@@ -116,7 +144,7 @@ export async function buildLaunchEnv(
           : new Set([...stageSecrets, ...runtimeSecrets]);
 
       const ctx = new DeferredPlacementCtx();
-      await placeAllSecrets(app, session, ctx, { narrow });
+      await placeAllSecrets(app, session, ctx, { narrow, envVars: resolvedEnvVars });
       Object.assign(env, ctx.getEnv());
       placement = ctx;
     } catch (err: any) {
@@ -126,7 +154,15 @@ export async function buildLaunchEnv(
       logWarn("session", `placeAllSecrets failed: ${err?.message ?? err}`);
       return { env: {}, error: `Secret placement failed: ${err?.message ?? String(err)}` };
     }
+  } else {
+    // No resolved compute -- placement is skipped, but we still need to
+    // surface the resolver-sourced env vars to the launch env (the
+    // legacy `secretEnv.env` merge no longer happens above).
+    Object.assign(env, resolvedEnvVars);
   }
+
+  // Tenant claude auth wins over both placement and the resolver.
+  Object.assign(env, claudeAuth.env);
 
   return { env, placement };
 }
