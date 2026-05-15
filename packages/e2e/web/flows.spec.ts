@@ -188,8 +188,10 @@ test("session detail pane renders the current flow stage", async () => {
 
   // Open the session detail pane.
   await page.locator(`text=${summary}`).first().click();
-  // The detail pane renders a Conversation tab (unique to SessionDetail).
-  await expect(page.locator("text=Conversation").first()).toBeVisible({
+  // The detail pane renders the conversation tab (id=tab-conversation, label
+  // "Session"). Asserting on the tab's stable DOM id avoids ambiguity with
+  // the "Sessions" h1 / SessionList label.
+  await expect(page.locator("#tab-conversation")).toBeVisible({
     timeout: 5_000,
   });
 
@@ -225,8 +227,10 @@ test("session flow field survives a web UI reload", async () => {
   await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 
   await page.locator(`text=${summary}`).first().click();
-  // The detail pane renders a Conversation tab (unique to SessionDetail).
-  await expect(page.locator("text=Conversation").first()).toBeVisible({
+  // The detail pane renders the conversation tab (id=tab-conversation, label
+  // "Session"). Asserting on the tab's stable DOM id avoids ambiguity with
+  // the "Sessions" h1 / SessionList label.
+  await expect(page.locator("#tab-conversation")).toBeVisible({
     timeout: 5_000,
   });
 

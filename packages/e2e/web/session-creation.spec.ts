@@ -43,16 +43,18 @@ test("sessions page is accessible from sidebar", async () => {
 
 test("clicking New Session button opens the form", async () => {
   await goToSessions();
-  await page.click('button:has-text("New Session")');
-  await expect(page.locator("text=New Session").first()).toBeVisible({ timeout: 5_000 });
+  // The trigger renders as a compact icon-button labelled "New" with
+  // title="New session (n)" -- use the title for stable targeting.
+  await page.locator('button[title^="New session"]').first().click();
+  await expect(page.locator('[data-testid="new-session-modal"]')).toBeVisible({ timeout: 5_000 });
 });
 
 // -- Fill and submit the New Session form -------------------------------------
 
 test("create session via form with flow, repo, and task description", async () => {
   await goToSessions();
-  await page.click('button:has-text("New Session")');
-  await expect(page.locator("text=New Session").first()).toBeVisible({ timeout: 5_000 });
+  await page.locator('button[title^="New session"]').first().click();
+  await expect(page.locator('[data-testid="new-session-modal"]')).toBeVisible({ timeout: 5_000 });
 
   // Fill in the summary / task description
   const summaryInput = page.locator('textarea[placeholder="What should the agent work on?"]');
@@ -105,6 +107,8 @@ test("creating multiple sessions populates the list", async () => {
   await page.waitForSelector("nav", { timeout: 10_000 });
   await goToSessions();
 
-  await expect(page.locator("text=Multi A")).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator("text=Multi B")).toBeVisible({ timeout: 10_000 });
+  // Both the session list panel and the dashboard's "recent sessions"
+  // strip can render the summary, so `.first()` is required for strict mode.
+  await expect(page.locator("text=Multi A").first()).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator("text=Multi B").first()).toBeVisible({ timeout: 10_000 });
 });

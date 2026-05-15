@@ -66,7 +66,7 @@ test("conversation tab shows even for new sessions", async () => {
 
   await page.locator("text=Conv tab test").first().click();
   // Conversation tab should be active by default
-  await expect(page.locator('button[role="tab"]:has-text("Conversation")').first()).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator('button[role="tab"]:has-text("Session")').first()).toBeVisible({ timeout: 5_000 });
 });
 
 // -- Terminal tab -------------------------------------------------------------
@@ -79,7 +79,7 @@ test("switching to Terminal tab renders terminal area", async () => {
   await goToSessions();
 
   await page.locator("text=Terminal tab test").first().click();
-  await expect(page.locator('button[role="tab"]:has-text("Conversation")').first()).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator('button[role="tab"]:has-text("Session")').first()).toBeVisible({ timeout: 5_000 });
 
   // Click Terminal tab
   await page.locator('button[role="tab"]:has-text("Terminal")').click();
@@ -91,33 +91,32 @@ test("switching to Terminal tab renders terminal area", async () => {
   await expect(page.locator('[role="tabpanel"]').first()).toBeVisible({ timeout: 5_000 });
 });
 
-// -- Events tab ---------------------------------------------------------------
+// -- Events list (absorbed into Session timeline) -----------------------------
 
-test("switching to Events tab renders events list with timestamps", async () => {
+// The dedicated "Events" tab was removed when the detail panel consolidated
+// stages/tools/system events into the Session-tab timeline (see
+// useSessionDetail comment: "Timeline absorbs the old Events tab"). The data
+// path is still load-bearing -- we keep the RPC assertion and verify the
+// Session tab renders, which is where events now surface.
+test("events are surfaced through the Session timeline", async () => {
   const id = await createSession("Events tab test");
 
-  // The session starts with no events, but the tab should still render
   await page.reload();
   await page.waitForSelector("nav", { timeout: 30_000 });
   await goToSessions();
 
   await page.locator("text=Events tab test").first().click();
-  await expect(page.locator('button[role="tab"]:has-text("Conversation")').first()).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator('button[role="tab"]:has-text("Session")').first()).toBeVisible({ timeout: 5_000 });
 
-  // Click Events tab
-  await page.locator('button[role="tab"]:has-text("Events")').click();
+  // Session tab is active by default and renders the consolidated timeline.
+  await expect(page.locator('[role="tabpanel"]').first()).toBeVisible({ timeout: 5_000 });
 
-  // The events tab content should render (could be empty or have events)
-  // We verify the tab is active by checking the events tab button state
-  // The events list area should be visible (no crash)
-  await page.waitForTimeout(500);
-
-  // Verify via RPC that events endpoint works
+  // Verify via RPC that the events endpoint still works.
   const detail = await ws.rpc("session/read", { sessionId: id, include: ["events"] });
   expect(Array.isArray(detail.events)).toBe(true);
 });
 
-// -- Diff tab -----------------------------------------------------------------
+// -- Diff tab (now labelled "Files") ------------------------------------------
 
 test("switching to Diff tab renders diff content area", async () => {
   await createSession("Diff tab test");
@@ -127,10 +126,10 @@ test("switching to Diff tab renders diff content area", async () => {
   await goToSessions();
 
   await page.locator("text=Diff tab test").first().click();
-  await expect(page.locator('button[role="tab"]:has-text("Conversation")').first()).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator('button[role="tab"]:has-text("Session")').first()).toBeVisible({ timeout: 5_000 });
 
-  // Click Diff tab
-  await page.locator('button[role="tab"]:has-text("Diff")').click();
+  // The Diff tab is now labelled "Files" (badge shows files changed + insertions/deletions).
+  await page.locator('button[role="tab"]:has-text("Files")').click();
 
   // Diff area should render (empty state for new session or loading).
   // The "files changed" string appears twice in the rendered diff panel
@@ -156,7 +155,7 @@ test("switching back to Conversation tab from another tab works", async () => {
   await goToSessions();
 
   await page.locator("text=Switch back test").first().click();
-  await expect(page.locator('button[role="tab"]:has-text("Conversation")').first()).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator('button[role="tab"]:has-text("Session")').first()).toBeVisible({ timeout: 5_000 });
 
   // Navigate away
   await page.locator('button[role="tab"]:has-text("Terminal")').click();
@@ -166,10 +165,10 @@ test("switching back to Conversation tab from another tab works", async () => {
   await expect(page.locator('[role="tabpanel"]').first()).toBeVisible({ timeout: 5_000 });
 
   // Navigate back
-  await page.locator('button[role="tab"]:has-text("Conversation")').click();
+  await page.locator('button[role="tab"]:has-text("Session")').click();
 
   // Conversation content should render (empty state or messages)
   await expect(
-    page.locator("text=No conversation yet").or(page.locator('button[role="tab"]:has-text("Conversation")')),
+    page.locator("text=No conversation yet").or(page.locator('button[role="tab"]:has-text("Session")')),
   ).toBeVisible({ timeout: 5_000 });
 });

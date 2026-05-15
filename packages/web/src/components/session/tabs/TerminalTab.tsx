@@ -82,7 +82,9 @@ export function TerminalTab({ sessionId, output, cols, rows, isActive, tabActive
     }
     return (
       <div className="terminal-tab">
-        <div className="terminal-tab-empty">{plan.reason}</div>
+        <div className="terminal-tab-empty" data-testid="attach-command-unavailable">
+          {plan.reason}
+        </div>
       </div>
     );
   }
@@ -99,7 +101,9 @@ export function TerminalTab({ sessionId, output, cols, rows, isActive, tabActive
     }
     return (
       <div className="terminal-tab">
-        <div className="terminal-tab-empty">{plan.reason}</div>
+        <div className="terminal-tab-empty" data-testid="attach-command-unavailable">
+          {plan.reason}
+        </div>
       </div>
     );
   }
