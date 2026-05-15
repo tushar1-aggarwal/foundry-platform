@@ -15,10 +15,10 @@ export function useDashboardSummaryQuery() {
   });
 }
 
-export function useRunningSessionsQuery() {
+export function useAllSessionsQuery() {
   const api = useApi();
   return useQuery({
-    queryKey: ["sessions", "running"],
+    queryKey: ["sessions", "all"],
     queryFn: () => api.getSessions({}),
     refetchInterval: 5000,
   });

@@ -3,7 +3,7 @@ import { fmtCost, relTime } from "../util.js";
 import { cn } from "../lib/utils.js";
 import { AlertCircle, CheckCircle2, Clock, PlugZap, RotateCcw } from "lucide-react";
 import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
-import { useDashboardSummaryQuery, useRunningSessionsQuery } from "../hooks/useDashboardQuery.js";
+import { useDashboardSummaryQuery, useAllSessionsQuery } from "../hooks/useDashboardQuery.js";
 import { Button } from "./ui/button.js";
 import { Avatar } from "./ui/Avatar.js";
 import { KpiCard } from "./ui/KpiCard.js";
@@ -380,7 +380,7 @@ export function DashboardView({
   daemonStatus: _daemonStatus,
 }: DashboardViewProps) {
   const summaryQuery = useDashboardSummaryQuery();
-  const sessionsQuery = useRunningSessionsQuery();
+  const sessionsQuery = useAllSessionsQuery();
   const data = summaryQuery.data as DashboardData | undefined;
   const sessions = sessionsQuery.data;
 
