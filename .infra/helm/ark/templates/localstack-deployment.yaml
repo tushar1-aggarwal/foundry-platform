@@ -48,12 +48,10 @@ spec:
               containerPort: 4566
               protocol: TCP
           env:
-            # Community (free) edition only -- never attempt to activate Pro.
             - name: ACTIVATE_PRO
               value: "0"
-            # We only need s3; naming it trims the boot footprint.
             - name: SERVICES
-              value: "s3"
+              value: "s3,ssm"
             - name: DEBUG
               value: "0"
             - name: PERSISTENCE

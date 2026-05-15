@@ -205,8 +205,9 @@ dev-control-plane-down: ## Stop everything: containers + any host processes stil
 dev-k8s-local: ## Deploy full ark control plane to local OrbStack k8s (LocalStack + Temporal + Postgres + Redis in-cluster)
 	@test -n "$$ANTHROPIC_API_KEY" || { echo 'ANTHROPIC_API_KEY must be set'; exit 1; }
 	@kubectl config use-context orbstack >/dev/null
-	@echo "Building ark image (tag: local)..."
-	docker build -t ark:local .
+	$(eval IMG_TAG := local-$(shell date +%s))
+	@echo "Building ark image (tag: $(IMG_TAG))..."
+	docker build -t ark:$(IMG_TAG) .
 	@echo "Deploying helm release..."
 	# --wait-for-jobs (not --wait): helm blocks until the post-install hook
 	# Jobs (temporal-db-bootstrap -> temporal-schema -> temporal-namespace)
@@ -217,11 +218,11 @@ dev-k8s-local: ## Deploy full ark control plane to local OrbStack k8s (LocalStac
 	# we explicitly wait for the control-plane rollout for a clear ready signal.
 	helm upgrade --install ark .infra/helm/ark \
 		--namespace ark --create-namespace \
-		--set controlPlane.image.tag=local \
+		--set controlPlane.image.tag=$(IMG_TAG) \
 		--set controlPlane.image.pullPolicy=Never \
 		--set controlPlane.auth.enabled=false \
 		--set controlPlane.devAllowLocalHostedStorage=true \
-		--set workers.image.tag=local \
+		--set workers.image.tag=$(IMG_TAG) \
 		--set workers.image.pullPolicy=Never \
 		--set localstack.enabled=true \
 		--set s3.bucket=ark-local \

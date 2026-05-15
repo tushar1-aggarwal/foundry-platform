@@ -97,10 +97,15 @@ export async function createConductorClient(
 
   client = new ArkClient(transport);
 
-  // Initial registration -- must land before the first heartbeat tick.
-  // Fire-and-forget; if this fails the heartbeat will re-register.
+  // The conductor (ArkServer) unconditionally requires the `initialize`
+  // handshake before any other method -- worker/register included. ArkClient
+  // re-initializes itself on reconnect, but NOT on the first connect, so the
+  // initial registration must explicitly initialize first. Without this the
+  // conductor rejects every worker/register + heartbeat with
+  // "Not initialized -- call initialize first" and the worker never joins.
   client
-    .workerRegister(registerParams)
+    .initialize()
+    .then(() => client!.workerRegister(registerParams))
     .catch((err: unknown) =>
       process.stderr.write(`[arkd] initial worker/register failed: ${(err as Error)?.message ?? err}\n`),
     );

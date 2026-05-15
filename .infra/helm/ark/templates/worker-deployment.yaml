@@ -41,7 +41,7 @@ spec:
               protocol: TCP
           env:
             - name: ARK_CONTROL_PLANE_URL
-              value: "http://{{ include "ark.fullname" . }}-control-plane:{{ .Values.controlPlane.ports.web }}"
+              value: "http://{{ include "ark.fullname" . }}-control-plane:{{ .Values.controlPlane.ports.conductor }}"
             - name: ARK_WORKER_CAPACITY
               value: {{ .Values.workers.capacity | quote }}
           {{- if or .Values.llm.anthropicApiKey .Values.llm.existingSecret }}

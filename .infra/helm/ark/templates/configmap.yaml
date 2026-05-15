@@ -29,9 +29,8 @@ data:
   {{- end }}
   {{- $s3Endpoint := include "ark.s3Endpoint" . }}
   {{- if $s3Endpoint }}
-  # When LocalStack (or any S3-compatible endpoint) is wired, force path-style
-  # URLs -- LocalStack does not support virtual-host style addressing.
   ARK_S3_ENDPOINT: {{ $s3Endpoint | quote }}
+  AWS_ENDPOINT_URL: {{ $s3Endpoint | quote }}
   AWS_ENDPOINT_URL_S3: {{ $s3Endpoint | quote }}
   ARK_S3_PATH_STYLE: "true"
   {{- end }}
