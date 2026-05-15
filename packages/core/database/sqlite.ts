@@ -99,4 +99,13 @@ export class BunSqliteAdapter implements DatabaseAdapter {
     this.db.close();
     return Promise.resolve();
   }
+
+  /**
+   * Pass-through: bun:sqlite is process-local, so the only concurrent
+   * migration writers are inside this one process and the apply loop
+   * already serializes them. No cross-process lock needed.
+   */
+  withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
+    return fn();
+  }
 }

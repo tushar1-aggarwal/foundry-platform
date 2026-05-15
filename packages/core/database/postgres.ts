@@ -167,6 +167,47 @@ export class PostgresAdapter implements DatabaseAdapter {
     await this.sql.end();
   }
 
+  /**
+   * Run `fn` while holding the global migration advisory lock on a single
+   * dedicated connection.
+   *
+   * `pg_advisory_lock` is session-scoped. The pool (`max: 20`) hands every
+   * query an arbitrary connection, so taking the lock via the pool and
+   * releasing it via the pool almost always lands on two different sessions
+   * -- the unlock is then a silent no-op and the lock is pinned to whatever
+   * connection took it until that connection's session ends. With the
+   * control-plane daemon, hosted server, and Temporal workers all calling
+   * MigrationRunner.apply() against the same database at boot, the first
+   * caller leaks the lock and every other caller blocks on
+   * `pg_advisory_lock` forever.
+   *
+   * `sql.reserve()` pulls one connection out of the pool and pins it. We
+   * take the lock, run the migration loop (whose own queries still use the
+   * pool -- that's fine, they don't need the lock connection), then unlock
+   * and release that same reserved connection. Other instances calling this
+   * concurrently block on `pg_advisory_lock` until we release, then proceed
+   * and find the migrations already applied (a no-op). That blocking wait is
+   * the desired behavior: migrations run exactly once, serialized.
+   */
+  async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
+    const reserved = await this.sql.reserve();
+    try {
+      await reserved`SELECT pg_advisory_lock(hashtext('ark_migrations'))`;
+      try {
+        return await fn();
+      } finally {
+        try {
+          await reserved`SELECT pg_advisory_unlock(hashtext('ark_migrations'))`;
+        } catch {
+          // Session-scoped: if the unlock fails the lock is reclaimed when
+          // the reserved connection's session ends on release()/pool reset.
+        }
+      }
+    } finally {
+      reserved.release();
+    }
+  }
+
   // -- Async variants (preserved for hosted call sites pre-PR-2) ----------
   // These are functionally equivalent to prepare(...).run/all/get; kept
   // for back-compat with hosted call sites that import them directly.
