@@ -174,4 +174,97 @@ describe("AwsSecretsProvider", () => {
     await expect(p.delete("acme", "lower")).rejects.toThrow(/Invalid secret name|non-empty/);
     await expect(p.resolveMany("acme", ["OK", "bad-name"])).rejects.toThrow(/Invalid secret name|non-empty/);
   });
+
+  // ── listAt + batchGet (hierarchical resolver surface) ─────────────────────
+
+  it("listAt paginates with Recursive:true WithDecryption:false and merges pages", async () => {
+    let page = 0;
+    client.responders.GetParametersByPath = (input: any) => {
+      expect(input.Path).toBe("/ark/acme/teams/");
+      expect(input.Recursive).toBe(true);
+      expect(input.WithDecryption).toBe(false);
+      if (page++ === 0) {
+        return {
+          Parameters: [{ Name: "/ark/acme/teams/eng/A" }, { Name: "/ark/acme/teams/eng/B" }],
+          NextToken: "tok-1",
+        };
+      }
+      expect(input.NextToken).toBe("tok-1");
+      return { Parameters: [{ Name: "/ark/acme/teams/ops/C" }] };
+    };
+    const refs = await p.listAt("/ark/acme/teams/");
+    expect(refs.map((r) => r.name).sort()).toEqual([
+      "/ark/acme/teams/eng/A",
+      "/ark/acme/teams/eng/B",
+      "/ark/acme/teams/ops/C",
+    ]);
+    expect(client.calls.filter((c) => c.command === "GetParametersByPathCommand")).toHaveLength(2);
+  });
+
+  it("batchGet chunks 17 paths into 10+7 and merges; missing paths are absent", async () => {
+    const paths: string[] = [];
+    for (let i = 0; i < 17; i++) paths.push(`/ark/acme/tenant/K${i}`);
+    let call = 0;
+    client.responders.GetParameters = (input: any) => {
+      expect(input.WithDecryption).toBe(true);
+      const names = input.Names as string[];
+      if (call === 0) {
+        expect(names).toHaveLength(10);
+      } else if (call === 1) {
+        expect(names).toHaveLength(7);
+      }
+      call++;
+      // Return only the even-indexed ones, leave odd ones missing.
+      const params = names
+        .filter((n) => {
+          const idx = Number(n.split("/").pop()!.slice(1));
+          return idx % 2 === 0;
+        })
+        .map((n) => ({ Name: n, Value: `v-${n.split("/").pop()}` }));
+      const invalid = names.filter((n) => {
+        const idx = Number(n.split("/").pop()!.slice(1));
+        return idx % 2 !== 0;
+      });
+      return { Parameters: params, InvalidParameters: invalid };
+    };
+    const env = await p.batchGet(paths);
+    expect(Object.keys(env)).toHaveLength(9); // 0,2,4,6,8,10,12,14,16
+    expect(env["/ark/acme/tenant/K0"]).toBe("v-K0");
+    expect(env["/ark/acme/tenant/K1"]).toBeUndefined();
+    expect(call).toBe(2);
+  });
+
+  it("listAt sanitises AccessDenied so the prefix never leaks", async () => {
+    const sensitivePrefix = "/ark/acme/users/super-secret-user-id/";
+    client.responders.GetParametersByPath = () => {
+      const e: any = new Error(`User is not authorised to access ${sensitivePrefix}`);
+      e.name = "AccessDeniedException";
+      e.$metadata = { httpStatusCode: 403 };
+      throw e;
+    };
+    let caught: Error | null = null;
+    try {
+      await p.listAt(sensitivePrefix);
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toContain("AccessDeniedException");
+    expect(caught!.message).not.toContain(sensitivePrefix);
+    expect(caught!.message).not.toContain("super-secret-user-id");
+  });
+
+  it("setAtPath writes a SecureString at the given full path without leaf regex validation", async () => {
+    await p.setAtPath("acme", "/ark/acme/users/u1/ANTHROPIC_API_KEY", "sk-xyz", { description: "user-scoped" });
+    expect(client.calls).toHaveLength(1);
+    const put = client.calls[0];
+    expect(put.command).toBe("PutParameterCommand");
+    expect(put.input.Name).toBe("/ark/acme/users/u1/ANTHROPIC_API_KEY");
+    expect(put.input.Value).toBe("sk-xyz");
+    expect(put.input.Type).toBe("SecureString");
+  });
+
+  it("setAtPath rejects paths that don't start with /ark/", async () => {
+    await expect(p.setAtPath("acme", "elsewhere/KEY", "v")).rejects.toThrow(/must start with \/ark\//);
+  });
 });

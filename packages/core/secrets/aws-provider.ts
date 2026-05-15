@@ -300,21 +300,107 @@ export class AwsSecretsProvider implements SecretsCapability {
     return out;
   }
 
-  async listAt(_prefix: string): Promise<{ name: string }[]> {
-    throw new Error("AwsSecretsProvider.listAt: NotImplemented");
+  /**
+   * List secret-shaped entries whose full SSM path starts with `prefix`.
+   * Recursive (so `/ark/<tid>/teams/` enumerates every team's keys); paginates
+   * via NextToken; returns only path names -- never values. Blob entries are
+   * filtered out because they live at a different prefix anyway.
+   *
+   * Errors are re-thrown with a sanitised message that does NOT echo
+   * `prefix` -- the prefix may carry a user id or team chain.
+   */
+  async listAt(prefix: string): Promise<{ name: string }[]> {
+    if (typeof prefix !== "string" || prefix.length === 0) {
+      throw new Error("listAt: prefix must be a non-empty string");
+    }
+    const { GetParametersByPathCommand } = await import("@aws-sdk/client-ssm");
+    const ssm = await this.client();
+    const out: { name: string }[] = [];
+    let nextToken: string | undefined = undefined;
+    try {
+      do {
+        const res: { Parameters?: Array<{ Name?: string }>; NextToken?: string } = await ssm.send(
+          new GetParametersByPathCommand({
+            Path: prefix,
+            Recursive: true,
+            WithDecryption: false,
+            NextToken: nextToken,
+          }),
+        );
+        for (const param of res.Parameters ?? []) {
+          if (param.Name) out.push({ name: param.Name });
+        }
+        nextToken = res.NextToken;
+      } while (nextToken);
+    } catch (err: unknown) {
+      throw sanitizeSsmError(err, "listAt");
+    }
+    return out;
   }
 
-  async batchGet(_paths: string[]): Promise<Record<string, string>> {
-    throw new Error("AwsSecretsProvider.batchGet: NotImplemented");
+  /**
+   * Batch-resolve full SSM paths. SSM's GetParameters tops out at 10 names
+   * per call, so we chunk. Paths the caller asked for that don't exist
+   * (reported by SSM as `InvalidParameters`) are SILENTLY absent from the
+   * response -- contract diff vs resolveMany().
+   */
+  async batchGet(paths: string[]): Promise<Record<string, string>> {
+    if (!Array.isArray(paths) || paths.length === 0) return {};
+    const { GetParametersCommand } = await import("@aws-sdk/client-ssm");
+    const ssm = await this.client();
+    const out: Record<string, string> = {};
+    try {
+      for (let i = 0; i < paths.length; i += 10) {
+        const batch = paths.slice(i, i + 10);
+        const res: { Parameters?: Array<{ Name?: string; Value?: string }>; InvalidParameters?: string[] } =
+          await ssm.send(new GetParametersCommand({ Names: batch, WithDecryption: true }));
+        for (const p of res.Parameters ?? []) {
+          if (p.Name && typeof p.Value === "string") {
+            out[p.Name] = p.Value;
+          }
+        }
+        // InvalidParameters -> absent, no throw.
+      }
+    } catch (err: unknown) {
+      throw sanitizeSsmError(err, "batchGet");
+    }
+    return out;
   }
 
+  /**
+   * Write a SecureString at a fully-validated path. Caller is responsible
+   * for path validation (see packages/secrets/resolver/paths.ts). We
+   * intentionally do NOT call assertValidSecretName here -- the whole
+   * point is the leaf name lives inside a hierarchical path.
+   */
   async setAtPath(
     _tenantId: string,
-    _fullPath: string,
-    _value: string,
-    _opts?: { description?: string; type?: SecretType; metadata?: Record<string, string> },
+    fullPath: string,
+    value: string,
+    opts?: { description?: string; type?: SecretType; metadata?: Record<string, string> },
   ): Promise<void> {
-    throw new Error("AwsSecretsProvider.setAtPath: NotImplemented");
+    if (typeof fullPath !== "string" || !fullPath.startsWith("/ark/")) {
+      throw new Error("setAtPath: fullPath must start with /ark/");
+    }
+    if (typeof value !== "string") throw new Error("Secret value must be a string");
+    const { PutParameterCommand } = await import("@aws-sdk/client-ssm");
+    const ssm = await this.client();
+    const description = encodeDescriptionEnvelope({
+      description: opts?.description,
+      type: opts?.type ?? "env-var",
+      metadata: opts?.metadata ?? {},
+    });
+    await ssm.send(
+      new PutParameterCommand({
+        Name: fullPath,
+        Value: value,
+        Type: "SecureString",
+        Overwrite: true,
+        Tier: "Standard",
+        KeyId: this.cfg.kmsKeyId,
+        Description: description,
+      }),
+    );
   }
 
   // ── Blob surface (multi-file secrets) ──────────────────────────────────
@@ -593,6 +679,26 @@ export class AwsSecretsProvider implements SecretsCapability {
     }
     return true;
   }
+}
+
+/**
+ * Wrap an unexpected AWS error so callers see the error class + code but
+ * never any echo of the path argument. Mirrors the SsmKekBackend style:
+ * we want operators to debug AccessDenied / ThrottlingException etc., but
+ * the path itself may contain a userId or team chain that we'd rather not
+ * leak into log streams.
+ */
+function sanitizeSsmError(err: unknown, op: string): Error {
+  if (!err || typeof err !== "object") {
+    return new Error(`${op}: SSM call failed`);
+  }
+  const e = err as { name?: string; Code?: string; message?: string; $metadata?: { httpStatusCode?: number } };
+  const code = e.name ?? e.Code ?? "UnknownError";
+  const http = e.$metadata?.httpStatusCode ? ` (http ${e.$metadata.httpStatusCode})` : "";
+  // We intentionally do NOT include `e.message` -- AWS error messages
+  // often quote the parameter name, which is the very thing we want to
+  // keep out of logs.
+  return new Error(`${op}: SSM ${code}${http}`);
 }
 
 /** SSM surfaces "not found" as either an error class name or an HTTP 400 with a typed error. */
