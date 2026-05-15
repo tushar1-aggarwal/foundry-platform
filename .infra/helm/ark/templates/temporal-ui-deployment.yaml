@@ -31,6 +31,8 @@ spec:
           env:
             - name: TEMPORAL_ADDRESS
               value: "{{ .Values.temporal.serverServiceName }}:7233"
+            - name: TEMPORAL_DEFAULT_NAMESPACE
+              value: {{ .Values.temporal.namespace | quote }}
             {{- if .Values.temporal.ui.corsOrigins }}
             - name: TEMPORAL_CORS_ORIGINS
               value: {{ .Values.temporal.ui.corsOrigins | quote }}

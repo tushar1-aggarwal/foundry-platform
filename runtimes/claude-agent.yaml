@@ -12,6 +12,7 @@ permission_mode: bypassPermissions
 interactive: false
 secrets:
   - ANTHROPIC_API_KEY
+  - CLAUDE_CODE_OAUTH_TOKEN
   - ANTHROPIC_BASE_URL
   - ANTHROPIC_CUSTOM_HEADERS
 # Gateway wire-format compatibility modes. Empty by default (direct Anthropic
