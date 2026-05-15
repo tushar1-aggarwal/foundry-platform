@@ -292,21 +292,109 @@ export class FileSecretsProvider implements SecretsCapability {
     return out;
   }
 
-  async listAt(_prefix: string): Promise<{ name: string }[]> {
-    throw new Error("FileSecretsProvider.listAt: NotImplemented");
+  /**
+   * Translate a stored entry name into its effective full path under
+   * `/ark/`. Two shapes are accepted:
+   *
+   *   - Bare legacy names (e.g. `ANTHROPIC_API_KEY`) -- treated as living
+   *     at `/ark/<tenantId>/tenant/<name>` so existing flat secrets.json
+   *     files remain discoverable via the hierarchical resolver without a
+   *     forced migration.
+   *   - Full paths (e.g. `/ark/<tid>/users/<uid>/<KEY>`) -- returned as-is.
+   *     These are written by setAtPath().
+   *
+   * Returns null when the stored name is ill-formed for both shapes.
+   */
+  private effectiveFullPath(tenantId: string, storedName: string): string | null {
+    if (typeof storedName !== "string" || storedName.length === 0) return null;
+    if (storedName.startsWith("/ark/")) return storedName;
+    if (storedName.includes("/")) return null;
+    return `/ark/${tenantId}/tenant/${storedName}`;
   }
 
-  async batchGet(_paths: string[]): Promise<Record<string, string>> {
-    throw new Error("FileSecretsProvider.batchGet: NotImplemented");
+  /**
+   * List secret-shaped entries whose full path starts with `prefix`. The
+   * file provider walks every tenant bucket because a prefix like
+   * `/ark/<tid>/tenant/` only matches entries inside `data.secrets[tid]`,
+   * and we want a single read pass for the hierarchical resolver. Order
+   * is undefined (the resolver dedups by key with explicit precedence).
+   */
+  async listAt(prefix: string): Promise<{ name: string }[]> {
+    if (typeof prefix !== "string" || !prefix.startsWith("/ark/")) {
+      throw new Error("listAt: prefix must start with /ark/");
+    }
+    const store = this.loadStore();
+    const out: { name: string }[] = [];
+    for (const tid of Object.keys(store.secrets)) {
+      const tenant = store.secrets[tid];
+      for (const storedName of Object.keys(tenant)) {
+        const full = this.effectiveFullPath(tid, storedName);
+        if (full && full.startsWith(prefix)) {
+          out.push({ name: full });
+        }
+      }
+    }
+    return out;
   }
 
+  /**
+   * Batch-resolve values by full path. Same effective-path convention as
+   * listAt. Missing paths are SILENTLY absent from the result map (no
+   * throw -- contract diff vs resolveMany).
+   */
+  async batchGet(paths: string[]): Promise<Record<string, string>> {
+    if (!Array.isArray(paths) || paths.length === 0) return {};
+    const store = this.loadStore();
+    // Build a one-shot path -> entry lookup so callers passing 50 paths
+    // don't pay O(N * tenant.entries) for the linear scans.
+    const index = new Map<string, FileStoredSecret>();
+    for (const tid of Object.keys(store.secrets)) {
+      const tenant = store.secrets[tid];
+      for (const storedName of Object.keys(tenant)) {
+        const full = this.effectiveFullPath(tid, storedName);
+        if (full) index.set(full, tenant[storedName]);
+      }
+    }
+    const out: Record<string, string> = {};
+    const key = this.keyProvider();
+    for (const p of paths) {
+      const entry = index.get(p);
+      if (entry) out[p] = decrypt(entry.v, key);
+    }
+    return out;
+  }
+
+  /**
+   * Write a secret at a fully-validated path. The full path is stored as
+   * the entry `name` literally -- there is no rewrite of the leaf and no
+   * legacy migration on read. Path validation is the caller's job (see
+   * packages/secrets/resolver/paths.ts).
+   */
   async setAtPath(
-    _tenantId: string,
-    _fullPath: string,
-    _value: string,
-    _opts?: { description?: string; type?: SecretType; metadata?: Record<string, string> },
+    tenantId: string,
+    fullPath: string,
+    value: string,
+    opts?: { description?: string; type?: SecretType; metadata?: Record<string, string> },
   ): Promise<void> {
-    throw new Error("FileSecretsProvider.setAtPath: NotImplemented");
+    if (typeof fullPath !== "string" || !fullPath.startsWith("/ark/")) {
+      throw new Error("setAtPath: fullPath must start with /ark/");
+    }
+    if (typeof value !== "string") throw new Error("Secret value must be a string");
+    const store = this.loadStore();
+    if (!store.secrets[tenantId]) store.secrets[tenantId] = {};
+    const now = new Date().toISOString();
+    const existing = store.secrets[tenantId][fullPath];
+    const entry: FileStoredSecret = {
+      v: encrypt(value, this.keyProvider()),
+      d: opts?.description ?? existing?.d,
+      t: opts?.type ?? safeSecretType(existing?.t),
+      m: opts?.metadata ?? safeMetadata(existing?.m),
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    };
+    if (entry.d === undefined) delete entry.d;
+    store.secrets[tenantId][fullPath] = entry;
+    this.saveStore(store);
   }
 
   // ── Blob surface (multi-file secrets) ──────────────────────────────────

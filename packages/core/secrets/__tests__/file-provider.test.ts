@@ -158,4 +158,60 @@ describe("FileSecretsProvider", () => {
     await p.set("t1", "FOO", "v");
     expect(events).toEqual(["write-tmp", "rename"]);
   });
+
+  // ── listAt + batchGet (hierarchical resolver surface) ─────────────────────
+
+  it("listAt: legacy flat names are discoverable under the tenant prefix", async () => {
+    const p = new FileSecretsProvider(dir);
+    await p.set("t1", "ANTHROPIC_API_KEY", "sk-abc");
+    await p.set("t1", "OPENAI_API_KEY", "sk-xyz");
+    // Flat names are mapped to /ark/<tid>/tenant/<name>.
+    const refs = await p.listAt("/ark/t1/tenant/");
+    expect(refs.map((r) => r.name).sort()).toEqual([
+      "/ark/t1/tenant/ANTHROPIC_API_KEY",
+      "/ark/t1/tenant/OPENAI_API_KEY",
+    ]);
+    // batchGet returns their values.
+    const got = await p.batchGet(refs.map((r) => r.name));
+    expect(got).toEqual({
+      "/ark/t1/tenant/ANTHROPIC_API_KEY": "sk-abc",
+      "/ark/t1/tenant/OPENAI_API_KEY": "sk-xyz",
+    });
+  });
+
+  it("listAt: path-shaped names are only returned by their matching prefix", async () => {
+    const p = new FileSecretsProvider(dir);
+    await p.set("t1", "TENANT_KEY", "t-v"); // legacy flat -> tenant
+    await p.setAtPath("t1", "/ark/t1/users/u1/USER_KEY", "u-v");
+    await p.setAtPath("t1", "/ark/t1/teams/eng/TEAM_KEY", "team-v");
+
+    const userRefs = await p.listAt("/ark/t1/users/u1/");
+    expect(userRefs.map((r) => r.name)).toEqual(["/ark/t1/users/u1/USER_KEY"]);
+
+    const teamRefs = await p.listAt("/ark/t1/teams/eng/");
+    expect(teamRefs.map((r) => r.name)).toEqual(["/ark/t1/teams/eng/TEAM_KEY"]);
+
+    const tenantRefs = await p.listAt("/ark/t1/tenant/");
+    expect(tenantRefs.map((r) => r.name)).toEqual(["/ark/t1/tenant/TENANT_KEY"]);
+  });
+
+  it("batchGet: missing paths are absent (no throw)", async () => {
+    const p = new FileSecretsProvider(dir);
+    await p.set("t1", "FOO", "fv");
+    const got = await p.batchGet(["/ark/t1/tenant/FOO", "/ark/t1/tenant/MISSING", "/ark/t1/users/nobody/X"]);
+    expect(got).toEqual({ "/ark/t1/tenant/FOO": "fv" });
+  });
+
+  it("setAtPath: round-trips through batchGet and persists across instances", async () => {
+    const p1 = new FileSecretsProvider(dir);
+    await p1.setAtPath("t1", "/ark/t1/users/u1/TOKEN", "secret");
+    const p2 = new FileSecretsProvider(dir);
+    const got = await p2.batchGet(["/ark/t1/users/u1/TOKEN"]);
+    expect(got).toEqual({ "/ark/t1/users/u1/TOKEN": "secret" });
+  });
+
+  it("setAtPath rejects paths that don't start with /ark/", async () => {
+    const p = new FileSecretsProvider(dir);
+    await expect(p.setAtPath("t1", "not-ark/x/KEY", "v")).rejects.toThrow(/must start with \/ark\//);
+  });
 });
