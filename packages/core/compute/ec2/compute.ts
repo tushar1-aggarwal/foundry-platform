@@ -30,9 +30,9 @@
  *   destroy: TerminateInstances (via `destroyStack`), kill the port
  *            forward, drop the security group the stack created.
  *
- * Snapshot / restore: deferred. Both throw NotSupportedError with
- * `capabilities.snapshot = true` still reported so dispatch can hint
- * at the eventual shape -- tests assert both.
+ * Snapshot / restore: deferred. Both throw NotSupportedError; the
+ * capability is reported false until the feature ships so callers
+ * that guard on `capabilities.snapshot` don't crash.
  *
  * Isolation composition: EC2Compute pairs with any Isolation (DirectIsolation,
  * DockerIsolation, DevcontainerIsolation, DockerComposeIsolation). The
@@ -347,7 +347,7 @@ const DEFAULT_HELPERS: EC2ComputeHelpers = {
 export class EC2Compute implements Compute {
   readonly kind: ComputeKind = "ec2";
   readonly capabilities: ComputeCapabilities = {
-    snapshot: true,
+    snapshot: false,
     pool: true,
     networkIsolation: true,
     provisionLatency: "minutes",
