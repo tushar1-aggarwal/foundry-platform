@@ -40,7 +40,7 @@ import { garbageCollectComputeIfTemplate } from "../services/compute-lifecycle.j
 import { capturePlanMdIfPresent } from "../services/plan-artifact.js";
 import { saveCheckpoint } from "../session/checkpoint.js";
 import { provisionWorkspaceWorkdir } from "../workspace/provisioner.js";
-import * as flow from "../services/flow.js";
+import { buildFlowCallbacks } from "../services/flow-callbacks.js";
 import { buildTaskWithHandoff, extractSubtasks } from "../services/task-builder.js";
 import * as agentRegistry from "../agent/agent.js";
 import { getExecutor } from "../executor.js";
@@ -107,8 +107,7 @@ export function registerServices(
           recordSessionUsage: (session, usage, provider, source) =>
             c.app.sessionLifecycle.recordSessionUsage(session, usage, provider, source),
           getOutput: (id, opts) => getOutput(c.app, id, opts),
-          getStage: (flowName, stageName) => flow.getStage(c.app, flowName, stageName),
-          getStageAction: (flowName, stageName) => flow.getStageAction(c.app, flowName, stageName),
+          ...buildFlowCallbacks(c.app),
         }),
       { lifetime },
     ),
@@ -217,8 +216,7 @@ export function registerServices(
           },
 
           // Flow + task-building callbacks
-          getStage: (flowName, stageName) => flow.getStage(c.app, flowName, stageName),
-          getStageAction: (flowName, stageName) => flow.getStageAction(c.app, flowName, stageName),
+          ...buildFlowCallbacks(c.app),
           buildTask: (session, stage, agentName) => buildTaskWithHandoff(c.app, session, stage, agentName),
           extractSubtasks: (session) => extractSubtasks(c.app, session),
           materializeClaudeAuth: (session, compute) => materializeClaudeAuthForDispatch(c.app, session, compute),
@@ -288,10 +286,7 @@ export function registerServices(
           capturePlanMd: (session) => capturePlanMdIfPresent(c.app, session),
           gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
           saveCheckpoint: (sessionId) => saveCheckpoint({ sessions: c.sessions, events: c.events }, sessionId),
-          getStage: (flowName, stageName) => flow.getStage(c.app, flowName, stageName),
-          getStageAction: (flowName, stageName) => flow.getStageAction(c.app, flowName, stageName),
-          resolveNextStage: (flowName, stage, outcome) => flow.resolveNextStage(c.app, flowName, stage, outcome),
-          evaluateGate: (flowName, stage, session) => flow.evaluateGate(c.app, flowName, stage, session),
+          ...buildFlowCallbacks(c.app),
           // Stop the previous stage's poller before sessions.update clears
           // session_id. Closes the stale-handle race documented at
           // executors/status-poller.ts#L205.
