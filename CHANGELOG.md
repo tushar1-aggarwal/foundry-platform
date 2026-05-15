@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+- **Electron desktop app (`packages/desktop/`)** -- Web UI + CLI are now the only supported product surfaces. Removed the Electron shell, electron-builder packaging, the desktop release matrix in CI, and the `make desktop` / `build-desktop` / `package-desktop` targets. `make package` no longer produces `.dmg` / `.AppImage` artifacts. The web dashboard (`ark web`) remains the primary GUI; install via the tarball or `make install`.
+
 ## v0.22.0 (2026-05-08)
 
 ### Breaking changes

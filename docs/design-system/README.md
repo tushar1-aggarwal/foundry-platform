@@ -27,7 +27,6 @@ Everything in here was derived from the `ytarasova/ark` GitHub repo (branch `mai
 - `packages/web/src/styles.css` -- typography scale and component classes.
 - `packages/web/src/components/` -- Radix primitives + custom Button, Tooltip, status dots, session cards.
 - `packages/web/src/pages/` -- Sessions, Dashboard, Session Detail.
-- `packages/desktop/icon.png` -- the "A" logo.
 - `package.json` -- icon system is `lucide-react`, fonts load from Google (Inter + JetBrains Mono + Geist Mono).
 
 No Figma was attached. Anything labelled **placeholder** is a best-guess recreation -- flag it during review.
@@ -36,7 +35,7 @@ No Figma was attached. Anything labelled **placeholder** is a best-guess recreat
 
 ## Brand context
 
-**Ark** is a developer-facing tool. It's a CLI-first product (`ark` command) with an optional web dashboard, Electron desktop wrapper, and Control Plane (server + workers).
+**Ark** is a developer-facing tool. It's a CLI-first product (`ark` command) with an optional web dashboard and a Control Plane (server + workers).
 
 - **What it does:** orchestrates fleets of AI coding agents across SDLC flows -- intake, planning, audit, execution, verification, close, retro. Runs them on local machines, containers, cloud VMs, or Kubernetes pods.
 - **Who it's for:** engineers and engineering teams already comfortable with CLIs, `tmux`, worktrees, and YAML config.

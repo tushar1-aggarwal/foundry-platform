@@ -9,16 +9,16 @@
 #   make dev           Hot-reload CLI + Web UI (two processes)
 #   make test          Run all unit tests (sequential)
 #   make test-e2e      Run Playwright E2E tests against Web UI
-#   make build         Build native macOS binary + Electron app
+#   make build         Build native ark binary
 #   make package       Package everything for distribution
 
-.PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-temporal-worker dev-docker dev-control-plane dev-control-plane-down dev-control-plane-bootstrap claude-tfy pi-tfy web desktop \
+.PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-temporal-worker dev-docker dev-control-plane dev-control-plane-down dev-control-plane-bootstrap claude-tfy pi-tfy web \
         test test-file test-e2e test-e2e-fast test-e2e-web test-e2e-web-dev test-install test-watch test-e2e-local-bespoke test-e2e-control-plane test-e2e-control-plane-up test-e2e-control-plane-down test-e2e-t6-docker test-e2e-local-real-llm test-laptop-real-llm lint lint-fix \
         format format-check \
         dev-kill \
         docs-cli \
-        build build-cli build-web build-desktop \
-        package package-cli package-desktop \
+        build build-cli build-web \
+        package package-cli \
         spike-temporal-bun \
         vendor-tmux vendor-tensorzero vendor-codegraph \
         clean uninstall \
@@ -46,13 +46,13 @@ CLAUDE_CONTINUE_FLAGS := $(if $(filter 0,$(CLAUDE_CONTINUE)),,--continue)
 help: ## Show available commands
 	@echo ""
 	@echo "  \033[1mDevelopment\033[0m"
-	@grep -E '^(install|dev|dev-daemon|dev-arkd|dev-web|dev-docker|dev-temporal|dev-temporal-down|dev-temporal-worker|dev-control-plane|dev-control-plane-down|dev-control-plane-bootstrap|claude-tfy|pi-tfy|web|desktop):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-22s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^(install|dev|dev-daemon|dev-arkd|dev-web|dev-docker|dev-temporal|dev-temporal-down|dev-temporal-worker|dev-control-plane|dev-control-plane-down|dev-control-plane-bootstrap|claude-tfy|pi-tfy|web):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  \033[1mTesting\033[0m"
 	@grep -E '^(test|test-file|test-e2e|test-install|test-watch|lint|format):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  \033[1mBuilding & Packaging\033[0m"
-	@grep -E '^(build|build-cli|build-web|build-desktop|package|package-cli|package-desktop):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^(build|build-cli|build-web|package|package-cli):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "  \033[1mOther\033[0m"
 	@grep -E '^(clean|uninstall|lint):' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "    \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -321,9 +321,6 @@ self-quick: ## Dispatch single-agent quick fix against THIS repo
 web: ## Launch the web dashboard (production build)
 	@$(MAKE) build-web --no-print-directory
 	./ark web
-
-desktop: build-web ## Launch the Electron desktop app
-	@cd packages/desktop && npm install --silent 2>/dev/null && npx electron .
 
 # ── Testing ──────────────────────────────────────────────────────────────────
 
@@ -672,17 +669,9 @@ build-cli: ## Build native macOS CLI binary (current arch)
 build-web: ## Build web frontend (Vite production)
 	@cd packages/web && npx vite build --logLevel error 2>/dev/null || $(BUN) run packages/web/build.ts
 
-build-desktop: build-web ## Build Electron app with bundled ark-native
-	@echo "Building ark-native for current platform..."
-	@$(MAKE) build-cli --no-print-directory
-	@mkdir -p packages/desktop/binaries/$$(uname -s | tr A-Z a-z)-$$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
-	@cp ark-native packages/desktop/binaries/$$(uname -s | tr A-Z a-z)-$$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')/ark-native
-	@echo "Bundled ark-native into packages/desktop/binaries/"
-	cd packages/desktop && npm install --silent 2>/dev/null && npx electron-builder
-
 # ── Packaging (all platforms) ────────────────────────────────────────────────
 
-package: package-cli package-desktop ## Package CLI + Electron for all platforms
+package: package-cli ## Package CLI bundles for all platforms
 
 package-cli: build-web ## Build self-contained CLI bundles for macOS + Linux (4 targets)
 	@echo "Building Ark bundles for all platforms..."
@@ -773,13 +762,10 @@ vendor-tensorzero: ## Build TensorZero gateway from source for all platforms
 	  echo "  tensorzero: skipped (install Rust to build, or use Docker for hosted mode)"; \
 	fi
 
-package-desktop: build-web ## Package Electron app (.dmg + .AppImage)
-	cd packages/desktop && npm install --silent 2>/dev/null && npx electron-builder --mac --linux
-
 # ── Other ────────────────────────────────────────────────────────────────────
 
 clean: ## Remove all build artifacts
-	rm -rf dist packages/web/dist packages/desktop/out packages/desktop/binaries node_modules/.cache
+	rm -rf dist packages/web/dist node_modules/.cache
 	rm -f ark-native ark-darwin-arm64 ark-darwin-x64 ark-linux-arm64 ark-linux-x64
 	@echo "Cleaned."
 

@@ -21,7 +21,6 @@
     "tests",
     "packages/web",
     "packages/e2e",
-    "packages/desktop/tests",
     "**/__tests__/**",
     "packages/test-setup.ts"
   ]
