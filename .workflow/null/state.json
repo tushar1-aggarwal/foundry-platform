@@ -5,15 +5,18 @@
   "last_completed_stage": 4,
   "verify_result": "PASS WITH WARNINGS",
   "critical_failures": 0,
-  "warnings": 1,
-  "verify_report_path": "/Users/tusharaggarwal/.ark/worktrees/s-0ihq2ziku4/.workflow/null/verify-report.md",
-  "timestamp": "2026-05-15T08:00:00Z",
+  "warnings": 3,
+  "verify_report_path": "/Users/tusharaggarwal/.ark/worktrees/s-1yqw64gfj1/.workflow/null/verify-report.md",
+  "timestamp": "2026-05-15T12:00:00Z",
   "test_results": {
-    "total": 5480,
-    "passed": 5468,
-    "failed": 6,
+    "total": 5486,
+    "passed": 5477,
+    "failed": 3,
     "skipped": 6,
-    "note": "6 failures are all environment-specific (ARK_DEV_FORCE_DIRECT=1, ARK_KEK_TEST_STUB=1 dev env vars; live ssh-keyscan network; timing-sensitive WebSocket test). All 107 Phase 2 targeted tests pass. Lint exit 0, format clean. 17/17 ACs pass."
+    "plan_scoped_total": 37,
+    "plan_scoped_passed": 37,
+    "plan_scoped_failed": 0,
+    "note": "3 failures are all pre-existing and out-of-scope: (1) kek-boot failure due to ARK_KEK_TEST_STUB=1 dev env var, (2) writeChannelConfig environment-specific failure (file not modified in branch), (3) buildAgentSdkRuntimeEnv test ordering flake (passes in isolation). All 37 plan-scoped tests pass. Lint exit 0, format clean. 17/17 ACs pass."
   },
-  "task": "Execute-the-Phase-2-hierarchical-secrets-resolver-plan-at-do"
+  "task": "Execute-the-placement-resolver-integration-fix-plan-at-docs-"
 }
