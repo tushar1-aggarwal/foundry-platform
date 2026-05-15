@@ -8,7 +8,7 @@ metadata:
 data:
   ARK_CONDUCTOR_HOST: "0.0.0.0"
   ARK_CONDUCTOR_PORT: {{ .Values.controlPlane.ports.conductor | quote }}
-  ARK_AUTH_ENABLED: {{ .Values.controlPlane.auth.enabled | quote }}
+  ARK_AUTH_REQUIRE_TOKEN: {{ .Values.controlPlane.auth.enabled | ternary "true" "false" | quote }}
   ARK_ROUTER_POLICY: {{ .Values.controlPlane.router.policy | quote }}
   {{- $dbUrl := include "ark.databaseUrl" . }}
   {{- if $dbUrl }}
