@@ -397,6 +397,44 @@ export class FileSecretsProvider implements SecretsCapability {
     this.saveStore(store);
   }
 
+  /**
+   * Path-aware read. Mirrors batchGet's effective-path convention so a
+   * legacy flat-named entry is reachable under `/ark/<tid>/tenant/<name>`.
+   */
+  async getAtPath(fullPath: string): Promise<string | null> {
+    if (typeof fullPath !== "string" || !fullPath.startsWith("/ark/")) {
+      throw new Error("getAtPath: fullPath must start with /ark/");
+    }
+    const got = await this.batchGet([fullPath]);
+    return fullPath in got ? got[fullPath] : null;
+  }
+
+  /**
+   * Path-aware delete. Removes whatever entry maps to `fullPath` under the
+   * effective-path convention -- a tenant-scoped path will also pick up
+   * the legacy flat-named entry of the same KEY.
+   */
+  async deleteAtPath(fullPath: string): Promise<boolean> {
+    if (typeof fullPath !== "string" || !fullPath.startsWith("/ark/")) {
+      throw new Error("deleteAtPath: fullPath must start with /ark/");
+    }
+    const store = this.loadStore();
+    let removed = false;
+    for (const tid of Object.keys(store.secrets)) {
+      const tenant = store.secrets[tid];
+      for (const storedName of Object.keys(tenant)) {
+        const eff = this.effectiveFullPath(tid, storedName);
+        if (eff === fullPath) {
+          delete tenant[storedName];
+          removed = true;
+        }
+      }
+      if (Object.keys(tenant).length === 0) delete store.secrets[tid];
+    }
+    if (removed) this.saveStore(store);
+    return removed;
+  }
+
   // ── Blob surface (multi-file secrets) ──────────────────────────────────
   //
   // Blobs live under `${arkDir}/secrets/<tenantId>/<blobName>/<file>` with

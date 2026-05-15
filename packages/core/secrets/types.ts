@@ -106,6 +106,19 @@ export interface SecretsCapability {
     opts?: { description?: string; type?: SecretType; metadata?: Record<string, string> },
   ): Promise<void>;
 
+  /**
+   * Optional sibling of `get` for path-shaped reads. Returns null when the
+   * path doesn't exist. Tenant-scoped reads (no path shape) keep using
+   * `get(tenantId, name)`.
+   */
+  getAtPath?(fullPath: string): Promise<string | null>;
+
+  /**
+   * Optional sibling of `delete` for path-shaped removals. Returns true
+   * when a secret was actually removed, false when the path didn't exist.
+   */
+  deleteAtPath?(fullPath: string): Promise<boolean>;
+
   // ── Blob (multi-file) secrets ───────────────────────────────────────────
   // A "blob" is a named bag of files (filename -> bytes), stored atomically
   // under a single blob name. Used for the claude subscription credentials

@@ -21,6 +21,77 @@ import { getArkClient, getInProcessApp } from "../app-client.js";
 import { runAction } from "./_shared.js";
 import type { SecretType } from "../../core/secrets/types.js";
 import { registerDescribeCommand } from "./secrets/describe.js";
+import {
+  tenantPath,
+  teamPath,
+  userPath,
+  tenantPrefix,
+  teamPrefix,
+  userPrefix,
+  parsePath,
+} from "../../secrets/resolver/index.js";
+
+/**
+ * Translate a CLI --scope + --scope-id pair into the full path under
+ * `/ark/<tid>/...` where the secret lives. `tenant` scope is special-cased
+ * to null so the CLI can keep writing the LEGACY flat shape on bare
+ * invocation (back-compat: `~/.ark/secrets.json` stays unchanged).
+ *
+ * For team scope the operator passes a slash- or comma-delimited list of
+ * segments via --scope-id (most-specific first), e.g. `--scope team
+ * --scope-id platform/eng` -> `/ark/<tid>/teams/platform/eng/<KEY>`.
+ */
+type Scope = "tenant" | "team" | "user";
+
+function parseScopeOpt(scope?: string): Scope {
+  const s = (scope ?? "tenant").toLowerCase();
+  if (s !== "tenant" && s !== "team" && s !== "user") {
+    throw new Error(`Invalid --scope '${scope}'. Allowed: tenant, team, user`);
+  }
+  return s;
+}
+
+function parseTeamSegments(scopeId: string): string[] {
+  // Accept slash or comma separators so operators can use whichever fits
+  // their shell quoting situation.
+  const parts = scopeId.split(/[\/,]/).filter((s) => s.length > 0);
+  if (parts.length === 0) throw new Error("--scope-id must name at least one team segment");
+  return parts;
+}
+
+interface ResolvedScope {
+  scope: Scope;
+  /** Full path under /ark/, or null when the scope is `tenant` AND
+   *  back-compat-tenant mode is requested (we keep writing the flat name). */
+  fullPath: string | null;
+  /** Prefix used for listAt() queries on this scope. */
+  prefix: string;
+}
+
+function resolveScopeForKey(tenantId: string, scope: Scope, scopeId: string | undefined, key: string): ResolvedScope {
+  if (scope === "tenant") {
+    if (scopeId) throw new Error("--scope-id must NOT be set for --scope tenant");
+    // Back-compat: bare/`--scope tenant` invocation keeps the legacy flat shape.
+    return { scope, fullPath: null, prefix: tenantPrefix(tenantId) };
+  }
+  if (!scopeId) throw new Error(`--scope-id is required for --scope ${scope}`);
+  if (scope === "user") {
+    return { scope, fullPath: userPath(tenantId, scopeId, key), prefix: userPrefix(tenantId, scopeId) };
+  }
+  // team
+  const segments = parseTeamSegments(scopeId);
+  return { scope, fullPath: teamPath(tenantId, segments, key), prefix: teamPrefix(tenantId, segments) };
+}
+
+function resolveScopePrefix(tenantId: string, scope: Scope, scopeId: string | undefined): string {
+  if (scope === "tenant") {
+    if (scopeId) throw new Error("--scope-id must NOT be set for --scope tenant");
+    return tenantPrefix(tenantId);
+  }
+  if (!scopeId) throw new Error(`--scope-id is required for --scope ${scope}`);
+  if (scope === "user") return userPrefix(tenantId, scopeId);
+  return teamPrefix(tenantId, parseTeamSegments(scopeId));
+}
 
 /**
  * The set of secret types accepted by `ark secrets set` / `ark secrets blob upload`.
@@ -53,12 +124,22 @@ export interface SecretSetOptions {
   description?: string;
   type: string;
   metadata?: Record<string, string>;
+  /** Scope (tenant/team/user). Default tenant -- legacy flat write. */
+  scope?: string;
+  /** Required for team and user scopes. Slash- or comma-delimited segments for team. */
+  scopeId?: string;
 }
 
 /**
  * Core set-secret logic, factored out so tests can drive it without having
  * to fake stdin / TTY. The CLI action handler is a thin wrapper that
  * resolves the value (stdin or masked prompt) and then delegates here.
+ *
+ * Routing:
+ *   - `--scope tenant` (default) -> app.secrets.set(tenantId, name, value, ...)
+ *     keeps writing the legacy flat shape, so back-compat is preserved.
+ *   - `--scope team|user` -> app.secrets.setAtPath(tenantId, fullPath, value, ...)
+ *     writes the literal path-shaped entry.
  */
 export async function performSecretSet(name: string, value: string, opts: SecretSetOptions): Promise<void> {
   assertAllowedType(opts.type);
@@ -67,11 +148,22 @@ export async function performSecretSet(name: string, value: string, opts: Secret
   }
   const app = await getInProcessApp();
   const tenantId = defaultTenantId(app);
-  await app.secrets.set(tenantId, name, value, {
+  const scope = parseScopeOpt(opts.scope);
+  const resolved = resolveScopeForKey(tenantId, scope, opts.scopeId, name);
+  const setOpts = {
     description: opts.description,
     type: opts.type as SecretType,
     metadata: opts.metadata ?? {},
-  });
+  };
+  if (resolved.fullPath == null) {
+    // tenant scope -- legacy flat write.
+    await app.secrets.set(tenantId, name, value, setOpts);
+  } else {
+    if (!app.secrets.setAtPath) {
+      throw new Error("Configured secrets backend does not implement setAtPath");
+    }
+    await app.secrets.setAtPath(tenantId, resolved.fullPath, value, setOpts);
+  }
 }
 
 export interface BlobUploadOptions {
@@ -181,19 +273,39 @@ export function registerSecretsCommands(program: Command): void {
   group
     .command("list")
     .description("List secret names (values are never returned)")
-    .action(async () => {
+    .option("--scope <scope>", "Listing scope: tenant | team | user (default: tenant)", "tenant")
+    .option("--scope-id <id>", "Required for team/user scope (team: slash- or comma-delimited segments)")
+    .action(async (opts) => {
       await runAction("secrets list", async () => {
         const app = await getInProcessApp();
         const tenantId = defaultTenantId(app);
-        const refs = await app.secrets.list(tenantId);
-        if (refs.length === 0) {
-          console.log(chalk.dim("No secrets configured."));
+        const scope = parseScopeOpt(opts.scope);
+        if (scope === "tenant" && !opts.scopeId) {
+          // Back-compat: bare invocation prints the legacy flat names.
+          const refs = await app.secrets.list(tenantId);
+          if (refs.length === 0) {
+            console.log(chalk.dim("No secrets configured."));
+            return;
+          }
+          console.log(`  ${"NAME".padEnd(28)} ${"TYPE".padEnd(18)} ${"UPDATED".padEnd(24)} DESCRIPTION`);
+          for (const r of refs) {
+            const desc = r.description ?? "";
+            console.log(`  ${r.name.padEnd(28)} ${r.type.padEnd(18)} ${(r.updated_at ?? "").padEnd(24)} ${desc}`);
+          }
           return;
         }
-        console.log(`  ${"NAME".padEnd(28)} ${"TYPE".padEnd(18)} ${"UPDATED".padEnd(24)} DESCRIPTION`);
-        for (const r of refs) {
-          const desc = r.description ?? "";
-          console.log(`  ${r.name.padEnd(28)} ${r.type.padEnd(18)} ${(r.updated_at ?? "").padEnd(24)} ${desc}`);
+        // Path-aware listing for team/user (and explicit tenant) scopes.
+        const prefix = resolveScopePrefix(tenantId, scope, opts.scopeId);
+        const entries = await app.secrets.listAt(prefix);
+        if (entries.length === 0) {
+          console.log(chalk.dim(`No secrets at ${prefix}`));
+          return;
+        }
+        console.log(`  ${"KEY".padEnd(28)} PATH`);
+        for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+          const parsed = parsePath(e.name);
+          const key = parsed?.key ?? "<unparseable>";
+          console.log(`  ${key.padEnd(28)} ${e.name}`);
         }
       });
     });
@@ -205,6 +317,8 @@ export function registerSecretsCommands(program: Command): void {
     .option("-d, --description <text>", "Human-readable description")
     .option("--type <type>", "Secret type (env-var, ssh-private-key, generic-blob, kubeconfig)", "env-var")
     .option("--metadata <kv>", "Repeatable key=value metadata pair", metadataCollector, {} as Record<string, string>)
+    .option("--scope <scope>", "Write scope: tenant | team | user (default: tenant)", "tenant")
+    .option("--scope-id <id>", "Required for team/user scope (team: slash- or comma-delimited segments)")
     .action(async (name: string, opts) => {
       await runAction("secrets set", async () => {
         assertAllowedType(opts.type);
@@ -223,6 +337,8 @@ export function registerSecretsCommands(program: Command): void {
           description: opts.description,
           type: opts.type,
           metadata: opts.metadata ?? {},
+          scope: opts.scope,
+          scopeId: opts.scopeId,
         });
         console.log(chalk.green(`Secret '${name}' stored.`));
       });
@@ -233,6 +349,8 @@ export function registerSecretsCommands(program: Command): void {
     .description("Delete a secret.")
     .argument("<name>", "Secret name")
     .option("-y, --yes", "Skip the confirm prompt")
+    .option("--scope <scope>", "Delete scope: tenant | team | user (default: tenant)", "tenant")
+    .option("--scope-id <id>", "Required for team/user scope (team: slash- or comma-delimited segments)")
     .action(async (name: string, opts) => {
       await runAction("secrets delete", async () => {
         if (!opts.yes) {
@@ -248,12 +366,35 @@ export function registerSecretsCommands(program: Command): void {
             return;
           }
         }
-        const ark = await getArkClient();
-        const removed = await ark.secretDelete(name);
+        const scope = parseScopeOpt(opts.scope);
+        if (scope === "tenant" && !opts.scopeId) {
+          // Back-compat: bare delete still goes through the RPC client so
+          // remote / multi-tenant control planes work unchanged.
+          const ark = await getArkClient();
+          const removed = await ark.secretDelete(name);
+          if (removed) {
+            console.log(chalk.green(`Deleted secret '${name}'.`));
+          } else {
+            console.log(chalk.yellow(`No secret '${name}' (idempotent).`));
+          }
+          return;
+        }
+        // Path-aware delete via the in-process app for non-tenant scopes.
+        const app = await getInProcessApp();
+        const tenantId = defaultTenantId(app);
+        const resolved = resolveScopeForKey(tenantId, scope, opts.scopeId, name);
+        if (!resolved.fullPath) {
+          // Defensive: scope==tenant with --scope-id was rejected above.
+          throw new Error("scope resolution did not produce a full path");
+        }
+        if (!app.secrets.deleteAtPath) {
+          throw new Error("Configured secrets backend does not implement deleteAtPath");
+        }
+        const removed = await app.secrets.deleteAtPath(resolved.fullPath);
         if (removed) {
-          console.log(chalk.green(`Deleted secret '${name}'.`));
+          console.log(chalk.green(`Deleted secret '${name}' at ${resolved.fullPath}.`));
         } else {
-          console.log(chalk.yellow(`No secret '${name}' (idempotent).`));
+          console.log(chalk.yellow(`No secret at ${resolved.fullPath} (idempotent).`));
         }
       });
     });
@@ -360,6 +501,8 @@ export function registerSecretsCommands(program: Command): void {
     .description("Print a secret value to stdout. Refuses TTY stdout without --print.")
     .argument("<name>", "Secret name")
     .option("--print", "Allow printing to a TTY (default: refuse to prevent shoulder surfing)")
+    .option("--scope <scope>", "Read scope: tenant | team | user (default: tenant)", "tenant")
+    .option("--scope-id <id>", "Required for team/user scope (team: slash- or comma-delimited segments)")
     .action(async (name: string, opts) => {
       await runAction("secrets get", async () => {
         if (process.stdout.isTTY && !opts.print) {
@@ -371,8 +514,23 @@ export function registerSecretsCommands(program: Command): void {
           process.exitCode = 2;
           return;
         }
-        const ark = await getArkClient();
-        const value = await ark.secretGet(name);
+        const scope = parseScopeOpt(opts.scope);
+        let value: string | null;
+        if (scope === "tenant" && !opts.scopeId) {
+          const ark = await getArkClient();
+          value = await ark.secretGet(name);
+        } else {
+          const app = await getInProcessApp();
+          const tenantId = defaultTenantId(app);
+          const resolved = resolveScopeForKey(tenantId, scope, opts.scopeId, name);
+          if (!resolved.fullPath) {
+            throw new Error("scope resolution did not produce a full path");
+          }
+          if (!app.secrets.getAtPath) {
+            throw new Error("Configured secrets backend does not implement getAtPath");
+          }
+          value = await app.secrets.getAtPath(resolved.fullPath);
+        }
         if (value === null) {
           console.error(chalk.red(`Secret '${name}' not found.`));
           process.exitCode = 1;

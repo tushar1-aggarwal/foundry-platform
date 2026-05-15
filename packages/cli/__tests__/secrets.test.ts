@@ -32,9 +32,21 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  // Wipe between tests so each one sees an empty tenant.
+  // Wipe between tests so each one sees an empty tenant. The file
+  // provider's list() returns both legacy flat names and path-shaped
+  // names; route each via the matching delete primitive.
   for (const r of await app.secrets.list(tenantId)) {
-    await app.secrets.delete(tenantId, r.name);
+    if (r.name.startsWith("/ark/") && app.secrets.deleteAtPath) {
+      await app.secrets.deleteAtPath(r.name);
+    } else {
+      await app.secrets.delete(tenantId, r.name);
+    }
+  }
+  // Also walk the full /ark/<tid>/ prefix for any path-shaped entries
+  // that escaped the legacy list above.
+  const entries = await app.secrets.listAt(`/ark/${tenantId}/`);
+  for (const e of entries) {
+    if (app.secrets.deleteAtPath) await app.secrets.deleteAtPath(e.name);
   }
   for (const r of await app.secrets.listBlobsDetailed(tenantId)) {
     await app.secrets.deleteBlob(tenantId, r.name);
@@ -156,6 +168,75 @@ describe("ark secrets list TYPE column", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("ark secrets set --scope routing", () => {
+  test("default --scope tenant writes the legacy flat name", async () => {
+    await performSecretSet("BARE", "v", { type: "env-var", metadata: {} });
+    const refs = await app.secrets.list(tenantId);
+    expect(refs.map((r) => r.name)).toContain("BARE");
+    // The path-aware lookup also surfaces it at /ark/<tid>/tenant/BARE
+    const entries = await app.secrets.listAt(`/ark/${tenantId}/tenant/`);
+    expect(entries.find((e) => e.name.endsWith("/BARE"))).toBeTruthy();
+  });
+
+  test("--scope user --scope-id u1 writes at /ark/<tid>/users/u1/<KEY>", async () => {
+    await performSecretSet("USER_KEY", "v", {
+      type: "env-var",
+      metadata: {},
+      scope: "user",
+      scopeId: "u1",
+    });
+    const entries = await app.secrets.listAt(`/ark/${tenantId}/users/u1/`);
+    expect(entries.map((e) => e.name)).toEqual([`/ark/${tenantId}/users/u1/USER_KEY`]);
+    // ...and NOT at tenant prefix.
+    const tenantEntries = await app.secrets.listAt(`/ark/${tenantId}/tenant/`);
+    expect(tenantEntries.find((e) => e.name.endsWith("/USER_KEY"))).toBeUndefined();
+  });
+
+  test("--scope team --scope-id platform/eng writes at multi-segment team path", async () => {
+    await performSecretSet("TEAM_KEY", "v", {
+      type: "env-var",
+      metadata: {},
+      scope: "team",
+      scopeId: "platform/eng",
+    });
+    const entries = await app.secrets.listAt(`/ark/${tenantId}/teams/platform/eng/`);
+    expect(entries.map((e) => e.name)).toEqual([`/ark/${tenantId}/teams/platform/eng/TEAM_KEY`]);
+  });
+
+  test("rejects --scope team without --scope-id", async () => {
+    await expect(performSecretSet("X", "v", { type: "env-var", metadata: {}, scope: "team" })).rejects.toThrow(
+      /scope-id is required/,
+    );
+  });
+
+  test("rejects --scope tenant with --scope-id", async () => {
+    await expect(
+      performSecretSet("X", "v", { type: "env-var", metadata: {}, scope: "tenant", scopeId: "anything" }),
+    ).rejects.toThrow(/must NOT be set/);
+  });
+
+  test("rejects an unknown --scope value", async () => {
+    await expect(performSecretSet("X", "v", { type: "env-var", metadata: {}, scope: "global" })).rejects.toThrow(
+      /Invalid --scope/,
+    );
+  });
+});
+
+describe("ark secrets list --scope routing", () => {
+  test("list --scope user enumerates by KEY column", async () => {
+    await performSecretSet("FOO", "v", {
+      type: "env-var",
+      metadata: {},
+      scope: "user",
+      scopeId: "u1",
+    });
+    const { stdout } = await captureSecretsCommand(["secrets", "list", "--scope", "user", "--scope-id", "u1"]);
+    expect(stdout).toContain("KEY");
+    expect(stdout).toContain("FOO");
+    expect(stdout).toContain(`/ark/${tenantId}/users/u1/FOO`);
   });
 });
 

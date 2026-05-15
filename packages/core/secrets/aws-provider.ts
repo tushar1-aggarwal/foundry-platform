@@ -403,6 +403,45 @@ export class AwsSecretsProvider implements SecretsCapability {
     );
   }
 
+  /**
+   * Path-aware read. Returns null on ParameterNotFound; rethrows other
+   * errors with the path scrubbed via sanitizeSsmError.
+   */
+  async getAtPath(fullPath: string): Promise<string | null> {
+    if (typeof fullPath !== "string" || !fullPath.startsWith("/ark/")) {
+      throw new Error("getAtPath: fullPath must start with /ark/");
+    }
+    const { GetParameterCommand } = await import("@aws-sdk/client-ssm");
+    const ssm = await this.client();
+    try {
+      const res: { Parameter?: { Value?: string } } = await ssm.send(
+        new GetParameterCommand({ Name: fullPath, WithDecryption: true }),
+      );
+      return res.Parameter?.Value ?? null;
+    } catch (err: unknown) {
+      if (isNotFound(err)) return null;
+      throw sanitizeSsmError(err, "getAtPath");
+    }
+  }
+
+  /**
+   * Path-aware delete. False on ParameterNotFound; true on success.
+   */
+  async deleteAtPath(fullPath: string): Promise<boolean> {
+    if (typeof fullPath !== "string" || !fullPath.startsWith("/ark/")) {
+      throw new Error("deleteAtPath: fullPath must start with /ark/");
+    }
+    const { DeleteParameterCommand } = await import("@aws-sdk/client-ssm");
+    const ssm = await this.client();
+    try {
+      await ssm.send(new DeleteParameterCommand({ Name: fullPath }));
+      return true;
+    } catch (err: unknown) {
+      if (isNotFound(err)) return false;
+      throw sanitizeSsmError(err, "deleteAtPath");
+    }
+  }
+
   // ── Blob surface (multi-file secrets) ──────────────────────────────────
   //
   // Each file in a blob is a distinct SSM SecureString parameter under
