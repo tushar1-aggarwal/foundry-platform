@@ -1,4 +1,25 @@
 {{- if .Values.localstack.enabled }}
+{{- if .Values.s3.bucket }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ark.localstackServiceName" . }}-init
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ark.labels" . | nindent 4 }}
+    app.kubernetes.io/component: localstack
+data:
+  # LocalStack runs every script in /etc/localstack/init/ready.d once, after
+  # services report READY. `awslocal` is bundled in the image -- no external
+  # aws-cli image to pull. Idempotent: `|| true` tolerates an existing bucket
+  # (matters on pod restart with PERSISTENCE=0, bucket is recreated cleanly).
+  ready.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    awslocal s3 mb s3://{{ .Values.s3.bucket }} || true
+    echo "[localstack-init] bucket {{ .Values.s3.bucket }} ready"
+---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,14 +48,21 @@ spec:
               containerPort: 4566
               protocol: TCP
           env:
-            # SERVICES is empty -> LocalStack lazily loads what's used. We only
-            # need s3 today; setting it explicitly trims the boot footprint.
+            # Community (free) edition only -- never attempt to activate Pro.
+            - name: ACTIVATE_PRO
+              value: "0"
+            # We only need s3; naming it trims the boot footprint.
             - name: SERVICES
               value: "s3"
             - name: DEBUG
               value: "0"
             - name: PERSISTENCE
               value: "0"
+          {{- if .Values.s3.bucket }}
+          volumeMounts:
+            - name: init-ready
+              mountPath: /etc/localstack/init/ready.d
+          {{- end }}
           readinessProbe:
             httpGet:
               path: /_localstack/health
@@ -51,4 +79,11 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.localstack.resources | nindent 12 }}
+      {{- if .Values.s3.bucket }}
+      volumes:
+        - name: init-ready
+          configMap:
+            name: {{ include "ark.localstackServiceName" . }}-init
+            defaultMode: 0755
+      {{- end }}
 {{- end }}

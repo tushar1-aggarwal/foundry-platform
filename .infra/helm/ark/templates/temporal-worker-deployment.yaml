@@ -66,6 +66,12 @@ spec:
               value: "test"
             {{- end }}
             {{- end }}
+            {{- if .Values.controlPlane.devAllowLocalHostedStorage }}
+            # Temporal worker boots AppContext (hosted mode) and hits the same
+            # snapshotStore check as control-plane.
+            - name: ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE
+              value: "1"
+            {{- end }}
             # LLM keys -- Temporal activities (dispatch-stage, run-verification)
             # exec agent runtimes that read these directly from process.env.
             {{- if or .Values.llm.anthropicApiKey .Values.llm.existingSecret }}

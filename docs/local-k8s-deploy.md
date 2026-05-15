@@ -29,8 +29,11 @@ The target:
 3. Runs `helm upgrade --install ark .infra/helm/ark` with inline `--set`
    flags that enable LocalStack, point the chart at the in-cluster
    Postgres + Redis, turn off auth and TLS, and inject the API key.
-4. Waits up to 10 min for all pods to become ready (Temporal server may
-   crashloop briefly while the schema job runs; this is expected).
+4. Waits for the post-install hook Jobs -- `temporal-db-bootstrap` →
+   `temporal-schema` → `temporal-namespace` -- to complete, then waits for
+   the control-plane and temporal-server rollouts. `temporal-server`
+   crashloops for a few seconds until the schema Job runs (standard
+   Temporal behavior); it stabilizes on its next restart.
 
 ## Verify
 
@@ -88,27 +91,32 @@ shares the docker daemon with the cluster. If pulling fails, confirm
 OrbStack k8s and your docker context are in sync (Settings -> Kubernetes
 -> "Use Docker images from host").
 
-**`temporal-server` crashlooping after the install completes.** The
-`temporal-schema` Job runs post-install (because in-cluster Postgres only
-exists after the install phase). Server pods crashloop until schema is
-laid down. Watch:
-```bash
-kubectl -n ark logs job/temporal-schema -f
-```
-Once that job logs `Schema setup + update complete...`, the server stabilizes
-on its next restart.
-
-**`temporal-db-bootstrap` Job fails.** It waits up to 120s for Postgres to
-be reachable before trying to create the temporal role. If postgres is
-slow to come up:
+**`temporal-server` restarting a few times right after install.** Expected.
+Temporal exits when its schema is absent; the kubelet restarts it until the
+`temporal-schema` post-install hook Job has run. Watch the hook chain:
 ```bash
 kubectl -n ark logs job/temporal-db-bootstrap
-kubectl -n ark get pods -l app.kubernetes.io/component=postgresql
+kubectl -n ark logs job/temporal-schema
+```
+Once `temporal-schema` logs `Schema setup + update complete...`, the server
+stabilizes on its next restart. The `make` target's `rollout status` step
+waits for exactly this.
+
+**Post-install hook Job retrying.** `temporal-db-bootstrap` and
+`temporal-schema` fail fast (short connect timeout) if Postgres needs a few
+more seconds; the Job controller retries via `backoffLimit`. A couple of
+failed Job pods during initial convergence is normal -- only a Job in
+`Failed` (deadline exceeded) state is a real problem:
+```bash
+kubectl -n ark get jobs
+kubectl -n ark logs job/temporal-db-bootstrap
 ```
 
-**`localstack-init` Job fails with "bucket already exists" warnings.**
-Benign -- the job is idempotent; the second run sees the bucket from the
-first.
+**S3 bucket.** Created by LocalStack's native init hook
+(`/etc/localstack/init/ready.d`), not a separate Job. Verify:
+```bash
+kubectl -n ark exec deploy/ark-localstack -- awslocal s3 ls
+```
 
 **Control plane fails with "blob backend rejected".** Means `s3.bucket` is
 set but the S3 endpoint is unreachable. Check LocalStack:

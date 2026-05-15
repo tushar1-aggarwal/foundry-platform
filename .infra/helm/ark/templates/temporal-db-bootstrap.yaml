@@ -1,16 +1,14 @@
 {{- if .Values.postgresql.enabled }}
 {{- /*
-The temporal-db-bootstrap Job creates the `temporal` role and the temporal/
-temporal_visibility databases. It runs only when postgresql.enabled (the chart
-owns the postgres). With an external postgres the operator must provision
-these out-of-band.
+Creates the `temporal` role and the temporal/temporal_visibility databases.
+Runs only when postgresql.enabled -- the chart owns the postgres. With an
+external postgres the operator provisions these out of band.
 
-This is a regular Job (NOT a helm hook) so it participates in the main install
-ordering graph: postgres -> bootstrap -> schema -> temporal-server. An init
-container waits for postgres TCP before the main container runs psql. The Job
-name carries .Release.Revision so `helm upgrade` can create a fresh Job (Job
-specs are immutable -- the previous-revision Job stays behind with its own
-ttlSecondsAfterFinished).
+post-install,post-upgrade hook (weight -5, before temporal-schema). By the
+time post-install hooks run, the in-cluster postgres StatefulSet has been
+applied; the Job's backoffLimit is the k8s-native retry if postgres needs a
+few more seconds to accept connections. Idempotent SQL, so re-runs on
+upgrade are safe.
 */ -}}
 {{- $pwdKey := .Values.temporal.persistence.secretKeys.password }}
 {{- $userKey := .Values.temporal.persistence.secretKeys.username }}
@@ -24,8 +22,8 @@ ttlSecondsAfterFinished).
 {{- $masterSecret := include "ark.temporalBootstrapMasterSecret" . }}
 {{- if not $existing }}
 # First-install only: chart-managed temporal DB credentials. On upgrades the
-# existing Secret is preserved untouched (lookup returned non-nil above), so
-# the password stays stable.
+# existing Secret is preserved untouched (lookup returned non-nil), so the
+# password stays stable.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -34,6 +32,10 @@ metadata:
   labels:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-db-credentials
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation
 type: Opaque
 stringData:
   {{ $userKey }}: temporal
@@ -43,15 +45,21 @@ stringData:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: temporal-db-bootstrap-r{{ .Release.Revision | default 1 }}
+  name: temporal-db-bootstrap
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-db-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/sync-wave": "-5"
+    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
 spec:
-  backoffLimit: 5
+  backoffLimit: 10
   activeDeadlineSeconds: 600
-  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
@@ -59,27 +67,6 @@ spec:
         app.kubernetes.io/component: temporal-db-bootstrap
     spec:
       restartPolicy: Never
-      initContainers:
-        - name: wait-for-postgres
-          image: "{{ .Values.temporal.dbBootstrap.image.repository }}:{{ .Values.temporal.dbBootstrap.image.tag }}"
-          env:
-            - name: PGHOST
-              value: {{ include "ark.postgresqlHost" . | quote }}
-            - name: PGPORT
-              value: {{ include "ark.postgresqlPort" . | quote }}
-            - name: PGUSER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $masterSecret }}
-                  key: {{ .Values.temporal.dbBootstrap.masterSecretKeys.username }}
-          command:
-            - sh
-            - -c
-            - |
-              until pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" >/dev/null 2>&1; do
-                echo "waiting for postgres at $PGHOST:$PGPORT..."
-                sleep 2
-              done
       containers:
         - name: bootstrap
           image: "{{ .Values.temporal.dbBootstrap.image.repository }}:{{ .Values.temporal.dbBootstrap.image.tag }}"
@@ -98,6 +85,8 @@ spec:
               value: {{ include "ark.postgresqlHost" . | quote }}
             - name: PGPORT
               value: {{ include "ark.postgresqlPort" . | quote }}
+            - name: PGCONNECT_TIMEOUT
+              value: "5"
             - name: TEMPORAL_PWD
               valueFrom:
                 secretKeyRef:
@@ -112,16 +101,14 @@ spec:
             - -c
             - |
               set -eo pipefail
-              # Create or reset password for the temporal role (idempotent).
+              # Create or reset the temporal role (idempotent).
               psql -v ON_ERROR_STOP=1 -d postgres -c "
                 DO \$do\$
                 BEGIN
                   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname='temporal') THEN
                     EXECUTE 'CREATE ROLE temporal LOGIN PASSWORD ' || quote_literal('$TEMPORAL_PWD') || ' CONNECTION LIMIT 100';
-                    RAISE NOTICE 'Created role temporal';
                   ELSE
                     EXECUTE 'ALTER ROLE temporal WITH PASSWORD ' || quote_literal('$TEMPORAL_PWD') || ' CONNECTION LIMIT 100';
-                    RAISE NOTICE 'Reset password + connection limit for role temporal';
                   END IF;
                 END
                 \$do\$;
@@ -129,17 +116,10 @@ spec:
               # CREATE DATABASE cannot run in a transaction; shell-level idempotency.
               if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$TEMPORAL_DB'" | grep -q 1; then
                 psql -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$TEMPORAL_DB\" OWNER temporal"
-                echo "Created database $TEMPORAL_DB"
-              else
-                echo "Database $TEMPORAL_DB already exists"
               fi
               if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$VISIBILITY_DB'" | grep -q 1; then
                 psql -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$VISIBILITY_DB\" OWNER temporal"
-                echo "Created database $VISIBILITY_DB"
-              else
-                echo "Database $VISIBILITY_DB already exists"
               fi
-              # Grants are idempotent.
               psql -v ON_ERROR_STOP=1 -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE \"$TEMPORAL_DB\" TO temporal;"
               psql -v ON_ERROR_STOP=1 -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE \"$VISIBILITY_DB\" TO temporal;"
               echo "temporal-db-bootstrap complete"

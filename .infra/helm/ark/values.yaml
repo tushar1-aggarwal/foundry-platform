@@ -24,6 +24,13 @@ controlPlane:
   router:
     enabled: true
     policy: balanced
+  # The S3SnapshotStore for hosted mode is still TODO upstream; FsSnapshotStore
+  # is pod-ephemeral and rejected at boot in di/storage.ts. This flag bypasses
+  # the check. Safe ONLY at replicaCount=1 (single-pod snapshots don't need
+  # cross-pod visibility). Flip false the day the S3 snapshot store impl lands.
+  # Independent of localstack/S3 -- the bypass is about the snapshot store
+  # type, not whether S3 is reachable.
+  devAllowLocalHostedStorage: false
 
 # -- Workers
 workers:

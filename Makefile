@@ -208,11 +208,19 @@ dev-k8s-local: ## Deploy full ark control plane to local OrbStack k8s (LocalStac
 	@echo "Building ark image (tag: local)..."
 	docker build -t ark:local .
 	@echo "Deploying helm release..."
+	# --wait-for-jobs (not --wait): helm blocks until the post-install hook
+	# Jobs (temporal-db-bootstrap -> temporal-schema -> temporal-namespace)
+	# complete. It deliberately does NOT --wait on Deployments: temporal-server
+	# crashloops until the schema Job lays its schema down (standard Temporal
+	# behavior), and that schema Job IS a post-install hook -- so --wait would
+	# block on server readiness before the hook can run. After the hooks finish
+	# we explicitly wait for the control-plane rollout for a clear ready signal.
 	helm upgrade --install ark .infra/helm/ark \
 		--namespace ark --create-namespace \
 		--set controlPlane.image.tag=local \
 		--set controlPlane.image.pullPolicy=Never \
 		--set controlPlane.auth.enabled=false \
+		--set controlPlane.devAllowLocalHostedStorage=true \
 		--set workers.image.tag=local \
 		--set workers.image.pullPolicy=Never \
 		--set localstack.enabled=true \
@@ -221,9 +229,12 @@ dev-k8s-local: ## Deploy full ark control plane to local OrbStack k8s (LocalStac
 		--set temporal.server.tls.enabled=false \
 		--set ingress.enabled=false \
 		--set llm.anthropicApiKey="$$ANTHROPIC_API_KEY" \
-		--wait --timeout 10m
+		--wait-for-jobs --timeout 10m
+	@echo "Hook jobs complete. Waiting for control plane + temporal-server to settle..."
+	kubectl -n ark rollout status deploy/ark-control-plane --timeout=180s
+	kubectl -n ark rollout status deploy/temporal-server --timeout=180s
 	@echo ""
-	@echo "Stack deployed. To access:"
+	@echo "Stack ready. To access:"
 	@echo "  kubectl -n ark port-forward svc/ark-control-plane 8420:8420 &"
 	@echo "  kubectl -n ark port-forward svc/temporal-ui 8088:8080 &"
 	@echo "  open http://localhost:8420"

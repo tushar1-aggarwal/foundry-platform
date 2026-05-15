@@ -2,29 +2,31 @@
 Temporal schema setup + migration. Always emitted -- the server cannot start
 without its schema.
 
-Regular Job (NOT a helm hook) so it participates in the main install ordering
-graph: postgres -> bootstrap (if in-cluster) -> schema -> temporal-server.
-
-Init container waits for the temporal database to exist (created by the
-bootstrap Job, or pre-provisioned by the operator when postgresql.enabled=false).
-The main container connects via the temporal role (its credentials live in
-temporal.persistence.existingSecret).
-
-Job name carries .Release.Revision so `helm upgrade` re-runs migrations on new
-chart versions; ttlSecondsAfterFinished cleans up old revisions.
+post-install,post-upgrade hook (weight 0, after temporal-db-bootstrap at -5).
+The temporal databases exist by now (bootstrap created them, or the operator
+pre-provisioned them for external postgres). temporal-sql-tool fails fast if
+the database is briefly unreachable; the Job's backoffLimit is the k8s-native
+retry. setup-schema is idempotent and update-schema is a no-op when current,
+so re-runs on upgrade are safe (and required, to pick up new schema versions).
 */ -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: temporal-schema-r{{ .Release.Revision | default 1 }}
+  name: temporal-schema
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-schema
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/sync-wave": "0"
+    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
 spec:
-  backoffLimit: 3
+  backoffLimit: {{ .Values.temporal.schemaJob.backoffLimit }}
   activeDeadlineSeconds: 600
-  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
@@ -32,44 +34,6 @@ spec:
         app.kubernetes.io/component: temporal-schema
     spec:
       restartPolicy: Never
-      initContainers:
-        # Wait until the temporal database exists. With in-cluster postgres the
-        # bootstrap Job creates it; with external postgres the operator has
-        # already created it before install.
-        - name: wait-for-temporal-db
-          image: postgres:16-alpine
-          env:
-            - name: PGHOST
-              value: {{ include "ark.postgresqlHost" . | quote }}
-            - name: PGPORT
-              value: {{ include "ark.postgresqlPort" . | quote }}
-            - name: PGUSER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.temporal.persistence.existingSecret }}
-                  key: {{ .Values.temporal.persistence.secretKeys.username }}
-            - name: PGPASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.temporal.persistence.existingSecret }}
-                  key: {{ .Values.temporal.persistence.secretKeys.password }}
-            - name: TEMPORAL_DB
-              value: {{ .Values.temporal.persistence.database | quote }}
-            - name: VISIBILITY_DB
-              value: {{ .Values.temporal.persistence.visibilityDatabase | quote }}
-          command:
-            - sh
-            - -c
-            - |
-              until psql -d "$TEMPORAL_DB" -c 'SELECT 1' >/dev/null 2>&1; do
-                echo "waiting for temporal database $TEMPORAL_DB..."
-                sleep 2
-              done
-              until psql -d "$VISIBILITY_DB" -c 'SELECT 1' >/dev/null 2>&1; do
-                echo "waiting for visibility database $VISIBILITY_DB..."
-                sleep 2
-              done
-              echo "both temporal databases reachable"
       containers:
         - name: schema
           image: "{{ .Values.temporal.schemaJob.image.repository }}:{{ .Values.temporal.schemaJob.image.tag }}"
@@ -105,18 +69,17 @@ spec:
               VDB={{ .Values.temporal.persistence.visibilityDatabase }}
               {{ if .Values.temporal.server.tls.enabled }}# TLS: --tls --tls-disable-host-verification on every sql-tool call below.{{ end }}
 
-              # Idempotent setup helper: succeed cleanly if the schema_version
-              # table already exists; surface any other error loudly.
+              # Idempotent setup: succeed cleanly if schema_version already
+              # exists; surface any other error loudly so the Job fails for a
+              # real cause (perms, connectivity, syntax) and the controller
+              # retries via backoffLimit.
               run_setup() {
-                local db="$1"
-                local out
+                db="$1"
                 if out=$(temporal-sql-tool {{ if .Values.temporal.server.tls.enabled }}--tls --tls-disable-host-verification {{ end }}--db "$db" setup-schema -v 0.0 2>&1); then
-                  echo "$out"
-                  return 0
+                  echo "$out"; return 0
                 fi
                 if echo "$out" | grep -qiE 'already exists|already initialized'; then
-                  echo "Schema for $db already initialized, skipping setup."
-                  return 0
+                  echo "Schema for $db already initialized, skipping setup."; return 0
                 fi
                 echo "ERROR: setup-schema failed for $db:" >&2
                 echo "$out" >&2
