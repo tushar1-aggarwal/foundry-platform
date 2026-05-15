@@ -1,5 +1,8 @@
 # EC2 Provider Implementation Plan
 
+> **Historical:** This document predates the Arc → Ark rename and references the now-deleted `arc.json` / `ArcJson` / `parseArcJson` machinery. Body preserved as-is for git-blame continuity; live behavior is documented in `docs/superpowers/specs/2026-05-05-compute-cleanup-design.md` and the current `packages/compute/` source.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the EC2 compute provider using Pulumi Automation API -- SSH primitives, cloud-init, provisioning, environment sync, metrics, port tunneling, cost tracking, and idle shutdown.

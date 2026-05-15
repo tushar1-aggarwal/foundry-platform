@@ -1,5 +1,8 @@
 # Flip dispatch to `ComputeTarget` (v2) — Implementation Plan
 
+> **Historical:** This document predates the Arc → Ark rename and references the now-deleted `arc.json` / `ArcJson` / `parseArcJson` machinery. Body preserved as-is for git-blame continuity; live behavior is documented in `docs/superpowers/specs/2026-05-05-compute-cleanup-design.md` and the current `packages/compute/` source.
+
+
 > **Supersedes:** `2026-05-01-compute-target-dispatch-flip-plan.md`.
 > The v1 plan undersold the abstraction work needed to flip dispatch.
 > A subagent dry-run on v1 surfaced five gaps: the live `provider.launch`

@@ -1,5 +1,8 @@
 # Flip dispatch to `ComputeTarget` — Implementation Plan
 
+> **Historical:** This document predates the Arc → Ark rename and references the now-deleted `arc.json` / `ArcJson` / `parseArcJson` machinery. Body preserved as-is for git-blame continuity; live behavior is documented in `docs/superpowers/specs/2026-05-05-compute-cleanup-design.md` and the current `packages/compute/` source.
+
+
 > **Supersedes:** `docs/superpowers/plans/2026-05-01-compute-runtime-split-plan.md`.
 > That earlier plan duplicated existing work. The two-axis abstraction
 > (`Compute`, `Runtime`, `ComputeTarget`) already lives at

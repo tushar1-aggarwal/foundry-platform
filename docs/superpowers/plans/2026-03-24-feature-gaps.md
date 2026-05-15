@@ -1,5 +1,8 @@
 # Ark Feature Gap Analysis & Roadmap
 
+> **Historical:** This document predates the Arc → Ark rename and references the now-deleted `arc.json` / `ArcJson` / `parseArcJson` machinery. Body preserved as-is for git-blame continuity; live behavior is documented in `docs/superpowers/specs/2026-05-05-compute-cleanup-design.md` and the current `packages/compute/` source.
+
+
 > **Based on:** Competitive research across 8 tools -- DeerFlow (ByteDance), Conductor.build (Melty Labs), Agent-Deck, OpenCode, E2B, Factory AI, Pi (badlogic), Goose (Block) -- plus Claude Code settings/hooks documentation.
 
 **Goal:** Identify the highest-impact feature gaps between Ark and the competitive landscape, then prioritize them into actionable work.

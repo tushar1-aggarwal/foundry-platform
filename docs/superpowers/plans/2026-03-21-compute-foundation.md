@@ -1,5 +1,8 @@
 # Compute Foundation Implementation Plan
 
+> **Historical:** This document predates the Arc → Ark rename and references the now-deleted `arc.json` / `ArcJson` / `parseArcJson` machinery. Body preserved as-is for git-blame continuity; live behavior is documented in `docs/superpowers/specs/2026-05-05-compute-cleanup-design.md` and the current `packages/compute/` source.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Create the `packages/compute/` package with the ComputeProvider interface, host CRUD in SQLite, arc.json parser, and a working local provider -- the foundation that all other compute providers (EC2, Docker, K8s) build on.
