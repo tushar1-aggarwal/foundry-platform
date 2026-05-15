@@ -43,8 +43,9 @@ describe("claude-agent runtime resolution", () => {
     expect(runtime).not.toBeNull();
     expect(runtime!.name).toBe("claude-agent");
     expect(runtime!.type).toBe("claude-agent");
-    expect(Array.isArray(runtime!.secrets)).toBe(true);
-    expect(runtime!.secrets).toContain("ANTHROPIC_API_KEY");
+    // Phase 2: the YAML `secrets:` allowlist is gone. Secrets are resolved
+    // hierarchically at dispatch time against /ark/<tid>/... instead.
+    expect(runtime!.secrets).toBeUndefined();
     expect(runtime!.billing?.mode).toBe("api");
     // transcript_parser is a separate identifier from the runtime name and was
     // intentionally left as `agent-sdk` -- it pairs with AgentSdkParser.kind.

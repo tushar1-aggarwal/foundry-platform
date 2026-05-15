@@ -21,15 +21,7 @@ import { getArkClient, getInProcessApp } from "../app-client.js";
 import { runAction } from "./_shared.js";
 import type { SecretType } from "../../core/secrets/types.js";
 import { registerDescribeCommand } from "./secrets/describe.js";
-import {
-  tenantPath,
-  teamPath,
-  userPath,
-  tenantPrefix,
-  teamPrefix,
-  userPrefix,
-  parsePath,
-} from "../../secrets/resolver/index.js";
+import { teamPath, userPath, tenantPrefix, teamPrefix, userPrefix, parsePath } from "../../secrets/resolver/index.js";
 
 /**
  * Translate a CLI --scope + --scope-id pair into the full path under
