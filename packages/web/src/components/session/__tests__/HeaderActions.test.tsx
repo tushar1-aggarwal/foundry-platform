@@ -21,7 +21,6 @@ import { HeaderActions } from "../HeaderActions.js";
 
 interface RenderOpts {
   status: string;
-  isActive?: boolean;
   canShowGate?: boolean;
   actionLoading?: string | null;
 }
@@ -30,7 +29,6 @@ function render(opts: RenderOpts): string {
   return renderToString(
     React.createElement(HeaderActions, {
       status: opts.status,
-      isActive: opts.isActive ?? false,
       canShowGate: opts.canShowGate ?? false,
       actionLoading: opts.actionLoading ?? null,
       onAction: () => {},
@@ -50,20 +48,27 @@ function visiblePrimaries(html: string): string[] {
 
 describe("HeaderActions state matrix", () => {
   test("running -> primary Stop + overflow", () => {
-    const html = render({ status: "running", isActive: true });
+    const html = render({ status: "running" });
     expect(visiblePrimaries(html)).toEqual(["stop"]);
     expect(html).toContain('data-testid="header-actions-overflow"');
   });
 
   test("waiting -> primary Stop + overflow", () => {
-    const html = render({ status: "waiting", isActive: true });
+    const html = render({ status: "waiting" });
     expect(visiblePrimaries(html)).toEqual(["stop"]);
     expect(html).toContain('data-testid="header-actions-overflow"');
   });
 
-  test("pending -> primary Stop + overflow", () => {
-    const html = render({ status: "pending", isActive: true });
+  test("pending -> primary Stop + overflow (issue #547)", () => {
+    const html = render({ status: "pending" });
     expect(visiblePrimaries(html)).toEqual(["stop"]);
+    expect(html).toContain('data-testid="header-actions-overflow"');
+  });
+
+  test("ready -> primary Stop + overflow (between-stages)", () => {
+    const html = render({ status: "ready" });
+    expect(visiblePrimaries(html)).toEqual(["stop"]);
+    expect(html).toContain('data-testid="header-actions-overflow"');
   });
 
   test("blocked (review gate) -> Approve + Reject pair, no Stop primary", () => {
@@ -102,10 +107,9 @@ describe("HeaderActions state matrix", () => {
   });
 
   test("Archive button never appears as a primary action", () => {
-    for (const status of ["running", "completed", "failed", "stopped", "blocked", "archived", "pending"]) {
+    for (const status of ["running", "completed", "failed", "stopped", "blocked", "archived", "pending", "ready"]) {
       const html = render({
         status,
-        isActive: status === "running" || status === "pending",
         canShowGate: status === "blocked",
       });
       expect(html).not.toContain('aria-label="Archive session"');

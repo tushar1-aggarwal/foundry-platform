@@ -4,9 +4,16 @@ import { MenuButton, type MenuItem } from "../ui/MenuButton.js";
 
 export type SessionAction = "stop" | "restart" | "archive" | "delete" | "approve" | "reject";
 
+// Statuses where Stop is the right primary action. Includes `pending` and
+// `ready` (queued / between-stages) so a session that hasn't started running
+// yet -- or is paused between stages -- can still be terminated from the
+// header. `blocked` is intentionally excluded; it routes to Approve/Reject
+// when there's a review/manual gate (canShowGate) and otherwise falls back
+// to overflow-only.  See issue #547.
+const STOPPABLE_STATUSES = new Set(["pending", "ready", "running", "waiting"]);
+
 interface HeaderActionsProps {
   status: string | undefined;
-  isActive: boolean;
   canShowGate: boolean;
   actionLoading: string | null;
   onAction: (action: "stop" | "archive") => void;
@@ -41,7 +48,6 @@ interface HeaderActionsProps {
  */
 export function HeaderActions({
   status,
-  isActive,
   canShowGate,
   actionLoading,
   onAction,
@@ -50,6 +56,8 @@ export function HeaderActions({
   onOpenReject,
   onOpenRestart,
 }: HeaderActionsProps) {
+  const isStoppable = !!status && STOPPABLE_STATUSES.has(status);
+
   if (status === "deleting") {
     return (
       <div data-testid="header-actions" className="flex items-center gap-1.5 shrink-0">
@@ -84,7 +92,7 @@ export function HeaderActions({
       onSelect: onDelete,
       disabled: actionLoading === "delete",
     });
-  } else if (isActive) {
+  } else if (isStoppable) {
     // pending / ready / running / waiting
     overflow.push({
       id: "delete",
@@ -174,7 +182,7 @@ export function HeaderActions({
         </>
       )}
 
-      {!isBlocked && isActive && (
+      {!isBlocked && isStoppable && (
         <button
           type="button"
           onClick={() => onAction("stop")}

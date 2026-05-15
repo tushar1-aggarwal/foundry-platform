@@ -147,7 +147,6 @@ export function SessionDetail({
   const headerActions = (
     <HeaderActions
       status={session.status}
-      isActive={d.isActive}
       canShowGate={canShowGate}
       actionLoading={actionLoading}
       onAction={handleAction}
