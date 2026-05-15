@@ -656,8 +656,9 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   // ── session/kill -- hard terminate, no grace ──────────────────────────────
   //
   // Goes straight to SIGKILL (skips the SIGTERM grace that session/stop uses).
-  // Marks session `failed` with reason `killed` and runs D2 cleanup
-  // synchronously so post-conditions are reliable for the caller.
+  // Marks session `stopped` (canonical terminal status) with `error: "killed"`
+  // as the discriminator from session/stop. Runs D2 cleanup synchronously so
+  // post-conditions are reliable for the caller.
 
   router.handle("session/kill", async (params, notify, ctx) => {
     const { sessionId } = extract<{ sessionId: string }>(params, ["sessionId"]);
@@ -687,9 +688,9 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       }
     }
 
-    // Mark session failed with reason "killed".
+    // Canonical terminal status; `error: "killed"` distinguishes from session/stop.
     await scoped.sessions.update(sessionId, {
-      status: "failed",
+      status: "stopped",
       error: "killed",
       session_id: null,
     } as Partial<import("../../types/index.js").Session>);

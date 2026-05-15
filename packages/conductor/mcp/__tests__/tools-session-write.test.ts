@@ -30,7 +30,7 @@ describe("session_kill", () => {
     const result = (await h.callTool("session_kill", { sessionId: created.id })) as { ok: boolean };
     expect(result.ok).toBe(true);
     const after = await h.app.sessions.get(created.id);
-    expect(after?.status).toBe("failed");
+    expect(after?.status).toBe("stopped");
     expect(after?.error).toBe("killed");
   });
 });

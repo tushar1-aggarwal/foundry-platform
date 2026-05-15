@@ -159,7 +159,7 @@ const sessionKill: ToolDef = {
     }
 
     await app.sessions.update(parsed.sessionId, {
-      status: "failed",
+      status: "stopped",
       error: "killed",
       session_id: null,
     } as Partial<Session>);
