@@ -11,6 +11,8 @@ For deeper architectural details, see [CLAUDE.md](CLAUDE.md). For the full user-
 - `git` -- for worktree-based session isolation
 - `gh` (optional) -- GitHub CLI for auto-PR creation
 
+Tool versions are pinned in `.mise.toml`. If you use [mise](https://mise.jdx.dev), run `mise install` after cloning to get the right bun and node versions automatically.
+
 > **Bun-only.** Ark uses `bun:sqlite`, `Bun.serve()`, `Bun.sleep()`, and Bun FFI. It will not run under Node.js.
 
 ## Getting Started
