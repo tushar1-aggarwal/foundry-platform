@@ -52,6 +52,7 @@ export const ErrorCodes = {
   FORBIDDEN: -32006,
   NOT_FOUND: -32007,
   UNSUPPORTED: -32008,
+  CONFLICT: -32009,
 } as const;
 
 // ── Constructors ────────────────────────────────────────────────────────────

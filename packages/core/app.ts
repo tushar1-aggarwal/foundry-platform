@@ -40,6 +40,8 @@ import type {
   FlowStateRepository,
   LedgerRepository,
   ScopingOverrideRepository,
+  SkillRepository,
+  SkillVersionRepository,
 } from "./repositories/index.js";
 import type { ScopingResolver } from "./scoping/index.js";
 import { ComputeTemplateRepository as ComputeTemplateRepositoryCtor } from "./repositories/index.js";
@@ -700,6 +702,20 @@ export class AppContext {
    */
   get scopingOverrides(): ScopingOverrideRepository {
     return this._resolve("scopingOverrides");
+  }
+
+  /**
+   * Skill Hub registry: tenant-scoped CRUD-with-history for user / team /
+   * tenant skills users push from the CLI. Distinct from `skills` (the
+   * builtin file-backed skill resource store, defined below).
+   */
+  get skillHub(): SkillRepository {
+    return this._resolve("skillHub");
+  }
+
+  /** Ancestor body lookups for the 3-way merge protocol (skill/get_with_ancestor). */
+  get skillVersions(): SkillVersionRepository {
+    return this._resolve("skillVersions");
   }
 
   get sessionService(): SessionService {

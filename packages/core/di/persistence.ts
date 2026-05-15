@@ -24,6 +24,8 @@ import {
   FlowStateRepository,
   LedgerRepository,
   ScopingOverrideRepository,
+  SkillRepository,
+  SkillVersionRepository,
 } from "../repositories/index.js";
 import { ScopingResolver } from "../scoping/index.js";
 import {
@@ -162,6 +164,16 @@ export function registerRepositories(container: AppContainer): void {
       (c: { scopingOverrides: ScopingOverrideRepository }) => new ScopingResolver(c.scopingOverrides),
       { lifetime: Lifetime.SINGLETON },
     ),
+
+    // Skill Hub — tenant-scoped registry of user / team / tenant skills.
+    // Distinct from `skills` (the builtin file-backed skill resource store)
+    // which lives in registerResourceStores below. Two separate concerns:
+    // builtin skills ship with Ark and are loaded from YAML/Markdown;
+    // skillHub stores the CRUD-with-history surface users push to from CLI.
+    skillHub: asFunction((c: { db: DatabaseAdapter }) => new SkillRepository(c.db), { lifetime: Lifetime.SINGLETON }),
+    skillVersions: asFunction((c: { db: DatabaseAdapter }) => new SkillVersionRepository(c.db), {
+      lifetime: Lifetime.SINGLETON,
+    }),
   });
 }
 

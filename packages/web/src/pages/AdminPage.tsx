@@ -6,6 +6,7 @@ import { TenantsTab } from "../components/admin/TenantsTab.js";
 import { TeamsTab } from "../components/admin/TeamsTab.js";
 import { UsersTab } from "../components/admin/UsersTab.js";
 import { ScopingTab } from "../components/admin/ScopingTab.js";
+import { SkillsTab } from "../components/admin/SkillsTab.js";
 import { useOptionalAuth } from "../auth/AuthContext.js";
 import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 
@@ -55,6 +56,7 @@ export function AdminPage({ view, onNavigate, readOnly, daemonStatus, onToast }:
             { id: "teams", label: "Teams" },
             { id: "users", label: "Users" },
             { id: "scoping", label: "Scoping" },
+            { id: "skills", label: "Skills" },
           ]}
           activeTab={tab}
           onTabChange={setTab}
@@ -78,6 +80,11 @@ export function AdminPage({ view, onNavigate, readOnly, daemonStatus, onToast }:
           {tab === "scoping" && (
             <TabPanel tabId="scoping" className="h-full">
               <ScopingTab onToast={onToast} />
+            </TabPanel>
+          )}
+          {tab === "skills" && (
+            <TabPanel tabId="skills" className="h-full">
+              <SkillsTab onToast={onToast} />
             </TabPanel>
           )}
         </div>

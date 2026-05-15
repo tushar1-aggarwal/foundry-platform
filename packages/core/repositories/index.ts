@@ -29,4 +29,14 @@ export {
   type ScopeKind,
   type ListForTenantOptions as ScopingOverrideListOptions,
 } from "./scoping-overrides.js";
+export {
+  SkillRepository,
+  SkillVersionRepository,
+  SkillVersionConflictError,
+  type SkillRow,
+  type SkillVisibility,
+  type PutInput,
+  type PutResult,
+  type SkillVersionRow,
+} from "./skills.js";
 export { initSchema, seedLocalCompute } from "./schema.js";

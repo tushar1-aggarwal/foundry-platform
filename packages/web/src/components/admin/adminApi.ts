@@ -19,6 +19,8 @@ import type {
   MembershipWithTeamTenant,
   ScopingOverrideRow,
   ScopeKind,
+  SkillhubSkillRow,
+  SkillhubVersionRow,
   TenantSearchUser,
   TenantUserRow,
 } from "./types.js";
@@ -131,6 +133,23 @@ export function makeAdminApi(transport: WebTransport) {
     // ambiguous combinations (both, or partial composite).
     scopingDelete: (opts: { id: string } | { scope_kind: ScopeKind; scope_id: string; key: string }) =>
       rpc<{ ok: boolean }>("admin/scoping/delete", opts as Record<string, unknown>).then((r) => r.ok),
+
+    // Skill Hub (admin/skillhub/*)
+    //
+    // The dashboard's SkillsTab is read-only in v1: cross-team list +
+    // audit drawer reading version_history. Delete reuses the
+    // non-admin `skillhub/delete` since that handler is already
+    // visibility-aware (admins pass the team/tenant-scope gates).
+    // Edit / create flows go through the CLI (`ark skills put`) - too
+    // complex a UI surface for v1's optional dashboard scope.
+    skillhubListAll: () => rpc<{ skills: SkillhubSkillRow[] }>("admin/skillhub/list").then((r) => r.skills),
+
+    skillhubVersionHistory: (skillId: string) =>
+      rpc<{ versions: SkillhubVersionRow[] }>("admin/skillhub/version_history", { skill_id: skillId }).then(
+        (r) => r.versions,
+      ),
+
+    skillhubDelete: (id: string) => rpc<{ ok: boolean }>("skillhub/delete", { id }).then((r) => r.ok),
   };
 }
 

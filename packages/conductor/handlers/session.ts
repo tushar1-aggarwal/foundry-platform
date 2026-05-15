@@ -4,6 +4,7 @@ import { Router } from "../router.js";
 import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
+import { actorIdentity } from "../../core/auth/context.js";
 import { resolveTenantApp } from "./scope-helpers.js";
 import { eventBus } from "../../core/hooks.js";
 import { isRepoUrl } from "../../core/repo-url.js";
@@ -37,12 +38,16 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const scoped = resolveTenantApp(app, ctx);
 
     // Default `user_id` to the calling user's real users.id so the
-    // session row records who created it. Skip when the caller is the
-    // local-mode synthetic admin (`local`) or an API-key sentinel
-    // (starts with `ak-`) -- those don't point to a users row, so
-    // writing them would create a misleading audit trail.
-    if (!opts.user_id && ctx.userId && ctx.userId !== "local" && !ctx.userId.startsWith("ak-")) {
-      opts.user_id = ctx.userId;
+    // session row records who created it. `actorIdentity` prefers
+    // `scopingUserId` (set on cookie auth AND on api-key auth when the
+    // key has a bound user), so an api-key-spawned session correctly
+    // attributes to the human behind the key instead of being orphaned.
+    // The result may still be a non-user sentinel ("local", "ak-...")
+    // for callers with no bound user; skip those so the audit row only
+    // points to real users.id values.
+    const realActor = actorIdentity(ctx);
+    if (!opts.user_id && realActor && realActor !== "local" && !realActor.startsWith("ak-")) {
+      opts.user_id = realActor;
     }
 
     // Flow-level requires_repo gate (#416). Code-modifying flows declare

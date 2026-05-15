@@ -51,6 +51,9 @@ import * as m020 from "./020_compute_composite_pk.js";
 // for the admin write RPCs (Phase 2). Renumbered from 019 during the
 // Temporal Phase 3 merge so versions stay monotonic.
 import * as m021 from "./021_scoping_audit_columns.js";
+// Migration 022: Skill Hub -- skills + skill_versions tables for the
+// central skill registry. See docs/skillhub-rfc.md.
+import * as m022 from "./022_skills.js";
 
 export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m001.VERSION, name: m001.NAME, up: m001.up },
@@ -78,4 +81,5 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m019.VERSION, name: m019.NAME, up: m019.up },
   { version: m020.VERSION, name: m020.NAME, up: m020.up },
   { version: m021.VERSION, name: m021.NAME, up: m021.up },
+  { version: m022.VERSION, name: m022.NAME, up: m022.up },
 ];

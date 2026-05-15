@@ -514,11 +514,13 @@ describe("admin/scoping/delete", () => {
 });
 
 describe("admin/scoping actor identifier semantics", () => {
-  it("api-key-style userId (ak-...) is stored verbatim in set_by", async () => {
-    // Phase-1b semantics: api-key auth uses `userId = api_keys.id` (the
-    // `ak-...` sentinel). We persist this directly to set_by; downstream
-    // audit readers treat it as an opaque actor identifier, not a
-    // foreign key to `users.id`.
+  it("api-key caller: set_by records the bound real-user id, not the ak-* sentinel", async () => {
+    // The handler resolves the audit identity via `actorIdentity(ctx)`,
+    // which prefers `scopingUserId` (the real-user id bound to the
+    // api-key) over `userId` (the `ak-...` sentinel used by the
+    // requireRealUser gate). This keeps audit columns pointing at the
+    // human across key rotations / multi-key setups; the api-key id
+    // never leaks into `set_by`.
     const akCtx: TenantContext = {
       tenantId: "default",
       userId: "ak-fakekey1",
@@ -535,7 +537,31 @@ describe("admin/scoping actor identifier semantics", () => {
         akCtx,
       ),
     );
-    expect(result.row.set_by).toBe("ak-fakekey1");
+    expect(result.row.set_by).toBe("u-real-owner");
+  });
+
+  it("service api-key (no bound user): set_by falls back to the ak-* sentinel", async () => {
+    // Service keys (`admin/apikey/create` with no user binding) have
+    // `scopingUserId === null`; `actorIdentity` falls back to `userId`
+    // so the audit row still records *something* (the service identity)
+    // instead of writing null.
+    const svcCtx: TenantContext = {
+      tenantId: "default",
+      userId: "ak-service",
+      role: "admin",
+      isAdmin: true,
+      scopingUserId: null,
+      teamChain: [],
+    };
+    const knownRuntime = (await app.runtimes.list()).find((r) => r.name)!.name;
+    const result = await ok<{ row: { set_by: string | null } }>(
+      await dispatchAs(
+        "admin/scoping/set",
+        { scope_kind: "tenant", scope_id: "default", key: "runtime", value: knownRuntime },
+        svcCtx,
+      ),
+    );
+    expect(result.row.set_by).toBe("ak-service");
   });
 });
 
