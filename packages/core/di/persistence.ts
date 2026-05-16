@@ -47,7 +47,7 @@ import {
   EphemeralFlowStore,
 } from "../stores/index.js";
 import type { ModelStore } from "../stores/model-store.js";
-import { DbResourceStore, initResourceDefinitionsTable } from "../stores/db-resource-store.js";
+import { DbResourceStore } from "../stores/db-resource-store.js";
 import { WorkspaceStore } from "../workspace/store.js";
 
 /**
@@ -221,7 +221,6 @@ export function registerResourceStores(container: AppContainer): void {
 
 function makeFlowStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
   if (mode.kind === "hosted") {
-    initResourceDefinitionsTable(db);
     return new EphemeralFlowStore(new DbResourceStore(db, "flow", { stages: [] }));
   }
   return new EphemeralFlowStore(
@@ -234,7 +233,6 @@ function makeFlowStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
 
 function makeSkillStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
   if (mode.kind === "hosted") {
-    initResourceDefinitionsTable(db);
     return new DbResourceStore(db, "skill", { description: "", content: "" });
   }
   return new FileSkillStore({
@@ -245,7 +243,6 @@ function makeSkillStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
 
 function makeAgentStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode, models: ModelStore) {
   if (mode.kind === "hosted") {
-    initResourceDefinitionsTable(db);
     // `model` default comes from the catalog (alias "sonnet") rather than a
     // hardcoded string. A fresh install with an empty catalog throws here
     // by design -- a missing catalog is a broken install, not a data state
@@ -272,7 +269,6 @@ function makeAgentStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode, m
 
 function makeRuntimeStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
   if (mode.kind === "hosted") {
-    initResourceDefinitionsTable(db);
     return new DbResourceStore(db, "runtime", { description: "", type: "cli-agent", command: [] });
   }
   return new FileRuntimeStore({

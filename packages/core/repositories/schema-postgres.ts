@@ -440,7 +440,6 @@ export async function initPostgresSchema(db: DatabaseAdapter): Promise<void> {
       updated_at TEXT NOT NULL DEFAULT now()::text
     )`,
   );
-  await safeDdl(db, "ALTER TABLE tenant_policies ADD COLUMN IF NOT EXISTS compute_config_yaml TEXT");
   // --- END agent-G ---
 
   // stage_operations -- idempotency ledger. See migration 010 and

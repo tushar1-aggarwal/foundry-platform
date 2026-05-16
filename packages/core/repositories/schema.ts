@@ -331,10 +331,6 @@ export async function initSchema(db: DatabaseAdapter): Promise<void> {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
   );
-  // If the table already existed, add the column (migration 008 also covers
-  // this path; this is defense in depth for installs that never go through
-  // the runner).
-  await safeExec(db, "ALTER TABLE tenant_policies ADD COLUMN compute_config_yaml TEXT");
   // --- END agent-G ---
 }
 
