@@ -11,7 +11,7 @@
 # Pull AWS CLI v2 from Docker Hub (Zscaler-trusted; avoids awscli.amazonaws.com block).
 FROM amazon/aws-cli:latest AS aws-cli-src
 
-FROM oven/bun:1.3.13-slim
+FROM oven/bun:1.3-slim
 WORKDIR /app
 # Install Node + npm from Debian's repo (Node 20 LTS, which is fine -- the
 # Temporal worker SDK supports Node 18+). Avoids the Zscaler-MITM-blocked
