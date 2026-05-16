@@ -45,12 +45,12 @@ export interface ForensicReadResult {
 }
 
 /** A tail value is "usable" only when it's a finite positive number. */
-function hasTail(tail?: number): tail is number {
+export function hasTail(tail?: number): tail is number {
   return tail != null && Number.isFinite(tail) && tail > 0;
 }
 
 /** Over the cap with no tail hint -> refuse (caller returns tooLarge). */
-function isForensicTooLarge(size: number, tail?: number): boolean {
+export function isForensicTooLarge(size: number, tail?: number): boolean {
   return size > MAX_FORENSIC_BYTES && !hasTail(tail);
 }
 
@@ -61,7 +61,7 @@ function isForensicTooLarge(size: number, tail?: number): boolean {
  * counting so `tail=10` means the last 10 visible lines, then restore the
  * trailing newline so the client never renders a half-record.
  */
-function applyForensicTail(raw: string, tail?: number): string {
+export function applyForensicTail(raw: string, tail?: number): string {
   if (!hasTail(tail)) return raw;
   const lines = raw.split("\n");
   const trailingEmpty = lines.length > 0 && lines[lines.length - 1] === "";
