@@ -459,6 +459,25 @@ export class K8sCompute implements Compute {
     if (arkdUrl) {
       const { startArkdEventsConsumer } = await import("../services/channel/arkd-events-consumer.js");
       startArkdEventsConsumer(opts.app, h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
+      // Durable, session-attached proof the conductor pointed a hooks
+      // consumer at THIS session's pod arkd. If a session's event log has
+      // no arkd_consumer_attached, ensureReachable never ran for it; if it
+      // has this but no arkd_hook_received, the consumer never delivered
+      // (subscribe failed / agent didn't publish / wrong arkd). Survives
+      // pod death; the decisive root-cause locator for the hook pipeline.
+      await opts.app.events
+        .log(opts.sessionId, "arkd_consumer_attached", {
+          actor: "system",
+          data: { compute: h.name, arkdUrl },
+        })
+        .catch(() => {});
+    } else {
+      await opts.app.events
+        .log(opts.sessionId, "arkd_consumer_skipped", {
+          actor: "system",
+          data: { compute: h.name, reason: "no arkdUrl from getArkdUrl" },
+        })
+        .catch(() => {});
     }
   }
 

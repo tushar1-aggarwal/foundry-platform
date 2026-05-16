@@ -251,17 +251,38 @@ async function dispatchFrame(app: AppContext, line: string): Promise<void> {
       logWarn("conductor", `arkd-events: hook frame missing session param`);
       return;
     }
+    const payload = frame.body as Record<string, unknown>;
+    const hookEvent = typeof payload?.hook_event_name === "string" ? payload.hook_event_name : "unknown";
     try {
       const s = await app.sessions.get(sessionId);
       if (!s) {
         logDebug("conductor", `arkd-events: hook handler session not found session=${sessionId}`);
+        // Durable trace: a hook arrived for a session the conductor can't
+        // resolve. Without this the loss is silent and undiagnosable later.
+        await app.events
+          .log(sessionId, "arkd_hook_dropped", {
+            actor: "system",
+            data: { event: hookEvent, reason: "session_not_found" },
+          })
+          .catch(() => {});
         return;
       }
-      const payload = frame.body as Record<string, unknown>;
+      // Durable, session-attached proof the hook pipeline delivered this
+      // hook to the conductor (survives pod death; queryable via
+      // session/events forever). Pairs with arkd_consumer_attached.
+      await app.events
+        .log(sessionId, "arkd_hook_received", { actor: "system", data: { event: hookEvent } })
+        .catch(() => {});
       await processHookPayload(app, sessionId, s, payload);
+      await app.events
+        .log(sessionId, "arkd_hook_persisted", { actor: "system", data: { event: hookEvent } })
+        .catch(() => {});
     } catch (err: unknown) {
       const msg = (err as { message?: string })?.message ?? String(err);
       logWarn("conductor", `arkd-events: hook dispatch threw: ${msg}`);
+      await app.events
+        .log(sessionId, "arkd_hook_error", { actor: "system", data: { event: hookEvent, message: msg } })
+        .catch(() => {});
     }
     return;
   }
