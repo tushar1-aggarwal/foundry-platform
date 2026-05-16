@@ -5,7 +5,7 @@
  * self-terminates on the mismatch guard inside status-poller.ts.
  */
 import { describe, it, expect } from "bun:test";
-import { StageAdvancer } from "../advance.js";
+import { StageAdvanceService } from "../advance.js";
 import type { StageAdvanceDeps } from "../types.js";
 
 interface TraceableDeps extends StageAdvanceDeps {
@@ -90,7 +90,7 @@ function makeDeps(overrides: Partial<StageAdvanceDeps> = {}): TraceableDeps {
   return deps as TraceableDeps;
 }
 
-describe("StageAdvancer.advance -- poller stop ordering", () => {
+describe("StageAdvanceService.advance -- poller stop ordering", () => {
   it("stops the poller BEFORE updating the session row", async () => {
     const callOrder: string[] = [];
     const deps = makeDeps({
@@ -104,7 +104,7 @@ describe("StageAdvancer.advance -- poller stop ordering", () => {
       return origUpdate(id, patch);
     };
 
-    const advancer = new StageAdvancer(deps);
+    const advancer = new StageAdvanceService(deps);
     const result = await advancer.advanceImpl("s1", true, undefined);
 
     expect(result.ok).toBe(true);
@@ -116,7 +116,7 @@ describe("StageAdvancer.advance -- poller stop ordering", () => {
 
   it("works without stopStatusPoller (backward compat)", async () => {
     const deps = makeDeps({ stopStatusPoller: undefined });
-    const advancer = new StageAdvancer(deps);
+    const advancer = new StageAdvanceService(deps);
     const result = await advancer.advanceImpl("s1", true, undefined);
     expect(result.ok).toBe(true);
   });

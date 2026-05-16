@@ -299,7 +299,7 @@ async function _handleStatus(
 
     // Defensive guard: with explicit stopStatusPoller calls in stage-advance,
     // this branch should never fire on a healthy stage handoff. Kept as a
-    // safety net for direct sessions.update() calls that bypass StageAdvancer.
+    // safety net for direct sessions.update() calls that bypass StageAdvanceService.
     if (session.session_id && session.session_id !== handle) return;
 
     // "not_found" means the tmux session exited (process finished) -- treat as completed
