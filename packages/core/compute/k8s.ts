@@ -59,6 +59,8 @@ export interface K8sComputeConfig {
   namespace?: string;
   /** Base image for the arkd container; defaults to "ubuntu:22.04". */
   image?: string;
+  /** Container imagePullPolicy. Defaults to "Always". */
+  imagePullPolicy?: string;
   /** Path to a kubeconfig file. If unset, loads default (in-cluster or ~/.kube/config). */
   kubeconfig?: string;
   /** Kata runtime class (set by KataCompute; leave unset for vanilla). */
@@ -282,6 +284,7 @@ export class K8sCompute implements Compute {
     const containerSpec: Record<string, unknown> = {
       name: "arkd",
       image,
+      imagePullPolicy: cfg.imagePullPolicy ?? "Always",
       command: ["/bin/sh", "-c", "arkd || sleep infinity"],
       ports: [{ containerPort: ARKD_POD_PORT, name: "arkd" }],
     };

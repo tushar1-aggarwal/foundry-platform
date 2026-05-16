@@ -12,7 +12,7 @@
 #   make build         Build native macOS binary + Electron app
 #   make package       Package everything for distribution
 
-.PHONY: help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-temporal-worker dev-docker dev-control-plane dev-control-plane-down dev-control-plane-bootstrap dev-k8s-local dev-k8s-local-down claude-tfy pi-tfy web desktop \
+.PHONY: agent-image help install dev dev-daemon dev-arkd dev-web dev-temporal dev-temporal-down dev-temporal-worker dev-docker dev-control-plane dev-control-plane-down dev-control-plane-bootstrap dev-k8s-local dev-k8s-local-down claude-tfy pi-tfy web desktop \
         test test-file test-e2e test-e2e-fast test-e2e-web test-e2e-web-dev test-install test-watch test-e2e-local-bespoke test-e2e-control-plane test-e2e-control-plane-up test-e2e-control-plane-down test-e2e-t6-docker test-e2e-local-real-llm test-laptop-real-llm lint lint-fix \
         format format-check \
         dev-kill \
@@ -201,6 +201,21 @@ dev-control-plane-down: ## Stop everything: containers + any host processes stil
 	    pid=$$(lsof -nP -iTCP:$$port -sTCP:LISTEN -t 2>/dev/null | head -1); \
 	    if [ -n "$$pid" ]; then echo "killing PID $$pid on :$$port"; kill $$pid 2>/dev/null || true; fi; \
 	  done
+
+agent-image: ## Build ONLY the lean per-session agent image (the sole iteration target; control plane untouched)
+	@kubectl config use-context orbstack >/dev/null 2>&1 || true
+	$(eval AGENT_TAG := agent-$(shell date +%s))
+	@echo "Building lean agent image ark-agent:$(AGENT_TAG) (.infra/Dockerfile.agent)..."
+	docker build -f .infra/Dockerfile.agent -t ark-agent:$(AGENT_TAG) .
+	@echo ""
+	@echo "Built ark-agent:$(AGENT_TAG). Point a k8s compute at it via the control plane"
+	@echo "(no built-in compute -- it must be created). Example:"
+	@echo "  curl -s -X POST http://localhost:8420/api/rpc -H 'Content-Type: application/json' \\"
+	@echo "    -d '{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"compute/create\",\"params\":{\"name\":\"k8s-agent\",\"compute\":\"k8s\",\"isolation\":\"direct\",\"config\":{\"namespace\":\"ark\",\"image\":\"ark-agent:$(AGENT_TAG)\",\"imagePullPolicy\":\"IfNotPresent\"}}}'"
+	@echo ""
+	@echo "imagePullPolicy: IfNotPresent + the unique tag = the fresh build is always used"
+	@echo "on OrbStack (no registry). Use Always (the code default) for registry-backed prod."
+	@echo "Then dispatch with compute_name=k8s-agent. Only this image is rebuilt per iteration."
 
 dev-k8s-local: ## Deploy full ark control plane to local OrbStack k8s (LocalStack + Temporal + Postgres + Redis in-cluster)
 	@test -n "$$ANTHROPIC_API_KEY" || { echo 'ANTHROPIC_API_KEY must be set'; exit 1; }

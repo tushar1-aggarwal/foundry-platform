@@ -1,0 +1,53 @@
+# Lean per-session agent image for the k8s compute provider.
+#
+# K8sCompute provisions ONE pod per compute, container = `arkd` on :19300
+# (command is hardcoded `["/bin/sh","-c","arkd || sleep infinity"]`). The
+# control plane reaches arkd via kubectl port-forward and drives the agent
+# through /process/spawn -> `ark run-agent-sdk` -> the claude-agent SDK's
+# bundled native `claude` binary.
+#
+# This is the ONLY image we iterate on for agent testing. The control-plane,
+# workers, and temporal images are separate and unchanged.
+#
+# Deliberately omitted vs the orchestrator image: web/vite bundle, devDeps,
+# nodejs/npm + global claude-code (claude-agent uses the SDK's native
+# binary), tmux/jq, desktop. Single-stage, --production deps only.
+FROM oven/bun:1.3-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY package.json bun.lock tsconfig.json ./
+RUN bun install --frozen-lockfile --production --ignore-scripts
+
+# Source + resource defs the agent path actually reads. No web/dist, no
+# desktop.
+COPY packages/ packages/
+COPY ark ./ark
+COPY agents/ agents/
+COPY flows/ flows/
+COPY runtimes/ runtimes/
+COPY models/ models/
+COPY skills/ skills/
+
+# Keep only the host-arch glibc claude binary; drop the other platform
+# variants the SDK ships as optional deps (~240 MB each).
+RUN set -eu; \
+    arch="$(uname -m)"; case "$arch" in aarch64) a=arm64;; x86_64) a=x64;; *) a="$arch";; esac; \
+    base=node_modules/@anthropic-ai; \
+    if [ -d "$base" ]; then \
+      find "$base" -maxdepth 1 -type d -name 'claude-agent-sdk-*' \
+        ! -name "claude-agent-sdk-linux-$a" -exec rm -rf {} +; \
+    fi
+
+# arkd shim + ark on PATH -- K8sCompute runs bare `arkd`; the claude-agent
+# launcher runs `exec ark run-agent-sdk`.
+RUN printf '#!/bin/sh\nexec bun /app/packages/cli/index.ts arkd "$@"\n' > /usr/local/bin/arkd \
+ && chmod +x /usr/local/bin/arkd /app/ark \
+ && ln -sf /app/ark /usr/local/bin/ark \
+ && mkdir -p /root/.ark
+
+EXPOSE 19300
+CMD ["/bin/sh", "-c", "arkd || sleep infinity"]
