@@ -228,16 +228,18 @@ describe("H7 -- hosted mode snapshot store is lazy", () => {
     delete process.env.ARK_MODE;
   });
 
-  it("accessing snapshotStore in hosted without dev flag still throws the clear error", async () => {
-    // Safety net: the factory's throw is preserved. Anyone who actually
-    // tries to pause/resume a snapshot-capable compute gets the same
-    // operator-facing message that the eager resolve used to produce.
+  it("accessing snapshotStore in hosted returns FsSnapshotStore (hosted gate deliberately removed)", async () => {
+    // Commit 4c973cbc deleted the devAllowLocalHostedStorage flag and the
+    // snapshot-store hosted gate: snapshotStore is now an unconditional
+    // FsSnapshotStore in every mode (no Firecracker/snapshot use cases yet,
+    // so the old hosted-throw safety net was intentionally dropped). This
+    // asserts the new contract so the decision can't silently regress.
     const ctx = await forHostedTestAsync({
       storage: { blobBackend: "s3", s3: { bucket: "b", region: "us-east-1", prefix: "p" } },
       stubBlobStore: true,
     });
     await ctx.boot();
-    expect(() => ctx.snapshotStore).toThrow(/snapshotStore.*hosted/i);
+    expect(ctx.snapshotStore.constructor.name).toBe("FsSnapshotStore");
     await ctx.shutdown();
     delete process.env.ARK_MODE;
   });

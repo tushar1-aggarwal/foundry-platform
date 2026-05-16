@@ -162,6 +162,17 @@ describe("Pass 3 #11: dispatch failure surfacing at the three call sites", () =>
       // stage-config dependency entirely by stubbing applyReport.
       app.container.register({
         sessionHooks: asValue({
+          // report-pipeline.ts calls ingestReport (which internally runs
+          // report.apply + side-effects); the mock returns the decision
+          // shape the pipeline reads. applyReport kept for direct callers.
+          ingestReport: async () => ({
+            updates: {},
+            shouldAdvance: false,
+            shouldRetry: true,
+            retryMaxRetries: 3,
+            logEvents: [],
+            busEvents: [],
+          }),
           applyReport: async () => ({
             updates: {},
             shouldAdvance: false,
@@ -206,6 +217,17 @@ describe("Pass 3 #11: dispatch failure surfacing at the three call sites", () =>
           },
         }),
         sessionHooks: asValue({
+          // report-pipeline.ts calls ingestReport (which internally runs
+          // report.apply + side-effects); the mock returns the decision
+          // shape the pipeline reads. applyReport kept for direct callers.
+          ingestReport: async () => ({
+            updates: {},
+            shouldAdvance: false,
+            shouldRetry: true,
+            retryMaxRetries: 3,
+            logEvents: [],
+            busEvents: [],
+          }),
           applyReport: async () => ({
             updates: {},
             shouldAdvance: false,

@@ -44,7 +44,10 @@ describe("claude-agent runtime resolution", () => {
     expect(runtime!.name).toBe("claude-agent");
     expect(runtime!.type).toBe("claude-agent");
     expect(Array.isArray(runtime!.secrets)).toBe(true);
-    expect(runtime!.secrets).toContain("ANTHROPIC_API_KEY");
+    // claude-agent.yaml is OAuth-token-only now (claude-agent is the sole
+    // runtime; auth flows via the conductor CLAUDE_CODE_OAUTH_TOKEN secret,
+    // not a baked ANTHROPIC_API_KEY).
+    expect(runtime!.secrets).toContain("CLAUDE_CODE_OAUTH_TOKEN");
     expect(runtime!.billing?.mode).toBe("api");
     // transcript_parser is a separate identifier from the runtime name and was
     // intentionally left as `agent-sdk` -- it pairs with AgentSdkParser.kind.
