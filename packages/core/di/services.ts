@@ -145,6 +145,10 @@ export function registerServices(
           gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
           resolveComputeTarget: (session) => c.app.resolveComputeTarget(session),
           advance: (id, force) => c.app.stageAdvance.advance(id, force),
+          cleanupSession: async (session) => {
+            const { cleanupSession } = await import("../services/session/cleanup.js");
+            await cleanupSession(c.app, session);
+          },
           provisionWorkspaceWorkdir: (session, ws, opts) => provisionWorkspaceWorkdir(c.app, session, ws, opts),
           // Wire Temporal workflow starter when hosted mode + flag enabled.
           // Uses a lazy async import so the @temporalio packages are only

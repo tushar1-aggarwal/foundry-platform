@@ -8,7 +8,7 @@
 import { z } from "zod";
 import type { ToolDef } from "../registry.js";
 import { sharedRegistry } from "../transport.js";
-import type { SessionStatus, Session } from "../../../types/session.js";
+import type { SessionStatus } from "../../../types/session.js";
 
 const sessionListInput = z.object({
   status: z.string().optional(),
@@ -135,47 +135,11 @@ const sessionKill: ToolDef = {
   inputSchema: sessionKillInput,
   handler: async (input, { app }) => {
     const parsed = input as z.infer<typeof sessionKillInput>;
-    // Mirror packages/conductor/handlers/session.ts session/kill: there is no
-    // single sessionService.kill primitive; the handler inlines executor
-    // terminate + status update + cleanupSession. We replay the same calls
-    // so the MCP surface and JSON-RPC surface end up in identical states.
-    const s = await app.sessions.get(parsed.sessionId);
-    if (!s) throw new Error(`Session not found: ${parsed.sessionId}`);
-
-    const terminalStatuses = ["completed", "failed", "archived", "stopped"];
-    if (terminalStatuses.includes(s.status)) {
-      return { ok: false, message: `session already terminal (status=${s.status})` };
+    const result = await app.sessionLifecycle.kill(parsed.sessionId);
+    if (!result.ok && result.message.includes("not found")) {
+      throw new Error(`Session not found: ${parsed.sessionId}`);
     }
-
-    const handle = s.session_id;
-    if (handle) {
-      const { getExecutor } = await import("../../../core/executor.js");
-      const executorName = (s.config as Record<string, unknown> | null)?.launch_executor as string | undefined;
-      const executor = executorName ? getExecutor(executorName) : undefined;
-      if (executor) {
-        if (executor.terminate) await executor.terminate(handle);
-        else await executor.kill(handle);
-      }
-    }
-
-    await app.sessions.update(parsed.sessionId, {
-      status: "stopped",
-      error: "killed",
-      session_id: null,
-    } as Partial<Session>);
-
-    await app.events.log(parsed.sessionId, "session_killed", {
-      actor: "user",
-      data: { handle: handle ?? null },
-    });
-
-    const updated = await app.sessions.get(parsed.sessionId);
-    if (updated) {
-      const { cleanupSession } = await import("../../../core/services/session/cleanup.js");
-      await cleanupSession(app, updated);
-    }
-
-    return { ok: true, terminated_at: Date.now(), cleaned_up: true };
+    return result;
   },
 };
 

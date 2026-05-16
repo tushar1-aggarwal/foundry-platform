@@ -654,63 +654,20 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   });
 
   // ── session/kill -- hard terminate, no grace ──────────────────────────────
-  //
-  // Goes straight to SIGKILL (skips the SIGTERM grace that session/stop uses).
-  // Marks session `stopped` (canonical terminal status) with `error: "killed"`
-  // as the discriminator from session/stop. Runs D2 cleanup synchronously so
-  // post-conditions are reliable for the caller.
 
   router.handle("session/kill", async (params, notify, ctx) => {
     const { sessionId } = extract<{ sessionId: string }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
 
-    const s = await scoped.sessions.get(sessionId);
-    if (!s) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
-
-    const terminalStatuses = ["completed", "failed", "archived", "stopped"];
-    if (terminalStatuses.includes(s.status)) {
-      return { ok: false, message: `session already terminal (status=${s.status})` };
-    }
-
-    // Find the executor handle and call terminate (SIGKILL-first).
-    const handle = s.session_id;
-    if (handle) {
-      const { getExecutor } = await import("../../core/executor.js");
-      const executorName = (s.config as Record<string, unknown> | null)?.launch_executor as string | undefined;
-      const executor = executorName ? getExecutor(executorName) : undefined;
-
-      if (executor) {
-        if (executor.terminate) {
-          await executor.terminate(handle);
-        } else {
-          await executor.kill(handle);
-        }
-      }
-    }
-
-    // Canonical terminal status; `error: "killed"` distinguishes from session/stop.
-    await scoped.sessions.update(sessionId, {
-      status: "stopped",
-      error: "killed",
-      session_id: null,
-    } as Partial<import("../../types/index.js").Session>);
-
-    await scoped.events.log(sessionId, "session_killed", {
-      actor: "user",
-      data: { handle: handle ?? null },
-    });
-
-    // Run D2 cleanup synchronously so the caller can rely on post-conditions.
-    const updated = (await scoped.sessions.get(sessionId))!;
-    if (updated) {
-      const { cleanupSession } = await import("../../core/services/session/cleanup.js");
-      await cleanupSession(scoped, updated);
+    const result = await scoped.sessionLifecycle.kill(sessionId);
+    if (!result.ok && result.message.includes("not found")) {
+      throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
 
     const final = await scoped.sessions.get(sessionId);
     if (final) notify("session/updated", { session: final });
 
-    return { ok: true, terminated_at: Date.now(), cleaned_up: true };
+    return result;
   });
 
   router.handle("session/archive", async (params, notify, ctx) => {

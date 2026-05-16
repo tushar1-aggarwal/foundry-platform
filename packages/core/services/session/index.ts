@@ -70,6 +70,10 @@ export class SessionLifecycle {
     return this.terminator.stop(sessionId, opts);
   }
 
+  kill(sessionId: string) {
+    return this.terminator.kill(sessionId);
+  }
+
   deleteSession(sessionId: string): Promise<{ ok: boolean; message: string }> {
     return this.terminator.deleteSession(sessionId);
   }
