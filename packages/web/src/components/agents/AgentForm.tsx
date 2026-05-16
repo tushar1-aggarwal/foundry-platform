@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { Button } from "../ui/button.js";
 import { Input } from "../ui/input.js";
 import { RichSelect, type RichSelectOption } from "../ui/RichSelect.js";
-import { useModelsQuery } from "../../hooks/useRuntimeQueries.js";
+import { useModelsQuery } from "../../hooks/useCatalogQueries.js";
 
 const TOOL_OPTIONS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch"];
 

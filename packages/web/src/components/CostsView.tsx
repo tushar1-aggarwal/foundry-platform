@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useCostsQuery } from "../hooks/useCostQueries.js";
+import { useCostsQuery } from "../hooks/useCatalogQueries.js";
 import { fmtCost } from "../util.js";
 import { Card } from "./ui/card.js";
 import { KpiCard } from "./ui/KpiCard.js";

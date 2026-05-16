@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { GitBranch } from "lucide-react";
 import { useApi } from "../hooks/useApi.js";
-import { useAgentsQuery } from "../hooks/useAgentQueries.js";
+import { useAgentsQuery } from "../hooks/useCatalogQueries.js";
 import { useFlowDetail, useFlowsQuery } from "../hooks/useFlowQueries.js";
 import { cn } from "../lib/utils.js";
 import { FlowForm } from "./flows/FlowForm.js";
