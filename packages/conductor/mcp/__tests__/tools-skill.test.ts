@@ -20,7 +20,7 @@ describe("skill_list", () => {
 describe("skill_create + skill_show + skill_update", () => {
   it("creates, reads, and updates a skill", async () => {
     await h.callTool("skill_create", {
-      definition: { name: "mcp-test-skill", description: "Test skill", body: "Just a test." },
+      definition: { name: "mcp-test-skill", description: "Test skill", prompt: "Just a test." },
     });
     const fetched = (await h.callTool("skill_show", { name: "mcp-test-skill" })) as { description: string };
     expect(fetched.description).toBe("Test skill");

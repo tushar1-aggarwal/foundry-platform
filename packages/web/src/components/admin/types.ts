@@ -164,3 +164,52 @@ export interface TenantSearchUser {
  * into the web's import graph.
  */
 export type ScopeKind = "user" | "team" | "tenant";
+
+// ── Skill Hub admin types ─────────────────────────────────────────────────
+//
+// Mirror the server-side `SkillRow` / `SkillVersionRow` wire shape exactly
+// (snake_case, all metadata fields). Kept here so the admin SkillsTab can
+// type its rows without dragging `@ark/core` or `@ark/types` into the
+// web's import graph - same isolation choice as ScopeKind above.
+
+export type SkillhubVisibility = "user" | "team" | "tenant" | "cross_tenant";
+
+export interface SkillhubSupportingFile {
+  path: string;
+  content: string;
+}
+
+export interface SkillhubSkillRow {
+  id: string;
+  tenant_id: string | null;
+  team_id: string | null;
+  owner_user_id: string | null;
+  visibility: SkillhubVisibility;
+  name: string;
+  description: string;
+  body: string;
+  category: string | null;
+  tags: string[];
+  supporting_files: SkillhubSupportingFile[];
+  harness_hints: Record<string, Record<string, unknown>>;
+  current_hash: string;
+  upstream_id: string | null;
+  created_by: string;
+  updated_by: string | null;
+  deleted_at: string | null;
+  deleted_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillhubVersionRow {
+  id: string;
+  skill_id: string;
+  version_hash: string;
+  body: string;
+  supporting_files: SkillhubSupportingFile[];
+  changed_by: string;
+  changed_at: string;
+  /** Set when this version was produced by a client-side LLM-assisted merge (RFC §7). */
+  merge_input_json: Record<string, unknown> | null;
+}

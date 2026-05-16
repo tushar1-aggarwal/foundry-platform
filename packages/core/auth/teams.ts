@@ -1,10 +1,9 @@
 /**
  * TeamManager -- CRUD for teams inside a tenant + membership management.
  *
- * Mirrors `TenantPolicyManager` / `TenantManager`: lazy `ensureSchema()`,
- * async end-to-end. `(tenant_id, slug)` is unique per tenant; roles are a
- * flat enum string (`owner`/`admin`/`member`/`viewer`) -- authorization
- * policies live in `tenant_policies`, not here.
+ * `(tenant_id, slug)` is unique per tenant; roles are a flat enum string
+ * (`owner`/`admin`/`member`/`viewer`) -- authorization policies live in
+ * `tenant_policies`, not here.
  */
 
 import type { DatabaseAdapter } from "../database/index.js";
@@ -16,7 +15,6 @@ import {
   type MembershipRow,
   type MembershipWithUser,
 } from "../repositories/memberships.js";
-import { logDebug } from "../observability/structured-log.js";
 
 export type Team = TeamRow;
 export type { MembershipRole, MembershipRow, MembershipWithUser };
@@ -37,7 +35,6 @@ function assertRole(role: string): asserts role is MembershipRole {
 }
 
 export class TeamManager {
-  private _initialized: Promise<void> | null = null;
   private _teams: TeamRepository;
   private _memberships: MembershipRepository;
 
@@ -46,48 +43,11 @@ export class TeamManager {
     this._memberships = new MembershipRepository(db);
   }
 
-  private async ensureSchema(): Promise<void> {
-    if (this._initialized) return this._initialized;
-    this._initialized = (async () => {
-      try {
-        await this.db.exec(
-          `CREATE TABLE IF NOT EXISTS teams (
-            id TEXT PRIMARY KEY,
-            tenant_id TEXT NOT NULL,
-            slug TEXT NOT NULL,
-            name TEXT NOT NULL,
-            description TEXT,
-            deleted_at TEXT,
-            deleted_by TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-          )`,
-        );
-        await this.db.exec(
-          `CREATE TABLE IF NOT EXISTS memberships (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            team_id TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'member',
-            deleted_at TEXT,
-            deleted_by TEXT,
-            created_at TEXT NOT NULL
-          )`,
-        );
-      } catch {
-        logDebug("general", "teams/memberships tables exist");
-      }
-    })();
-    return this._initialized;
-  }
-
   async listByTenant(tenantId: string, opts: ListOptions = {}): Promise<Team[]> {
-    await this.ensureSchema();
     return this._teams.listByTenant(tenantId, opts);
   }
 
   async get(teamId: string, opts: ListOptions = {}): Promise<Team | null> {
-    await this.ensureSchema();
     return this._teams.get(teamId, opts);
   }
 
@@ -98,7 +58,6 @@ export class TeamManager {
     description?: string | null;
     id?: string;
   }): Promise<Team> {
-    await this.ensureSchema();
     assertSlug(opts.slug);
     const existing = (await this._teams.listByTenant(opts.tenant_id)).find((t) => t.slug === opts.slug);
     if (existing) throw new Error(`Team '${opts.slug}' already exists in tenant '${opts.tenant_id}'`);
@@ -116,7 +75,6 @@ export class TeamManager {
   }
 
   async update(teamId: string, fields: Partial<Pick<Team, "slug" | "name" | "description">>): Promise<Team | null> {
-    await this.ensureSchema();
     // Mirror the deletion guard: 'default-team' is hardcoded as the
     // JIT-membership target in auth/login.ts. A slug rename would
     // silently mismatch the hardcoded id the login flow depends on.
@@ -136,7 +94,6 @@ export class TeamManager {
    * cascade so the audit trail identifies the actor end-to-end.
    */
   async delete(teamId: string, userId: string | null = null): Promise<boolean> {
-    await this.ensureSchema();
     // 'default-team' is the seeded landing destination for new sign-ups
     // (hardcoded as DEFAULT_TEAM_ID in auth/login.ts). Deleting it breaks
     // the JIT-membership path in the login flow.
@@ -159,17 +116,14 @@ export class TeamManager {
    * an admin restores those individually.
    */
   async restore(teamId: string): Promise<boolean> {
-    await this.ensureSchema();
     return this._teams.restore(teamId);
   }
 
   async listMembers(teamId: string, opts: { includeDeleted?: boolean } = {}): Promise<MembershipWithUser[]> {
-    await this.ensureSchema();
     return this._memberships.listByTeam(teamId, opts);
   }
 
   async addMember(teamId: string, userId: string, role: MembershipRole = "member"): Promise<MembershipRow> {
-    await this.ensureSchema();
     assertRole(role);
     return this._memberships.add(userId, teamId, role);
   }
@@ -182,17 +136,14 @@ export class TeamManager {
    * means "system" deleter.
    */
   async removeMember(teamId: string, userId: string, deletedBy: string | null = null): Promise<boolean> {
-    await this.ensureSchema();
     return this._memberships.softRemove(userId, teamId, deletedBy);
   }
 
   async restoreMember(teamId: string, userId: string): Promise<boolean> {
-    await this.ensureSchema();
     return this._memberships.restore(userId, teamId);
   }
 
   async setRole(teamId: string, userId: string, role: MembershipRole): Promise<MembershipRow | null> {
-    await this.ensureSchema();
     assertRole(role);
     return this._memberships.setRole(userId, teamId, role);
   }
@@ -203,7 +154,6 @@ export class TeamManager {
    * path without an N+1.
    */
   async userBelongsToTenant(userId: string, tenantId: string): Promise<boolean> {
-    await this.ensureSchema();
     return this._memberships.userBelongsToTenant(userId, tenantId);
   }
 }

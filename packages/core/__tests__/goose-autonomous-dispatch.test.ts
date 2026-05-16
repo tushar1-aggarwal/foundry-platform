@@ -8,14 +8,14 @@
  * 4. Status poller: detects tmux exit (not_found) and completes session
  * 5. Flow advance: single-stage autonomous flow completes after poller triggers
  * 6. Transcript parsing: goose billing mode is wired in RuntimeBilling
- * 7. Command builder: buildGooseCommand produces correct argv for autonomous dispatch
+ *
+ * `buildGooseCommand` argv assertions live in goose-executor.test.ts.
  */
 
 import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { AppContext } from "../app.js";
 import { startStatusPoller, stopStatusPoller, stopAllPollers } from "../executors/status-poller.js";
 import { gooseExecutor } from "../executors/goose.js";
-import { buildGooseCommand } from "../executors/goose.js";
 import { resolveAgentWithRuntime } from "../agent/agent.js";
 import * as tmux from "../infra/tmux.js";
 
@@ -135,90 +135,6 @@ describe("Goose dispatch via goose executor", async () => {
     } finally {
       existsSpy.mockRestore();
     }
-  });
-});
-
-// ── buildGooseCommand for autonomous dispatch ───────────────────────────────
-
-describe("buildGooseCommand for autonomous dispatch", () => {
-  function makeAgent(overrides: Partial<Parameters<typeof buildGooseCommand>[0]["agent"]> = {}) {
-    return {
-      name: "worker",
-      model: "claude-sonnet-4-6",
-      max_turns: 200,
-      system_prompt: "",
-      tools: [],
-      skills: [],
-      mcp_servers: [],
-      permission_mode: "bypassPermissions",
-      env: {},
-      ...overrides,
-    };
-  }
-
-  it("produces correct argv for autonomous text delivery", () => {
-    const argv = buildGooseCommand({
-      agent: makeAgent(),
-      task: "Fix the failing test in parser.ts",
-      sessionId: "s-goose10",
-    });
-
-    expect(argv[0]).toBe("goose");
-    expect(argv[1]).toBe("run");
-    expect(argv).toContain("--no-session");
-    expect(argv).toContain("-t");
-    expect(argv[argv.indexOf("-t") + 1]).toBe("Fix the failing test in parser.ts");
-    // Autonomous (no interactive flag) should NOT have -s
-    expect(argv).not.toContain("-s");
-  });
-
-  it("includes --model and --max-turns from agent config", () => {
-    const argv = buildGooseCommand({
-      agent: makeAgent({ model: "claude-sonnet-4-6", max_turns: 200 }),
-      task: "test",
-      sessionId: "s-goose11",
-    });
-
-    expect(argv).toContain("--model");
-    expect(argv[argv.indexOf("--model") + 1]).toBe("claude-sonnet-4-6");
-    expect(argv).toContain("--max-turns");
-    expect(argv[argv.indexOf("--max-turns") + 1]).toBe("200");
-  });
-
-  it("wires channel MCP as --with-extension for conductor communication", () => {
-    const argv = buildGooseCommand({
-      agent: makeAgent(),
-      task: "test",
-      sessionId: "s-goose12",
-      channelExtension: {
-        command: "/usr/local/bin/bun",
-        args: ["run", "/ark/packages/core/claude/channel.ts"],
-      },
-    });
-
-    expect(argv).toContain("--with-extension");
-    const extValue = argv[argv.indexOf("--with-extension") + 1];
-    expect(extValue).toBe("/usr/local/bin/bun run /ark/packages/core/claude/channel.ts");
-  });
-
-  it("omits -s for full autonomy (autonomous flow)", () => {
-    const argv = buildGooseCommand({
-      agent: makeAgent(),
-      task: "Implement the feature",
-      sessionId: "s-goose13",
-      interactive: false,
-    });
-    expect(argv).not.toContain("-s");
-  });
-
-  it("includes -s for interactive mode (manual gate)", () => {
-    const argv = buildGooseCommand({
-      agent: makeAgent(),
-      task: "Implement the feature",
-      sessionId: "s-goose14",
-      interactive: true,
-    });
-    expect(argv).toContain("-s");
   });
 });
 

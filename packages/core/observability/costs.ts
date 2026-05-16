@@ -10,25 +10,8 @@
 import type { TokenUsage } from "./pricing.js";
 import type { Session } from "../../types/index.js";
 import type { AppContext } from "../app.js";
-import { PricingRegistry } from "./pricing.js";
 import { resolveSessionExecutor } from "../executors/resolve.js";
 import { logWarn } from "./structured-log.js";
-
-const DEFAULT_MODEL = "sonnet";
-
-/**
- * Calculate cost in USD from token usage and model name.
- *
- * Takes `pricing` explicitly (supplied via the DI container's `pricing`
- * singleton) so tests can substitute a fresh registry and so the caller
- * sees `refreshFromRemote()` updates the real container received at boot.
- * Falls back to the default model when the supplied one is unknown.
- */
-export function calculateCost(pricing: PricingRegistry, usage: TokenUsage, model?: string | null): number {
-  const m = model ?? DEFAULT_MODEL;
-  const resolved = pricing.getPrice(m) ? m : DEFAULT_MODEL;
-  return pricing.calculateCost(resolved, usage);
-}
 
 /** Format cost as string: "$1.23" or "<$0.01" */
 export function formatCost(cost: number): string {

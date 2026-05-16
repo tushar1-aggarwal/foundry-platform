@@ -30,13 +30,11 @@ import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
 import { useApi } from "../hooks/useApi.js";
 import { useTriggers, useConnectors, useIntegrations, useTriggerSources } from "../hooks/useIntegrationQueries.js";
-import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 
 interface IntegrationsPageProps {
   view: string;
   onNavigate: (view: string) => void;
   readOnly: boolean;
-  daemonStatus?: DaemonStatus | null;
   initialTab?: string | null;
   onTabChange?: (tab: string | null) => void;
 }
@@ -449,14 +447,7 @@ function IntegrationsTab() {
 
 // ── Page shell ─────────────────────────────────────────────────────────────
 
-export function IntegrationsPage({
-  view,
-  onNavigate,
-  readOnly,
-  daemonStatus,
-  initialTab,
-  onTabChange,
-}: IntegrationsPageProps) {
+export function IntegrationsPage({ view, onNavigate, readOnly, initialTab, onTabChange }: IntegrationsPageProps) {
   const [subTab, setSubTab] = useState<SubTab>((initialTab as SubTab) || "triggers");
   const { data: triggers } = useTriggers();
   const { data: connectors } = useConnectors();
@@ -474,7 +465,7 @@ export function IntegrationsPage({
   }
 
   return (
-    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus}>
+    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly}>
       <PageShell title="Integrations" padded={false}>
         <ContentTabs tabs={tabs} activeTab={subTab} onTabChange={changeTab} ariaLabel="Integrations tabs" />
         <div className="flex-1 overflow-y-auto" data-testid="integrations-body">

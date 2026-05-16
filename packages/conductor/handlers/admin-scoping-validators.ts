@@ -29,7 +29,7 @@
  */
 
 import type { AppContext } from "../../core/app.js";
-import type { TenantContext } from "../../core/auth/context.js";
+import { actorIdentity, type TenantContext } from "../../core/auth/context.js";
 import type { ScopeKind } from "../../core/repositories/index.js";
 import { logError, logWarn } from "../../core/observability/structured-log.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
@@ -78,7 +78,7 @@ function reject(
   const log = severity === "error" ? logError : logWarn;
   log("scoping", `admin/scoping validation rejected: ${reason}`, {
     tenant_id: ctx.tenantId,
-    actor: ctx.userId,
+    actor: actorIdentity(ctx),
     ...fields,
   });
   throw new RpcError(message, code);

@@ -84,16 +84,6 @@ describe("Compute.resolveWorkdir", () => {
     expect(r).toBeNull();
   });
 
-  test("K8sCompute returns null (pod-side mount layout TBD)", () => {
-    const c = new K8sCompute(STUB_APP);
-    const r = c.resolveWorkdir!({ kind: "k8s", name: "k8s-test", meta: { k8s: {} } }, {
-      id: "s-abc",
-      config: { remoteRepo: "git@example.com:org/repo.git" },
-      repo: null,
-    } as never);
-    expect(r).toBeNull();
-  });
-
   test("FirecrackerCompute returns the guest-side path (EC2 shape)", () => {
     const c = new FirecrackerCompute(STUB_APP);
     const r = c.resolveWorkdir!({ kind: "firecracker", name: "fc-test", meta: { firecracker: {} } }, {

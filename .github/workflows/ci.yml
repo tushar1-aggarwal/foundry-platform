@@ -19,8 +19,7 @@ jobs:
     # status-poller assertions (Gemini/Codex/Goose autonomous-flow tests
     # all timed out at exactly 10000-10300ms). The tests don't have any
     # macOS-specific dependencies -- tmux is installable on both. Darwin
-    # coverage continues via build (darwin-*), install.sh matrix, and
-    # desktop-e2e (macos-latest).
+    # coverage continues via build (darwin-*) and the install.sh matrix.
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -155,6 +154,19 @@ jobs:
     name: e2e (hosted docs-flow + temporal)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # DISABLED: the docker stack this job stands up requires the
+    # temporal-worker image to build inside GHA, which in turn pulls
+    # session-manager-plugin from s3.amazonaws.com and AWS CLI from
+    # Docker Hub. Network conditions in GHA make this flaky and the
+    # corresponding production deploy (pai-risk-mlops-platform EKS) is
+    # K8s-only -- 0 EC2 targets -- so SSM-based port-forward is dead
+    # code at runtime. Re-enable when:
+    #   (a) an EC2 compute target is reintroduced to production, OR
+    #   (b) the temporal-worker image build is migrated to a pre-built
+    #       multi-arch image hosted in our ECR (no inline curl from S3).
+    # The hosted-mode dispatch arc is otherwise covered live via
+    # /ark-build-smoke-ec2 against the real cluster.
+    if: false
 
     steps:
       - uses: actions/checkout@v4
@@ -358,69 +370,3 @@ jobs:
         run: cd packages/e2e && bun install && bunx --bun playwright install chromium
       - name: Run Web UI E2E tests
         run: cd packages/e2e && bunx --bun playwright test
-
-  desktop-e2e:
-    name: desktop-e2e (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      # tmux is required by packages/core (session launcher imports it).
-      - name: Install tmux (macOS)
-        if: runner.os == 'macOS'
-        run: brew install tmux
-
-      - name: Install tmux + Electron runtime deps (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y tmux xvfb libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libxkbcommon0 libasound2t64 || \
-            sudo apt-get install -y tmux xvfb libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libxkbcommon0 libasound2
-
-      - name: Start tmux server
-        run: tmux new-session -d -s ci-init
-
-      - name: Install repo dependencies
-        run: bun install
-
-      # Build the React SPA the desktop shell serves. Without this,
-      # the Electron window loads a 404 and every test fails.
-      - name: Build web frontend
-        run: bun run build:web
-
-      - name: Install desktop dependencies
-        working-directory: packages/desktop
-        run: npm install
-
-      - name: Run Electron smoke tests (macOS)
-        if: runner.os == 'macOS'
-        working-directory: packages/desktop
-        run: npm test
-
-      - name: Run Electron smoke tests (Linux under xvfb)
-        if: runner.os == 'Linux'
-        working-directory: packages/desktop
-        run: xvfb-run -a npm test
-
-      - name: Upload test artifacts on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-e2e-${{ matrix.os }}
-          path: |
-            packages/desktop/test-results/
-            packages/desktop/playwright-report/
-          retention-days: 7

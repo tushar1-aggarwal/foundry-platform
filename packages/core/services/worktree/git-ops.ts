@@ -14,6 +14,7 @@ import { execFile } from "child_process";
 import type { AppContext } from "../../app.js";
 import { logDebug, logError, logInfo, logWarn } from "../../observability/structured-log.js";
 import { createWorktreePR } from "./pr.js";
+import { effectiveRepo } from "./effective-repo.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -257,7 +258,7 @@ export async function rebaseOntoBase(
   const session = await app.sessions.get(sessionId);
   if (!session) return { ok: false, message: `Session ${sessionId} not found` };
 
-  const repo = session.repo;
+  const repo = effectiveRepo(session);
   if (!repo) return { ok: false, message: "Session has no repo" };
 
   // Local-side cwd for the local-dispatch path. The remote dispatcher

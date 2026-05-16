@@ -30,7 +30,7 @@ test.afterAll(async () => {
 
 async function goToSchedules() {
   await page.click('nav button:has-text("Schedules")');
-  await expect(page.locator("h1")).toContainText("Schedules", { timeout: 10_000 });
+  await expect(page.locator("h1", { hasText: "Schedules" })).toBeVisible({ timeout: 10_000 });
 }
 
 async function clearSchedules() {

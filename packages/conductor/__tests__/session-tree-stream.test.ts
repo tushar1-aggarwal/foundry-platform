@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../../core/app.js";
+import { waitFor } from "../../core/__tests__/test-helpers.js";
 import { registerSessionHandlers } from "../handlers/session.js";
 import { Router, Subscription } from "../router.js";
 import { createRequest, type JsonRpcResponse } from "../../protocol/types.js";
@@ -73,8 +74,12 @@ describe("session/tree-stream", () => {
     // Emit a hook_status event for the child -- matches the SSE handler's filter.
     eventBus.emit("hook_status", childId, { data: { status: "completed" } });
 
-    // The handler debounces at 200ms; wait long enough to observe the push.
-    await Bun.sleep(350);
+    // Handler debounces at 200ms; poll until the push lands rather than
+    // waiting the full debounce-plus-margin every run.
+    await waitFor(() => notifications.some((n) => n.method === "session/tree-update"), {
+      timeout: 2000,
+      message: "session/tree-update notification never arrived",
+    });
 
     const treeUpdates = notifications.filter((n) => n.method === "session/tree-update");
     expect(treeUpdates.length).toBeGreaterThanOrEqual(1);
@@ -103,6 +108,10 @@ describe("session/tree-stream", () => {
     // Emit a bus event AFTER flush -- should not produce any notification.
     eventBus.emit("hook_status", childId, { data: { status: "running" } });
 
+    // Negative assertion: no positive condition to poll. The handler
+    // debounces at 200ms, so we must wait past that window before
+    // asserting the push didn't happen. Kept as a sleep -- shortening
+    // would race the debounce.
     await Bun.sleep(350);
 
     const treeUpdates = notifications.filter((n) => n.method === "session/tree-update");

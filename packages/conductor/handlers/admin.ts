@@ -22,7 +22,7 @@ import type { Router } from "../router.js";
 import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
-import { requireAdmin, requireSameTenant } from "../../core/auth/context.js";
+import { actorIdentity, requireAdmin, requireSameTenant } from "../../core/auth/context.js";
 import type { MembershipRole, TenantStatus } from "../../core/auth/index.js";
 
 export function registerAdminHandlers(router: Router, app: AppContext): void {
@@ -92,7 +92,7 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
     requireAdmin(ctx);
     const { id } = extract<{ id: string }>(p, ["id"]);
     requireSameTenant(ctx, id);
-    const ok = await tenants().delete(id, ctx.userId ?? null);
+    const ok = await tenants().delete(id, actorIdentity(ctx));
     return { ok };
   });
 
@@ -170,7 +170,7 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
     const existing = await teams().get(id);
     if (!existing) throw new RpcError(`Team '${id}' not found`, ErrorCodes.SESSION_NOT_FOUND);
     requireSameTenant(ctx, existing.tenant_id);
-    const ok = await teams().delete(id, ctx.userId ?? null);
+    const ok = await teams().delete(id, actorIdentity(ctx));
     return { ok };
   });
 
@@ -245,7 +245,7 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
     if (!resolvedUserId) {
       throw new RpcError("admin/team/members/remove requires user_id or email", ErrorCodes.INVALID_PARAMS);
     }
-    const ok = await teams().removeMember(team_id, resolvedUserId, ctx.userId ?? null);
+    const ok = await teams().removeMember(team_id, resolvedUserId, actorIdentity(ctx));
     return { ok };
   });
 
@@ -394,7 +394,7 @@ export function registerAdminHandlers(router: Router, app: AppContext): void {
         ErrorCodes.FORBIDDEN,
       );
     }
-    const ok = await users().delete(id, ctx.userId ?? null);
+    const ok = await users().delete(id, actorIdentity(ctx));
     return { ok };
   });
 

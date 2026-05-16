@@ -96,6 +96,33 @@ describe("auth/whoami", () => {
     expect(ident.role).toBe("member");
   });
 
+  // Regression: api-key callers have `userId === "ak-*"` and the real
+  // user id sits on `scopingUserId`. The whoami response MUST resolve
+  // to the real user (id + email), otherwise the dashboard's identity
+  // widget shows the api-key sentinel as the logged-in user. Visible
+  // to every api-key-authed user; priority 1 fix from skill-hub review.
+  it("api-key caller: returns the real user identity, not the ak-* sentinel", async () => {
+    const tenant = await app.tenants.create({ slug: "ocl-whoami-key", name: "OCL-key" });
+    const team = await app.teams.create({ tenant_id: tenant.id, slug: "agentic-whoami-key", name: "Agentic-key" });
+    const user = await app.users.create({ email: "bob@paytm.com", name: "Bob" });
+    await app.teams.addMember(team.id, user.id, "member");
+
+    const apiKeyCtx: TenantContext = {
+      tenantId: tenant.id,
+      userId: "ak-deadbeef",
+      role: "member",
+      isAdmin: false,
+      scopingUserId: user.id,
+      teamChain: [team.id],
+    } as TenantContext;
+    const res = (await dispatchAs(apiKeyCtx)) as JsonRpcResponse;
+    const ident = (res.result as WhoAmIResult).identity!;
+    expect(ident.userId).toBe(user.id);
+    expect(ident.email).toBe("bob@paytm.com");
+    expect(ident.tenantId).toBe(tenant.id);
+    expect(ident.role).toBe("member");
+  });
+
   it("returns email=null when the user row is missing (defensive: shouldn't happen, but no crash)", async () => {
     const ghostCtx: TenantContext = {
       tenantId: "t-ghost",

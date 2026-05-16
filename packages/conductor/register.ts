@@ -40,6 +40,7 @@ import { registerAdminPolicyHandlers } from "./handlers/admin-policy.js";
 import { registerAdminApiKeyHandlers } from "./handlers/admin-apikey.js";
 // --- END agent-B ---
 import { registerAdminScopingHandlers } from "./handlers/admin-scoping.js";
+import { registerSkillHandlers } from "./handlers/skill.js";
 // --- BEGIN agent-C: resource-crud ---
 import { registerResourceCrudHandlers } from "./handlers/resource-crud.js";
 // --- END agent-C ---
@@ -107,6 +108,11 @@ export function registerSharedHandlers(router: Router, app: AppContext): void {
   registerAdminApiKeyHandlers(router, app);
   // --- END agent-B ---
   registerAdminScopingHandlers(router, app);
+
+  // Skill Hub - tenant-scoped CRUD-with-history, distinct from the
+  // pre-existing skill/* surface (which owns the agent-skill-injection
+  // surface in resource.ts). Lives under skillhub/* per §4 of the RFC.
+  registerSkillHandlers(router, app);
 
   // --- BEGIN agent-C: resource-crud ---
   // Must run AFTER registerResourceHandlers so the YAML-aware variants win

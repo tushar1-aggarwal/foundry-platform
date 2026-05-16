@@ -24,6 +24,8 @@ import {
   FlowStateRepository,
   LedgerRepository,
   ScopingOverrideRepository,
+  SkillRepository,
+  SkillVersionRepository,
 } from "../repositories/index.js";
 import { ScopingResolver } from "../scoping/index.js";
 import {
@@ -35,7 +37,7 @@ import {
   AuthSessionManager,
   LoginManager,
 } from "../auth/index.js";
-import { TenantClaudeAuthManager } from "../auth/tenant-claude-auth.js";
+import { TenantClaudeAuthRepository } from "../repositories/tenant_claude_auth.js";
 import {
   FileFlowStore,
   FileSkillStore,
@@ -45,7 +47,7 @@ import {
   EphemeralFlowStore,
 } from "../stores/index.js";
 import type { ModelStore } from "../stores/model-store.js";
-import { DbResourceStore, initResourceDefinitionsTable } from "../stores/db-resource-store.js";
+import { DbResourceStore } from "../stores/db-resource-store.js";
 import { WorkspaceStore } from "../workspace/store.js";
 
 /**
@@ -121,7 +123,7 @@ export function registerRepositories(container: AppContainer): void {
     tenants: asFunction((c: { db: DatabaseAdapter }) => new TenantManager(c.db), { lifetime: Lifetime.SINGLETON }),
     teams: asFunction((c: { db: DatabaseAdapter }) => new TeamManager(c.db), { lifetime: Lifetime.SINGLETON }),
     users: asFunction((c: { db: DatabaseAdapter }) => new UserManager(c.db), { lifetime: Lifetime.SINGLETON }),
-    tenantClaudeAuth: asFunction((c: { db: DatabaseAdapter }) => new TenantClaudeAuthManager(c.db), {
+    tenantClaudeAuth: asFunction((c: { db: DatabaseAdapter }) => new TenantClaudeAuthRepository(c.db), {
       lifetime: Lifetime.SINGLETON,
     }),
     tenantPolicyManager: asFunction((c: { db: DatabaseAdapter }) => new TenantPolicyManager(c.db), {
@@ -162,6 +164,16 @@ export function registerRepositories(container: AppContainer): void {
       (c: { scopingOverrides: ScopingOverrideRepository }) => new ScopingResolver(c.scopingOverrides),
       { lifetime: Lifetime.SINGLETON },
     ),
+
+    // Skill Hub — tenant-scoped registry of user / team / tenant skills.
+    // Distinct from `skills` (the builtin file-backed skill resource store)
+    // which lives in registerResourceStores below. Two separate concerns:
+    // builtin skills ship with Ark and are loaded from YAML/Markdown;
+    // skillHub stores the CRUD-with-history surface users push to from CLI.
+    skillHub: asFunction((c: { db: DatabaseAdapter }) => new SkillRepository(c.db), { lifetime: Lifetime.SINGLETON }),
+    skillVersions: asFunction((c: { db: DatabaseAdapter }) => new SkillVersionRepository(c.db), {
+      lifetime: Lifetime.SINGLETON,
+    }),
   });
 }
 
@@ -209,7 +221,6 @@ export function registerResourceStores(container: AppContainer): void {
 
 function makeFlowStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
   if (mode.kind === "hosted") {
-    initResourceDefinitionsTable(db);
     return new EphemeralFlowStore(new DbResourceStore(db, "flow", { stages: [] }));
   }
   return new EphemeralFlowStore(
@@ -222,7 +233,6 @@ function makeFlowStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
 
 function makeSkillStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
   if (mode.kind === "hosted") {
-    initResourceDefinitionsTable(db);
     return new DbResourceStore(db, "skill", { description: "", content: "" });
   }
   return new FileSkillStore({
@@ -233,7 +243,6 @@ function makeSkillStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
 
 function makeAgentStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode, models: ModelStore) {
   if (mode.kind === "hosted") {
-    initResourceDefinitionsTable(db);
     // `model` default comes from the catalog (alias "sonnet") rather than a
     // hardcoded string. A fresh install with an empty catalog throws here
     // by design -- a missing catalog is a broken install, not a data state
@@ -260,7 +269,6 @@ function makeAgentStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode, m
 
 function makeRuntimeStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
   if (mode.kind === "hosted") {
-    initResourceDefinitionsTable(db);
     return new DbResourceStore(db, "runtime", { description: "", type: "cli-agent", command: [] });
   }
   return new FileRuntimeStore({

@@ -4,6 +4,7 @@ import { Router } from "../router.js";
 import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
+import { actorIdentity } from "../../core/auth/context.js";
 import { resolveTenantApp } from "./scope-helpers.js";
 import { eventBus } from "../../core/hooks.js";
 import { isRepoUrl } from "../../core/repo-url.js";
@@ -37,12 +38,16 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const scoped = resolveTenantApp(app, ctx);
 
     // Default `user_id` to the calling user's real users.id so the
-    // session row records who created it. Skip when the caller is the
-    // local-mode synthetic admin (`local`) or an API-key sentinel
-    // (starts with `ak-`) -- those don't point to a users row, so
-    // writing them would create a misleading audit trail.
-    if (!opts.user_id && ctx.userId && ctx.userId !== "local" && !ctx.userId.startsWith("ak-")) {
-      opts.user_id = ctx.userId;
+    // session row records who created it. `actorIdentity` prefers
+    // `scopingUserId` (set on cookie auth AND on api-key auth when the
+    // key has a bound user), so an api-key-spawned session correctly
+    // attributes to the human behind the key instead of being orphaned.
+    // The result may still be a non-user sentinel ("local", "ak-...")
+    // for callers with no bound user; skip those so the audit row only
+    // points to real users.id values.
+    const realActor = actorIdentity(ctx);
+    if (!opts.user_id && realActor && realActor !== "local" && !realActor.startsWith("ak-")) {
+      opts.user_id = realActor;
     }
 
     // Flow-level requires_repo gate (#416). Code-modifying flows declare
@@ -75,50 +80,28 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     }
 
     // Phase 1 scoping: resolve `runtime` override and stash a hint on
-    // session.config for dispatch. See commit body for full reasoning;
-    // load-bearing decisions captured here:
+    // session.config for dispatch. scoping_overrides rows are PREFERENCES
+    // (defaults), not POLICY -- a user-level row is a saved `--runtime`,
+    // team / tenant rows are the same one scope outward. Phase 2 may add
+    // a separate `policy_lock` mechanism if hard mandates are needed.
     //
-    // (1) Preference, not policy. scoping_overrides rows are READ as
-    //     defaults that fill in when the caller didn't choose. A
-    //     user-level row is functionally a "saved --runtime"; team
-    //     and tenant rows are the same shape one scope outward. They
-    //     are NOT mandates. Caller-explicit therefore wins over rows
-    //     at every scope -- the most-explicit/most-recent signal is
-    //     authoritative. (Considered: tenant=policy + user=preference
-    //     and all-scopes=policy; both rejected because they make
-    //     user-level rows philosophically awkward and bifurcate the
-    //     mental model. Phase 2 may add a separate `policy_lock`
-    //     mechanism if hard mandates are needed.)
+    // Fail-loud on unknown runtime: an override pointing at an
+    // unregistered runtime throws INVALID_PARAMS so a misconfigured row
+    // surfaces immediately instead of silently dropping. Phase 2 adds
+    // admin write-time validation so the bad row never lands.
     //
-    // (2) Caller-explicit short-circuits the resolver. When opts.runtime
-    //     is set we do NOT call resolve() at all. Validation cost saved
-    //     and the resolver cannot reject a request the caller already
-    //     answered. A bad scoping_overrides row will still surface --
-    //     just on the next default-using call rather than this one.
-    //
-    // (3) Fail-loud on unknown runtime. If the resolved override does
-    //     NOT match a registered runtime, throw INVALID_PARAMS rather
-    //     than logDebug + drop. Same fail-closed posture as the
-    //     team-chain cycle defense; debug logs are off in default
-    //     prod log levels and would hide the misconfigured row from
-    //     both the caller and ops. Phase 2 adds admin write-time
-    //     validation so the bad row never lands in the first place.
-    //
-    // (4) Agent-side opt-out (`runtime_locked: true` in agent YAML)
-    //     is enforced at DISPATCH, not here -- the agent isn't
-    //     resolved at session/start. See applyScopingRuntimeHint().
-    if (!opts.runtime) {
-      const runtimeOverride = await app.scoping.resolve<string>(ctx, "runtime");
-      if (runtimeOverride !== null) {
-        if (app.runtimes.get(runtimeOverride) === null) {
-          throw new RpcError(
-            `Runtime override '${runtimeOverride}' is not a registered runtime ` +
-              `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
-            ErrorCodes.INVALID_PARAMS,
-          );
-        }
-        opts.config = { ...(opts.config ?? {}), scoping_runtime_hint: runtimeOverride };
+    // Agent-side opt-out (`runtime_locked: true`) is enforced at DISPATCH
+    // -- the agent isn't resolved yet here. See applyScopingRuntimeHint().
+    const runtimeOverride = await app.scoping.resolve<string>(ctx, "runtime");
+    if (runtimeOverride !== null) {
+      if (app.runtimes.get(runtimeOverride) === null) {
+        throw new RpcError(
+          `Runtime override '${runtimeOverride}' is not a registered runtime ` +
+            `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
+          ErrorCodes.INVALID_PARAMS,
+        );
       }
+      opts.config = { ...(opts.config ?? {}), scoping_runtime_hint: runtimeOverride };
     }
 
     // Phase 1 scoping: resolve `model` override. Same shape and
@@ -649,62 +632,20 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   });
 
   // ── session/kill -- hard terminate, no grace ──────────────────────────────
-  //
-  // Goes straight to SIGKILL (skips the SIGTERM grace that session/stop uses).
-  // Marks session `failed` with reason `killed` and runs D2 cleanup
-  // synchronously so post-conditions are reliable for the caller.
 
   router.handle("session/kill", async (params, notify, ctx) => {
     const { sessionId } = extract<{ sessionId: string }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
 
-    const s = await scoped.sessions.get(sessionId);
-    if (!s) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
-
-    const terminalStatuses = ["completed", "failed", "archived", "stopped"];
-    if (terminalStatuses.includes(s.status)) {
-      return { ok: false, message: `session already terminal (status=${s.status})` };
-    }
-
-    // Find the executor handle and call terminate (SIGKILL-first).
-    const handle = s.session_id;
-    if (handle) {
-      const { getExecutor } = await import("../../core/executor.js");
-      const executorName = (s.config as Record<string, unknown> | null)?.launch_executor as string | undefined;
-      const executor = executorName ? getExecutor(executorName) : undefined;
-
-      if (executor) {
-        if (executor.terminate) {
-          await executor.terminate(handle);
-        } else {
-          await executor.kill(handle);
-        }
-      }
-    }
-
-    // Mark session failed with reason "killed".
-    await scoped.sessions.update(sessionId, {
-      status: "failed",
-      error: "killed",
-      session_id: null,
-    } as Partial<import("../../types/index.js").Session>);
-
-    await scoped.events.log(sessionId, "session_killed", {
-      actor: "user",
-      data: { handle: handle ?? null },
-    });
-
-    // Run D2 cleanup synchronously so the caller can rely on post-conditions.
-    const updated = (await scoped.sessions.get(sessionId))!;
-    if (updated) {
-      const { cleanupSession } = await import("../../core/services/session/cleanup.js");
-      await cleanupSession(scoped, updated);
+    const result = await scoped.sessionLifecycle.kill(sessionId);
+    if (result.ok === false && result.message.includes("not found")) {
+      throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
 
     const final = await scoped.sessions.get(sessionId);
     if (final) notify("session/updated", { session: final });
 
-    return { ok: true, terminated_at: Date.now(), cleaned_up: true };
+    return result;
   });
 
   router.handle("session/archive", async (params, notify, ctx) => {

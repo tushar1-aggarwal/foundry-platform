@@ -12,7 +12,6 @@ import { Toast } from "./components/Toast.js";
 import { CommandPalette, type CommandItem } from "./components/ui/CommandPalette.js";
 import { PageFallback } from "./components/ui/PageFallback.js";
 import { RouteErrorBoundary } from "./components/ui/ErrorBoundary.js";
-import { useDaemonStatus } from "./hooks/useDaemonStatus.js";
 import { useHashRouter } from "./hooks/useHashRouter.js";
 
 // Pages are lazy-loaded so each one ships as its own chunk. Heavy libraries
@@ -54,7 +53,6 @@ function App() {
   // re-probe and flip status.
   const { status, refresh } = useAuth();
   const readOnly = READ_ONLY;
-  const daemonStatus = useDaemonStatus();
 
   // `useCallback` so this prop's identity is stable across App re-renders
   // (daemon-status polling, auth refresh, theme toggles, etc.). Pages that
@@ -138,7 +136,6 @@ function App() {
               onNavigate={onNavigate}
               readOnly={readOnly}
               onToast={showToast}
-              daemonStatus={daemonStatus}
               initialSelectedId={subId}
               onSelectedChange={setSubId}
               initialTab={tab}
@@ -150,22 +147,18 @@ function App() {
               view={view}
               onNavigate={onNavigate}
               readOnly={readOnly}
-              daemonStatus={daemonStatus}
               initialSelectedId={subId}
               onSelectedChange={setSubId}
               tab={tab}
               onTabChange={setTab}
             />
           )}
-          {view === "tools" && (
-            <ToolsPage view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus} />
-          )}
+          {view === "tools" && <ToolsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />}
           {view === "flows" && (
             <FlowsPage
               view={view}
               onNavigate={onNavigate}
               readOnly={readOnly}
-              daemonStatus={daemonStatus}
               initialSelectedId={subId}
               onSelectedChange={setSubId}
             />
@@ -175,43 +168,27 @@ function App() {
               view={view}
               onNavigate={onNavigate}
               readOnly={readOnly}
-              daemonStatus={daemonStatus}
               initialSelectedId={subId}
               onSelectedChange={setSubId}
               onToast={showToast}
             />
           )}
-          {view === "schedules" && (
-            <SchedulesPage view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus} />
-          )}
-          {view === "costs" && (
-            <CostsPage view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus} />
-          )}
+          {view === "schedules" && <SchedulesPage view={view} onNavigate={onNavigate} readOnly={readOnly} />}
+          {view === "costs" && <CostsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />}
           {view === "integrations" && (
             <IntegrationsPage
               view={view}
               onNavigate={onNavigate}
               readOnly={readOnly}
-              daemonStatus={daemonStatus}
               initialTab={subId}
               onTabChange={setSubId}
             />
           )}
-          {view === "secrets" && (
-            <SecretsPage view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus} />
-          )}
+          {view === "secrets" && <SecretsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />}
           {view === "admin" && (
-            <AdminPage
-              view={view}
-              onNavigate={onNavigate}
-              readOnly={readOnly}
-              daemonStatus={daemonStatus}
-              onToast={showToast}
-            />
+            <AdminPage view={view} onNavigate={onNavigate} readOnly={readOnly} onToast={showToast} />
           )}
-          {view === "settings" && (
-            <SettingsPage view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus} />
-          )}
+          {view === "settings" && <SettingsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />}
         </Suspense>
       </RouteErrorBoundary>
       <CommandPalette

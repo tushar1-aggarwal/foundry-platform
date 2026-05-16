@@ -29,14 +29,14 @@ test.afterAll(async () => {
 
 async function goToFlows() {
   await page.click('nav button:has-text("Flows")');
-  await expect(page.locator("h1")).toContainText("Flows");
+  await expect(page.locator("h1", { hasText: "Flows" })).toBeVisible();
 }
 
 // -- Flows page rendering -----------------------------------------------------
 
 test("flows page loads with title and flow list", async () => {
   await goToFlows();
-  await expect(page.locator("h1")).toContainText("Flows");
+  await expect(page.locator("h1", { hasText: "Flows" })).toBeVisible();
 });
 
 test("flow/list RPC returns at least one flow", async () => {
@@ -133,6 +133,6 @@ test("clicking a flow in the UI renders pipeline viewer or stage list", async ()
     // either a PipelineViewer (SVG/canvas) or stage cards
     // We verify by checking that the page didn't crash and
     // the flows content area is still rendered
-    await expect(page.locator("h1")).toContainText("Flows");
+    await expect(page.locator("h1", { hasText: "Flows" })).toBeVisible();
   }
 });

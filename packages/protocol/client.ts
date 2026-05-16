@@ -46,6 +46,7 @@ import { TicketsClient } from "./clients/tickets.js";
 import { ObservabilityClient } from "./clients/observability.js";
 import { SystemClient } from "./clients/system.js";
 import { InfraClient } from "./clients/infra.js";
+import { SkillHubClient } from "./clients/skillhub.js";
 
 // Re-exports so callers that previously imported these types directly from
 // `protocol/client.js` keep compiling unchanged.
@@ -84,7 +85,8 @@ export interface ArkClient
     TicketsClient,
     ObservabilityClient,
     SystemClient,
-    InfraClient {}
+    InfraClient,
+    SkillHubClient {}
 
 export class ArkClient {
   private transport: Transport;
@@ -246,4 +248,5 @@ applyMixins(ArkClient, [
   ObservabilityClient,
   SystemClient,
   InfraClient,
+  SkillHubClient,
 ]);

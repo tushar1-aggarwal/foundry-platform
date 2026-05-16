@@ -8,6 +8,9 @@
 # also misbehaves under Bun on Apple Silicon (workflow tasks always TIMED_OUT
 # at 10s). Running the worker entrypoint on Node sidesteps this entirely;
 # the rest of Ark stays on Bun.
+# Pull AWS CLI v2 from Docker Hub (Zscaler-trusted; avoids awscli.amazonaws.com block).
+FROM amazon/aws-cli:latest AS aws-cli-src
+
 FROM oven/bun:1.3.13-slim
 WORKDIR /app
 # Install Node + npm from Debian's repo (Node 20 LTS, which is fine -- the
@@ -18,30 +21,46 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g tsx
 
-# AWS CLI v2 + session-manager-plugin. Required by EC2Compute.setupTransport:
-# packages/core/compute/ec2/ssm.ts:24-30 documents these as hard prereqs.
-# Supports both amd64 and arm64 (EKS nodes are amd64; Apple Silicon local builds need arm64).
-RUN ARCH="$(uname -m)" \
-  && if [ "$ARCH" = "aarch64" ]; then \
-       AWS_URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"; \
-       SMP_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_arm64/session-manager-plugin.deb"; \
-     else \
-       AWS_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"; \
-       SMP_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb"; \
-     fi \
-  && curl -fsSL "$AWS_URL" -o /tmp/awscli.zip \
-  && unzip -q /tmp/awscli.zip -d /tmp \
-  && /tmp/aws/install \
-  && rm -rf /tmp/awscli.zip /tmp/aws \
-  && curl -fsSL "$SMP_URL" -o /tmp/smp.deb \
-  && dpkg -i /tmp/smp.deb \
-  && rm /tmp/smp.deb
+# AWS CLI v2 -- copied from Docker Hub image to avoid Zscaler-blocked direct download.
+COPY --from=aws-cli-src /usr/local/aws-cli /usr/local/aws-cli
+RUN ln -sf /usr/local/aws-cli/v2/current/bin/aws /usr/local/bin/aws \
+    && ln -sf /usr/local/aws-cli/v2/current/bin/aws_completer /usr/local/bin/aws_completer
+
+# session-manager-plugin -- fetched directly from AWS's S3 bucket. Required only
+# by the EC2 compute backend (`packages/core/compute/ec2/*`) for SSM-based
+# port-forwarding into private-VPC instances; unused on the current K8s-only
+# production deploy but kept here so the image stays compatible when an EC2
+# target is added.
+#
+# Network note: s3.amazonaws.com is reachable from GitHub-hosted CI runners
+# directly. Developer laptops behind Zscaler may see this download fail with
+# a TLS-MITM error; fix on the laptop side by trusting the Zscaler root or
+# building with the docker daemon network configured to use a proxy that
+# bypasses MITM for amazonaws.com hosts. The previous .tmp/-pre-stage shape
+# was removed because it broke CI for everyone.
+ARG TARGETARCH
+RUN set -eux; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) SMP_URL=https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb ;; \
+      arm64) SMP_URL=https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_arm64/session-manager-plugin.deb ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/smp.deb "$SMP_URL"; \
+    dpkg -i /tmp/smp.deb; \
+    rm /tmp/smp.deb
 # Pull kubectl from a multi-arch image (Docker Hub is Zscaler-trusted, dl.k8s.io is MITM-blocked).
 COPY --from=bitnami/kubectl:latest /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/kubectl
 COPY package.json bun.lock* ./
 # bun install is fast and we already have the cached layer from previous builds.
 # The worker doesn't actually need bun:sqlite at runtime (Postgres-only mode).
 RUN bun install --frozen-lockfile --ignore-scripts
+# The Anthropic Agent SDK ships per-platform native `claude` binaries as
+# optional deps. bun-install pulls BOTH the glibc and musl variants for the
+# target arch. On this glibc base the SDK's libc detection sometimes picks
+# the musl variant first and fails with "claude binary not found" (the file
+# exists but its dynamic loader is missing). Drop the musl variants so the
+# detector only has one option.
+RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-*-musl
 COPY . .
 RUN chmod +x scripts/temporal-worker-entrypoint.sh /app/ark && ln -sf /app/ark /usr/local/bin/ark
 CMD ["scripts/temporal-worker-entrypoint.sh"]

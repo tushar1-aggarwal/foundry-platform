@@ -141,7 +141,7 @@ async function goToCostsFresh(): Promise<void> {
   await page.goto(ws.baseUrl);
   await page.waitForSelector("nav", { timeout: 30_000 });
   await page.click('nav button:has-text("Costs")');
-  await expect(page.locator("h1")).toContainText("Costs");
+  await expect(page.locator("h1", { hasText: "Costs" })).toBeVisible();
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -190,8 +190,10 @@ test("3 usage records aggregate to the correct total via RPC and DOM", async () 
   await goToCostsFresh();
   // Hero renders fmtCost(total) = "$4.50"
   await expect(page.locator("text=$4.50").first()).toBeVisible({ timeout: 10_000 });
-  // The "(N sessions with usage data)" label reflects the seeded row count.
-  await expect(page.locator("text=/3 sessions with usage data/i")).toBeVisible();
+  // The KPI delta row under "Total spend" shows "{N} sessions" -- this is
+  // the populated-state CostsView (the old "(N sessions with usage data)"
+  // wording was replaced when the dashboard was rebuilt).
+  await expect(page.locator("text=/3 sessions/i").first()).toBeVisible();
   // And at least one seeded session summary renders in the left-pane list.
   await expect(page.locator("body")).toContainText("first task");
   await expect(page.locator("body")).toContainText("second task");

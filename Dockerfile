@@ -20,6 +20,10 @@ COPY package.json bun.lock ./
 # releases, which Zscaler MITM corrupts during corporate-network builds.
 # better-sqlite3 is never imported in src; skipping postinstall is safe.
 RUN bun install --frozen-lockfile --production --ignore-scripts
+# Drop the musl variants of the Claude Code native binary -- this image
+# is glibc-based; keeping the musl variant causes the Agent SDK's libc
+# detector to pick a binary whose dynamic loader does not exist here.
+RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-*-musl
 
 # ── Stage 2: Build ───────────────────────────────────────────────────────────
 #

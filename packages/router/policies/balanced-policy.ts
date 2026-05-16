@@ -9,12 +9,10 @@
 import type { ModelConfig, RouterConfig } from "../types.js";
 import type { ClassificationResult } from "../classifier.js";
 import { cheapest, highestQuality, type PolicySelector } from "./policy-selector.js";
-import { defaultTierEscalator, type Tier, type TierEscalator } from "./tier-escalator.js";
+import { higherTiers, type Tier } from "./tier-escalator.js";
 
 export class BalancedPolicy implements PolicySelector {
   readonly name = "balanced";
-
-  constructor(private escalator: TierEscalator = defaultTierEscalator) {}
 
   select(candidates: ModelConfig[], classification: ClassificationResult, cfg: RouterConfig): ModelConfig {
     const targetTier = pickTargetTier(classification.score);
@@ -25,7 +23,7 @@ export class BalancedPolicy implements PolicySelector {
       return cheapest(inTier);
     }
 
-    for (const tier of this.escalator.higherTiers(targetTier)) {
+    for (const tier of higherTiers(targetTier)) {
       const upgraded = meetsFloor.filter((m) => m.tier === tier);
       if (upgraded.length > 0) {
         return cheapest(upgraded);

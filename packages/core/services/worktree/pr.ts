@@ -34,8 +34,19 @@ import type { Compute as ComputeImpl, ComputeHandle } from "../../compute/types.
 import { loadRepoConfig } from "../../repo-config.js";
 import { logDebug, logInfo, logWarn } from "../../observability/structured-log.js";
 import { rebaseOntoBase } from "./git-ops.js";
+import { effectiveRepo } from "./effective-repo.js";
 import { createPullRequest, mergePullRequest, parseGithubOwnerRepoFromUrl, type GithubDeps } from "../github/rest.js";
-import { buildAuthedHttpsUrl, resolveBitbucketToken, resolveGithubToken } from "../git/auth-url.js";
+import {
+  buildAuthedHttpsUrl,
+  resolveBitbucketToken,
+  resolveBitbucketUsername,
+  resolveGithubToken,
+} from "../git/auth-url.js";
+import {
+  createBitbucketPullRequest,
+  parseBitbucketWorkspaceRepoFromUrl,
+  type BitbucketDeps,
+} from "../bitbucket/rest.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -87,7 +98,7 @@ interface GitResult {
  * else (local, missing target, missing compute) falls back to the local
  * `execFileAsync` path.
  */
-async function resolveRemoteRouting(
+export async function resolveRemoteRouting(
   app: AppContext,
   session: Session,
 ): Promise<{ remote: false } | { remote: true; client: ArkdClient; remoteWorkdir: string }> {
@@ -95,11 +106,23 @@ async function resolveRemoteRouting(
   if (!target || !compute) return { remote: false };
   if (target.compute.capabilities.supportsWorktree) return { remote: false };
 
-  const handle = target.compute.attachExistingHandle?.({
-    name: compute.name,
-    status: compute.status,
-    config: (compute.config ?? {}) as Record<string, unknown>,
-  });
+  // Prefer the per-session provisioned handle on session.config.compute_handle.
+  // attachExistingHandle returns null when session.compute_name points at a
+  // template row (no pod_name in compute.config) -- which is the common shape
+  // for hosted-mode sessions whose compute_name was never rewritten to the
+  // per-session clone name. Without this fallback, routing collapses to
+  // local, localPushDir becomes effectiveRepo() (the URL), and `git -C <url>`
+  // fails with "cannot change to '<url>': No such file or directory".
+  // See s-5htnih1l2d (2026-05-15). Mirrors claude-code executor's pattern.
+  const persistedHandle = (session.config as { compute_handle?: ComputeHandle } | null | undefined)?.compute_handle;
+  const handle =
+    target.compute.attachExistingHandle?.({
+      name: compute.name,
+      status: compute.status,
+      config: (compute.config ?? {}) as Record<string, unknown>,
+    }) ??
+    persistedHandle ??
+    null;
   if (!handle) return { remote: false };
 
   const remoteWorkdir = resolveRemoteWorkdir(target.compute, handle, session);
@@ -332,7 +355,7 @@ export async function createWorktreePR(
   const session = await app.sessions.get(sessionId);
   if (!session) return { ok: false, message: `Session ${sessionId} not found` };
 
-  const repo = session.repo;
+  const repo = effectiveRepo(session);
   if (!repo) return { ok: false, message: "Session has no repo" };
 
   // Determine which side the agent worked on.
@@ -613,10 +636,62 @@ export async function createWorktreePR(
         // mark the action successful without a real PR URL.
         prUrl = parseCreatePrUrl(pushStderr) ?? fallbackBranchUrl(host, originUrl, branch) ?? undefined;
       }
+    } else if (host === "bitbucket") {
+      // REST-API path FIRST -- same shape as the GitHub branch above.
+      // Bitbucket Cloud's POST /2.0/repositories/<workspace>/<repo>/pullrequests
+      // creates a real PR object (vs the push-only deeplink the degraded
+      // path below produces, which leaves no PR until a human clicks
+      // through the Bitbucket UI). Auth is HTTP Basic with username:token.
+      const [bbToken, bbUser] = await Promise.all([
+        resolveBitbucketToken(app, session),
+        resolveBitbucketUsername(app, session),
+      ]);
+      const wsRepo = parseBitbucketWorkspaceRepoFromUrl(originUrl);
+      if (bbToken && bbUser && wsRepo) {
+        const restDeps: BitbucketDeps = { username: bbUser, token: bbToken };
+        const result = await createBitbucketPullRequest(
+          {
+            workspace: wsRepo.workspace,
+            repo: wsRepo.repo,
+            branch,
+            base,
+            title,
+            body,
+            draft: opts?.draft,
+          },
+          restDeps,
+        );
+        if (result.ok && result.pr_url) {
+          prUrl = result.pr_url;
+          if (result.existed) {
+            logInfo("session", `createWorktreePR: REST API found existing Bitbucket PR for ${sessionId}: ${prUrl}`);
+          }
+        } else if (result.ok && result.existed) {
+          // Duplicate detected but Bitbucket didn't return a URL with the
+          // duplicate-error payload. Fall through to the stderr-parsed
+          // URL or the branch-URL fallback so we at least record a deeplink.
+          prUrl = parseCreatePrUrl(pushStderr) ?? fallbackBranchUrl(host, originUrl, branch) ?? undefined;
+        } else {
+          // REST failed loudly. Surface the error and let the caller mark
+          // the action failed -- consistent with the GitHub branch.
+          logWarn(
+            "session",
+            `createWorktreePR: REST createBitbucketPullRequest failed for ${sessionId}: ${result.message ?? "(no message)"}`,
+          );
+          return {
+            ok: false,
+            message: `create_pr failed via Bitbucket REST API: ${result.message ?? "unknown error"}`,
+          };
+        }
+      } else {
+        // Token / username / parseable URL not all available -- fall back
+        // to the legacy push-only path. The branch was still pushed
+        // successfully above, so the operator can open the PR manually.
+        prUrl = parseCreatePrUrl(pushStderr) ?? fallbackBranchUrl(host, originUrl, branch) ?? undefined;
+      }
     } else {
-      // Bitbucket / GitLab / unknown: push-only path. Bitbucket's git
-      // server emits a Create-PR URL on push stderr; GitLab does the same.
-      // Unknown hosts fall back to the branch URL.
+      // GitLab / unknown host: no REST path implemented. Push-only --
+      // stderr URL if the server emitted one, else the branch URL.
       prUrl = parseCreatePrUrl(pushStderr) ?? fallbackBranchUrl(host, originUrl, branch) ?? undefined;
     }
 
@@ -692,7 +767,7 @@ export async function mergeWorktreePR(
   const prUrl = session.pr_url;
   if (!prUrl) return { ok: false, message: "Session has no PR URL -- run create_pr first" };
 
-  const repo = session.repo;
+  const repo = effectiveRepo(session);
   if (!repo) return { ok: false, message: "Session has no repo" };
 
   // Refuse to drive non-GitHub hosts. `gh pr merge` only knows GitHub --

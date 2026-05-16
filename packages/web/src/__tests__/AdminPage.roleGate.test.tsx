@@ -18,11 +18,16 @@
 import { describe, test, expect } from "bun:test";
 import React from "react";
 import { renderToString } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockTransport } from "../transport/MockTransport.js";
 import { TransportProvider } from "../transport/TransportContext.js";
 import { AuthContext, type AuthContextValue } from "../auth/AuthContext.js";
 import { AdminPage } from "../pages/AdminPage.js";
 import type { Identity } from "../auth/whoami.js";
+
+function freshQueryClient(): QueryClient {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
 
 function makeAuthContext(identity: Identity | null): AuthContextValue {
   return {
@@ -40,9 +45,11 @@ function mountAnonymous(): string {
     .register("admin/user/list", () => ({ users: [] }))
     .register("admin/scoping/list", () => ({ rows: [], truncated: false }));
   return renderToString(
-    <TransportProvider transport={transport}>
-      <AdminPage view="admin" onNavigate={() => {}} readOnly={false} />
-    </TransportProvider>,
+    <QueryClientProvider client={freshQueryClient()}>
+      <TransportProvider transport={transport}>
+        <AdminPage view="admin" onNavigate={() => {}} readOnly={false} />
+      </TransportProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -54,11 +61,13 @@ function mountWithRole(role: Identity["role"]): string {
     .register("admin/scoping/list", () => ({ rows: [], truncated: false }));
   const identity: Identity = { userId: "u-test", email: "t@p.com", tenantId: "default", role };
   return renderToString(
-    <TransportProvider transport={transport}>
-      <AuthContext.Provider value={makeAuthContext(identity)}>
-        <AdminPage view="admin" onNavigate={() => {}} readOnly={false} />
-      </AuthContext.Provider>
-    </TransportProvider>,
+    <QueryClientProvider client={freshQueryClient()}>
+      <TransportProvider transport={transport}>
+        <AuthContext.Provider value={makeAuthContext(identity)}>
+          <AdminPage view="admin" onNavigate={() => {}} readOnly={false} />
+        </AuthContext.Provider>
+      </TransportProvider>
+    </QueryClientProvider>,
   );
 }
 

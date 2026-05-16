@@ -43,6 +43,11 @@ task_*/
 # session worktrees, recordings). Per-machine; never committed.
 .tmp/
 
+# Skill Hub sync-state sidecars — per-user-per-machine state binding a
+# local skill dir to its server-side current_hash. Sharing across users
+# via git would cause false-conflict reports on the next sync (RFC §7).
+.ark/skills-state/
+
 # Planning artifacts dropped by agents -- never tracked.
 PLAN.md
 

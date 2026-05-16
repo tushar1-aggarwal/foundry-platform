@@ -51,7 +51,9 @@ test("layout wraps children in a <main> landmark", async () => {
 
 test("Tab stays within the NewSession panel while it is open", async () => {
   await goToSessions();
-  const trigger = page.locator('button:has-text("New Session")').first();
+  // The trigger renders as a compact icon-button labelled "New" with
+  // title="New session (n)" -- use the title for stable targeting.
+  const trigger = page.locator('button[title^="New session"]').first();
   await trigger.focus();
   await trigger.click();
 
@@ -82,7 +84,7 @@ test("Tab stays within the NewSession panel while it is open", async () => {
 
 test("Esc closes NewSession and restores focus to the trigger", async () => {
   await goToSessions();
-  const trigger = page.locator('button:has-text("New Session")').first();
+  const trigger = page.locator('button[title^="New session"]').first();
   await trigger.focus();
 
   // Tag the trigger so we can identify it after close.

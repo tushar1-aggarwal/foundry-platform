@@ -32,7 +32,13 @@ import { LocalCompute } from "../local.js";
 import { EC2Compute, type EC2HandleMeta } from "../ec2/compute.js";
 import { cloneWorkspaceViaArkd, type RemoteCloneOpts } from "../workspace-clone.js";
 
-const STUB_APP = {} as never;
+// Stub app shape used by compute.prepareWorkspace tests. Compute classes
+// now persist the resolved workdir + branch via `app.sessions.update`
+// (companion to the conductor-side setupSessionWorktree short-circuit), so
+// the stub must expose a no-op sessions.update.
+const STUB_APP = {
+  sessions: { update: async (_id: string, _fields: unknown) => {} },
+} as never;
 
 // ── helper-level tests ──────────────────────────────────────────────────────
 
@@ -153,6 +159,73 @@ function makeHandle(arkdLocalPort: number): { kind: "ec2"; name: string; meta: {
   };
 }
 
+// K8sCompute mirror of the EC2 tests below. Asserts the same delegation
+// shape: bare-worktree skip, null-workdir skip, arkdUrl wired from
+// `getArkdUrl(handle)`. Persist tests live in prepare-workspace-persist.test.ts.
+describe("K8sCompute.prepareWorkspace (delegation)", () => {
+  const k8sHandle = {
+    kind: "k8s" as const,
+    name: "ark-test",
+    meta: {
+      k8s: {
+        podName: "ark-test",
+        namespace: "ark",
+        arkdLocalPort: 54322,
+        portForwardPid: null,
+        podIp: null,
+      },
+    },
+  };
+
+  test("returns silently when source is null (bare-worktree)", async () => {
+    const { K8sCompute } = await import("../k8s.js");
+    const c = new K8sCompute(STUB_APP);
+    const calls: RemoteCloneOpts[] = [];
+    c.setCloneHelperForTesting(async (opts) => {
+      calls.push(opts);
+    });
+    await c.prepareWorkspace(k8sHandle, {
+      source: null,
+      remoteWorkdir: "/workspace/s-test/repo",
+      sessionId: "s-test",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  test("returns silently when remoteWorkdir is null", async () => {
+    const { K8sCompute } = await import("../k8s.js");
+    const c = new K8sCompute(STUB_APP);
+    const calls: RemoteCloneOpts[] = [];
+    c.setCloneHelperForTesting(async (opts) => {
+      calls.push(opts);
+    });
+    await c.prepareWorkspace(k8sHandle, {
+      source: "https://example.com/repo.git",
+      remoteWorkdir: null,
+      sessionId: "s-test",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  test("delegates to cloneWorkspaceViaArkd with arkdUrl from getArkdUrl(handle)", async () => {
+    const { K8sCompute } = await import("../k8s.js");
+    const c = new K8sCompute(STUB_APP);
+    const calls: RemoteCloneOpts[] = [];
+    c.setCloneHelperForTesting(async (opts) => {
+      calls.push(opts);
+    });
+    await c.prepareWorkspace(k8sHandle, {
+      source: "https://example.com/repo.git",
+      remoteWorkdir: "/workspace/s-test/repo",
+      sessionId: "s-test",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].arkdUrl).toBe("http://localhost:54322");
+    expect(calls[0].source).toBe("https://example.com/repo.git");
+    expect(calls[0].remoteWorkdir).toBe("/workspace/s-test/repo");
+  });
+});
+
 describe("EC2Compute.prepareWorkspace", () => {
   test("returns silently when source is null (bare-worktree)", async () => {
     const c = new EC2Compute(STUB_APP);
@@ -228,8 +301,12 @@ describe("Compute.prepareWorkspace -- LocalCompute", () => {
 
   test("delegates to cloneWorkspaceViaArkd with the host arkd url", async () => {
     // LocalCompute.getArkdUrl returns `http://localhost:${app.config.ports.arkd}`
-    // so we hand it a minimal stub app with that port wired up.
-    const c = new LocalCompute({ config: { ports: { arkd: 19302 } } } as any);
+    // so we hand it a minimal stub app with that port wired up. sessions.update
+    // is a no-op stub -- the persist behavior is exercised in prepare-workspace-persist.
+    const c = new LocalCompute({
+      config: { ports: { arkd: 19302 } },
+      sessions: { update: async (_id: string, _f: unknown) => {} },
+    } as any);
     const captured: RemoteCloneOpts[] = [];
     c.setCloneHelperForTesting((async (opts: RemoteCloneOpts) => {
       captured.push(opts);
@@ -238,6 +315,7 @@ describe("Compute.prepareWorkspace -- LocalCompute", () => {
     await c.prepareWorkspace({ kind: "local", name: "local", meta: {} } as any, {
       source: "git@example.com:org/repo.git",
       remoteWorkdir: "/work/s-x/repo",
+      sessionId: "s-x",
     });
 
     expect(captured).toHaveLength(1);

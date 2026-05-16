@@ -149,7 +149,12 @@ export async function cloneRemoteRepoIfNeeded(
     (session.config?.remoteRepo as string | undefined) ?? (repoField && isRepoUrl(repoField) ? repoField : undefined);
   if (!remoteUrl || session.workdir) return { ok: true };
 
-  // Hosted dispatch always defers cloning to the compute target.
+  // Hosted dispatch ALWAYS defers cloning to the compute target. The dispatcher
+  // pod is a coordinator, not a workspace owner: its filesystem is ephemeral,
+  // potentially multi-replica, and shared across tenants. The agent runs in a
+  // separate compute pod whose in-pod arkd performs the clone with tenant
+  // auth injected (see executors/claude-agent.ts + executors/claude-code.ts
+  // cloneSource handling).
   if (deps.getApp().mode.kind === "hosted") {
     log("Skipping conductor-side remote-repo clone in hosted mode (deferred to compute target)");
     return { ok: true };

@@ -427,19 +427,32 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
     if (!computeImpl) {
       throw new RpcError(`Unknown compute kind: ${compute.compute_kind}`, ErrorCodes.NOT_FOUND);
     }
-    // Capability-driven guard: reject destroy when the Compute declares
-    // canDelete=false. Keeps the error surface clean (server refused vs
-    // runtime failure) and matches what the UI queries via compute/capabilities.
-    if (!computeImpl.capabilities.canDelete) {
+    // Capability-driven guard, but only refuse when the row IS the
+    // auto-seeded singleton for this kind (name === compute_kind, no template
+    // flag, no cloned_from). User-named rows on a `canDelete=false` kind --
+    // e.g. a local+docker template, or a local+docker clone -- are still
+    // removable. This mirrors `ComputeService.delete()`'s guard so the RPC
+    // and service paths agree on which rows are protected. Without this
+    // scoping, every local+isolation row (including templates + clones) hit
+    // the "does not support destroy" rejection.
+    const isAutoSingleton = !compute.is_template && !compute.cloned_from && compute.name === compute.compute_kind;
+    if (computeImpl.capabilities.canDelete === false && isAutoSingleton) {
       throw new RpcError(`Compute kind '${compute.compute_kind}' does not support destroy`, ErrorCodes.UNSUPPORTED);
     }
-    const handle = computeImpl.attachExistingHandle?.({
-      name: compute.name,
-      status: compute.status,
-      config: (compute.config ?? {}) as Record<string, unknown>,
-    });
-    if (handle) {
-      await computeImpl.destroy(handle);
+    // Only invoke the provider's `destroy(handle)` when the Compute impl
+    // actually supports it. `canDelete=false` kinds (e.g. LocalCompute) throw
+    // NotSupportedError unconditionally from `destroy()`; their non-singleton
+    // rows (templates, clones, user-named blueprints) have no underlying
+    // infrastructure to tear down -- the DB-row removal alone is the destroy.
+    if (computeImpl.capabilities.canDelete !== false) {
+      const handle = computeImpl.attachExistingHandle?.({
+        name: compute.name,
+        status: compute.status,
+        config: (compute.config ?? {}) as Record<string, unknown>,
+      });
+      if (handle) {
+        await computeImpl.destroy(handle);
+      }
     }
     await app.computes.delete(compute.name);
     return { ok: true };

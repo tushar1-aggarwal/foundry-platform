@@ -56,7 +56,7 @@ import { buildLaunchEnv, launchAgent } from "./launch.js";
 import { finalizeLaunch } from "./post-launch.js";
 import { dispatchInlineSubStage } from "./inline-substage.js";
 
-export class CoreDispatcher {
+export class DispatchService {
   private readonly compute: ComputeResolver;
   private readonly secrets: StageSecretResolver;
   private readonly hosted: HostedDispatcher;

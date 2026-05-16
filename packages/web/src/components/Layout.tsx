@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { IconRail } from "./ui/IconRail.js";
 import type { IconRailItem } from "./ui/IconRail.js";
-import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 import { Play, Bot, Zap, Monitor, Clock, DollarSign, Cog, Wrench, Calendar, Plug, Shield } from "lucide-react";
 import { useOptionalAuth } from "../auth/AuthContext.js";
 import type { Identity } from "../auth/whoami.js";
@@ -11,7 +10,6 @@ interface LayoutProps {
   view: string;
   onNavigate: (view: string) => void;
   readOnly: boolean;
-  daemonStatus?: DaemonStatus | null;
   /** Middle column -- persistent 400px session list (or other context list). */
   list?: React.ReactNode;
   /** Main pane. */
@@ -94,16 +92,7 @@ const SHORTCUTS: Record<string, string> = {
  * don't need a context column (e.g. Settings, Admin) can omit it and the grid
  * collapses to `60px 1fr`.
  */
-export function Layout({
-  view,
-  onNavigate,
-  daemonStatus,
-  list,
-  children,
-  totalUnread,
-  avatarInitials,
-  latencyText,
-}: LayoutProps) {
+export function Layout({ view, onNavigate, list, children, totalUnread, avatarInitials, latencyText }: LayoutProps) {
   // Phase 1: when an authenticated identity is present, render the
   // UserMenu (avatar + popover with email/role/logout) in the IconRail
   // bottom slot. Layout is also rendered by unit tests outside the
@@ -158,7 +147,6 @@ export function Layout({
         activeId={view}
         onSelect={onNavigate}
         settingsItem={SETTINGS_ITEM}
-        daemonStatus={daemonStatus}
         avatarInitials={avatarInitials}
         avatarSlot={identity ? <UserMenu identity={identity} /> : undefined}
         latencyText={latencyText}

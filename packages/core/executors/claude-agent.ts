@@ -75,16 +75,24 @@ export const claudeAgentExecutor: Executor = {
     // read while arkd is still being provisioned. The agent's own
     // transcript.jsonl + stdio.log live on the WORKER under /tmp/ark-<sid>
     // and are surfaced via arkd /file/read.
-    const sessionDir = join(app.config.dirs.tracks, session.id);
-    mkdirSync(sessionDir, { recursive: true });
-    const stdioPath = join(sessionDir, "stdio.log");
+    //
+    // In hosted mode the dispatcher pod is ephemeral and shared across
+    // tenants -- per-session state must NOT land on its local disk. Skip
+    // the local tee and rely on opts.onLog for in-flight visibility; the
+    // durable transcript lives on the compute pod via arkd.
+    const writeLocalTee = app.mode.kind !== "hosted";
+    const sessionDir = writeLocalTee ? join(app.config.dirs.tracks, session.id) : null;
+    if (sessionDir) mkdirSync(sessionDir, { recursive: true });
+    const stdioPath = sessionDir ? join(sessionDir, "stdio.log") : null;
 
     const log = (msg: string): void => {
       if (opts.onLog) opts.onLog(msg);
-      try {
-        appendFileSync(stdioPath, `[exec ${new Date().toISOString()}] ${msg}\n`);
-      } catch {
-        /* stdio.log not writable yet -- the upstream onLog still fired */
+      if (stdioPath) {
+        try {
+          appendFileSync(stdioPath, `[exec ${new Date().toISOString()}] ${msg}\n`);
+        } catch {
+          /* tee best-effort; opts.onLog already fired */
+        }
       }
     };
 
@@ -121,11 +129,25 @@ export const claudeAgentExecutor: Executor = {
     // computation; falls back to effectiveWorkdir when the row hasn't been
     // provisioned yet (the lifecycle below will provision and re-resolve).
     const workerSessionDir = `/tmp/ark-${session.id}`;
-    const previewHandle = target.compute.attachExistingHandle?.({
-      name: compute.name,
-      status: compute.status,
-      config: (compute.config ?? {}) as Record<string, unknown>,
-    });
+    // Mirror the pr.ts / status-poller.ts / claude-code.ts fallback: when
+    // session.compute_name points at the K8s template, attachExistingHandle
+    // returns null (no pod_name on the template row). Fall back to the
+    // per-session handle persisted on session.config.compute_handle by
+    // runTargetLifecycle. Without this fallback, previewHandle is null and
+    // workerWorkdir falls through to effectiveWorkdir (today covered by the
+    // setupSessionWorktree short-circuit's resolveWorkdir call, but kept
+    // explicit here for parity with other call sites).
+    const persistedHandle = (
+      session.config as { compute_handle?: import("../compute/types.js").ComputeHandle } | null | undefined
+    )?.compute_handle;
+    const previewHandle =
+      target.compute.attachExistingHandle?.({
+        name: compute.name,
+        status: compute.status,
+        config: (compute.config ?? {}) as Record<string, unknown>,
+      }) ??
+      persistedHandle ??
+      null;
     const workerWorkdir =
       (previewHandle && target.compute.resolveWorkdir?.(previewHandle, session)) ?? effectiveWorkdir ?? null;
     const workerPromptFile = `${workerSessionDir}/task.txt`;
@@ -246,7 +268,7 @@ export const claudeAgentExecutor: Executor = {
         },
         {
           prepareCtx: { workdir: workerWorkdir ?? "", onLog: log },
-          workspace: { source: cloneSource, remoteWorkdir: workerWorkdir },
+          workspace: { source: cloneSource, remoteWorkdir: workerWorkdir, branch: session.branch ?? null },
           placement: opts.placement,
           computeStatus: compute.status,
           launchOverride: async () => {

@@ -20,14 +20,15 @@
  *     `session/start`.
  *
  * Audit metadata (`set_by` / `deleted_by`) is captured from
- * `ctx.userId` on every write.
+ * `actorIdentity(ctx)` on every write — prefers the bound real-user id
+ * over the api-key sentinel so the audit row points to the human.
  */
 
 import type { Router } from "../router.js";
 import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
-import { requireAdmin } from "../../core/auth/context.js";
+import { actorIdentity, requireAdmin } from "../../core/auth/context.js";
 import type { ScopeKind } from "../../core/repositories/index.js";
 import { DEFAULT_LIST_LIMIT } from "../../core/repositories/scoping-overrides.js";
 import { validateScopeId, validateOverride } from "./admin-scoping-validators.js";
@@ -76,7 +77,7 @@ export function registerAdminScopingHandlers(router: Router, app: AppContext): v
     const row = await app.scopingOverrides.set(
       { scope_kind: kind, scope_id, key, tenant_id: ctx.tenantId },
       value,
-      ctx.userId,
+      actorIdentity(ctx),
     );
     return { row };
   });
@@ -154,7 +155,7 @@ export function registerAdminScopingHandlers(router: Router, app: AppContext): v
     }
 
     if (hasId) {
-      const ok = await app.scopingOverrides.deleteById(id as string, ctx.tenantId, ctx.userId);
+      const ok = await app.scopingOverrides.deleteById(id as string, ctx.tenantId, actorIdentity(ctx));
       return { ok };
     }
     if (hasComposite) {
@@ -168,7 +169,7 @@ export function registerAdminScopingHandlers(router: Router, app: AppContext): v
       await validateScopeId(app, ctx, kind, scope_id as string);
       const ok = await app.scopingOverrides.delete(
         { scope_kind: kind, scope_id: scope_id as string, key: key as string, tenant_id: ctx.tenantId },
-        ctx.userId,
+        actorIdentity(ctx),
       );
       return { ok };
     }

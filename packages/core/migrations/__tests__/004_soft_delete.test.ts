@@ -44,13 +44,19 @@ describe("Migration 004 -- soft-delete", () => {
     // Migration 006 adds idx_api_keys_hash_live -- the `%_live` pattern
     // picks it up too. Migration 017 adds idx_users_google_sub_live for
     // the OIDC subject id and idx_scoping_overrides_live for the
-    // resolver lookup path (both partial unique indexes scoped to live
-    // rows).
+    // resolver lookup path. Migration 022 (Skill Hub) adds three more,
+    // one per visibility scope's partial uniqueness rule:
+    // (tenant_id, name) for tenant-scope, (team_id, name) for team-scope,
+    // (owner_user_id, name) for user-scope. All are partial unique
+    // indexes scoped to live rows.
     expect(names).toEqual(
       [
         "idx_api_keys_hash_live",
         "idx_memberships_user_team_live",
         "idx_scoping_overrides_live",
+        "idx_skills_team_name_live",
+        "idx_skills_tenant_name_live",
+        "idx_skills_user_name_live",
         "idx_tenants_slug_live",
         "idx_teams_tenant_slug_live",
         "idx_users_email_live",

@@ -17,10 +17,7 @@ export function registerRuntimeCommands(program: Command) {
       }
       for (const r of runtimes) {
         const src = (r._source === "project" ? "P" : r._source === "global" ? "G" : "B").padEnd(2);
-        const models = r.models?.map((m) => m.id).join(", ") ?? "-";
-        console.log(
-          `  ${src} ${(r.name ?? "").padEnd(12)} ${(r.type ?? "").padEnd(12)} models: ${models}  ${r.description ?? ""}`,
-        );
+        console.log(`  ${src} ${(r.name ?? "").padEnd(12)} ${(r.type ?? "").padEnd(12)} ${r.description ?? ""}`);
       }
     });
 

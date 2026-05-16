@@ -71,5 +71,5 @@ test("dashboard/summary RPC returns the shape DashboardView consumes", async () 
 test.skip("clicking a Dashboard widget navigates to the linked view", async () => {
   await goToDashboard();
   await page.click('text="View all costs"');
-  await expect(page.locator("h1")).toContainText("Costs", { timeout: 5_000 });
+  await expect(page.locator("h1", { hasText: "Costs" })).toBeVisible({ timeout: 5_000 });
 });

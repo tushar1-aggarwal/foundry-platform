@@ -1,5 +1,5 @@
 import { cn } from "../../lib/utils.js";
-import type { DaemonStatus } from "../../hooks/useDaemonStatus.js";
+import { useDaemonStatus } from "../../hooks/useDaemonStatus.js";
 
 export interface IconRailItem {
   id: string;
@@ -19,8 +19,6 @@ export interface IconRailProps extends React.ComponentProps<"nav"> {
   settingsItem?: IconRailItem;
   /** Optional brand logo node. */
   logo?: React.ReactNode;
-  /** Daemon health status -- drives the brand live dot + foot-line latency. */
-  daemonStatus?: DaemonStatus | null;
   /** Avatar initials for the pinned avatar button (bottom). Ignored when `avatarSlot` is set. */
   avatarInitials?: string;
   /** Custom node for the bottom-of-rail avatar slot. Used by UserMenu in Phase 1. */
@@ -87,13 +85,13 @@ export function IconRail({
   onSelect,
   settingsItem,
   logo,
-  daemonStatus,
   avatarInitials,
   avatarSlot,
   latencyText,
   className,
   ...props
 }: IconRailProps) {
+  const daemonStatus = useDaemonStatus();
   const dot = getDaemonDot(daemonStatus);
   const latencyOk = dot.status === "online";
   return (

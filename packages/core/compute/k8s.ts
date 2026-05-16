@@ -44,6 +44,7 @@ import type {
 } from "./types.js";
 import { NotSupportedError } from "./types.js";
 import { cloneWorkspaceViaArkd } from "./workspace-clone.js";
+import { resolveAgentIdentityForRemoteCompute } from "./git-identity.js";
 import { logDebug, logError, logInfo } from "../observability/structured-log.js";
 import { provisionStep } from "../services/provisioning-steps.js";
 import { K8sPlacementCtx } from "./k8s-placement-ctx.js";
@@ -281,12 +282,19 @@ export class K8sCompute implements Compute {
     }
 
     // Build the pod spec. The container runs arkd and exposes :19300.
+    //
+    // /workspace lives on an emptyDir volume so the agent's per-session worktree
+    // (cloned by `prepareWorkspace`) has a place to land that's writable by the
+    // non-root user the pod runs as. /workspace doesn't exist in the base image
+    // and / is root-owned, so without the volume mount, arkd's `mkdir -p
+    // /workspace/<sid>/<repo>` would fail under UID 1000.
     const containerSpec: Record<string, unknown> = {
       name: "arkd",
       image,
       imagePullPolicy: cfg.imagePullPolicy ?? "Always",
       command: ["/bin/sh", "-c", "arkd || sleep infinity"],
       ports: [{ containerPort: ARKD_POD_PORT, name: "arkd" }],
+      volumeMounts: [{ name: "workspace", mountPath: "/workspace" }],
     };
     if (cfg.resources) {
       containerSpec.resources = {
@@ -295,9 +303,20 @@ export class K8sCompute implements Compute {
       };
     }
 
+    // Run non-root by default. The bundled `claude` binary (used by the
+    // claude-agent runtime SDK) refuses `--dangerously-skip-permissions`
+    // under root for security reasons. The `bun` user at UID 1000 ships
+    // in the base image; `fsGroup: 1000` makes the /workspace emptyDir
+    // owned by the bun group so the in-pod arkd can write into it.
     const podSpec: Record<string, unknown> = {
       restartPolicy: "Never",
+      securityContext: {
+        runAsUser: 1000,
+        runAsGroup: 1000,
+        fsGroup: 1000,
+      },
       containers: [containerSpec],
+      volumes: [{ name: "workspace", emptyDir: {} }],
     };
     if (cfg.serviceAccount) podSpec.serviceAccountName = cfg.serviceAccount;
 
@@ -669,12 +688,29 @@ export class K8sCompute implements Compute {
     if (!opts.source || !opts.remoteWorkdir) return;
     const arkdUrl = this.getArkdUrl(h);
     const arkdToken = process.env.ARK_ARKD_TOKEN ?? null;
+    // Resolve the effective branch: explicit session.branch wins; otherwise
+    // a deterministic per-session default. Always pass a branch so the agent
+    // can't accidentally commit to upstream/main.
+    const branch = opts.branch ?? `ark-${opts.sessionId}`;
+    // Resolve the agent's commit identity (config → env → tenant secret →
+    // placeholder). cloneHelper pins it on the sandbox repo so the
+    // implement-stage commit and the PR-stage push carry a real author.
+    const identity = await resolveAgentIdentityForRemoteCompute(this.app, this.app.tenantId ?? "default");
     await this.cloneHelper({
       arkdUrl,
       arkdToken,
       source: opts.source,
       remoteWorkdir: opts.remoteWorkdir,
+      branch,
+      authorName: identity.name,
+      authorEmail: identity.email,
     });
+    // Persist the resolved workdir + branch on the session row so the
+    // conductor-side observers (PR action, status poller, web UI) see the
+    // pod's real checkout instead of null / a stale value. The conductor's
+    // setupSessionWorktree short-circuits for K8s, so this is the only
+    // place that writes these columns for hosted-mode sessions.
+    await this.app.sessions.update(opts.sessionId, { workdir: opts.remoteWorkdir, branch });
   }
 
   // ── flushPlacement ──────────────────────────────────────────────────────

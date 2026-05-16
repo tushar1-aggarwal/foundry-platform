@@ -277,6 +277,12 @@ export interface PrepareWorkspaceOpts {
   /** Resolved remote workdir from `Compute.resolveWorkdir`. Null on local. */
   remoteWorkdir: string | null;
   sessionId: string;
+  /**
+   * Session's branch column (may be null). When null, prepareWorkspace
+   * falls back to `ark-<sessionId>` so the agent always lands on a
+   * dedicated branch instead of committing to the upstream default.
+   */
+  branch?: string | null;
   onLog?: (msg: string) => void;
 }
 

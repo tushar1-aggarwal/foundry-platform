@@ -485,7 +485,7 @@ export const claudeCodeExecutor: Executor = {
         },
         {
           prepareCtx: { workdir: agentWorkdir, onLog: log },
-          workspace: { source: cloneSource, remoteWorkdir },
+          workspace: { source: cloneSource, remoteWorkdir, branch: session.branch ?? null },
           placement: opts.placement,
           computeStatus: compute.status,
         },

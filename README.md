@@ -26,10 +26,6 @@ make install    # requires Bun + tmux pre-installed
 
 Run `ark doctor` to verify your environment.
 
-Prefer a native window? Install the [Ark Desktop app](packages/desktop/INSTALL.md)
-(macOS, Windows, Linux). macOS users: there's an unsigned-build workaround
-documented in the desktop install guide.
-
 ## Quick Start
 
 ```bash
@@ -39,7 +35,7 @@ ark session start --repo . --summary "Add user auth"
 # Pick a specific flow (default is `default`)
 ark session start --repo . --summary "Add user auth" --flow autonomous-sdlc
 
-# Launch the web dashboard (or desktop app)
+# Launch the web dashboard
 ark web
 
 # Fleet overview with cost charts
@@ -64,8 +60,7 @@ ark search "authentication"
 | **Auto-Index on Dispatch** | Local mode honors `knowledge.auto_index` config. Remote compute (arkd) ALWAYS indexes via `/codegraph/index` endpoint | [Guide](docs/guide.md#9-knowledge-graph) |
 | **Runtime Billing Modes** | `api` (per-token pricing), `subscription` (e.g. Claude Max $200/mo, tokens recorded for rate limits), `free`. Polymorphic transcript parsers per runtime | [Guide](docs/guide.md#10-cost-tracking) |
 | **Dashboard** | Fleet status overview with cost charts (Recharts), budget tracking, and recent activity | [CLI](docs/cli-reference.md#ark-dashboard) |
-| **Web Dashboard** | Browser-based session management with SSE live updates, token auth, read-only mode | [Guide](docs/guide.md#15-dashboards-cli-web-desktop) |
-| **Desktop App** | Electron wrapper around the web dashboard -- native menus, local-first | [Install](packages/desktop/INSTALL.md) |
+| **Web Dashboard** | Browser-based session management with SSE live updates, token auth, read-only mode | [Guide](docs/guide.md#15-dashboards-cli-web) |
 | **Compute Providers** | Local, Docker, DevContainer, Firecracker, EC2 + arkd (base/docker/devcontainer/firecracker), K8s, K8s+Kata (self-hosted only) | [Guide](docs/guide.md#7-compute) |
 | **Git Worktrees** | Automatic branch isolation per session, diff preview, merge + auto-PR in one command | [Guide](docs/guide.md#13-git-worktrees) |
 | **Skills** | Reusable prompt fragments with three-tier resolution (builtin -> user -> repo) | [Guide](docs/guide.md#5-skills) |
@@ -100,10 +95,9 @@ packages/
   conductor/  Session scheduler + WebSocket dispatch (port 19400)
   router/     LLM Router -- OpenAI-compatible proxy with routing policies
   web/        Vite-based web dashboard (SSE live updates, Dashboard page)
-  desktop/    Electron shell wrapping the web dashboard
   protocol/   ArkClient (typed JSON-RPC client)
   types/      Domain interfaces (Session, Compute, Event, Message, Tenant, etc.)
-  e2e/        End-to-end tests (Playwright for web + desktop)
+  e2e/        End-to-end tests (Playwright for web)
 
 agents/       13 agent definitions (ticket-intake, spec-planner, plan-auditor,
               implementer, task-implementer, verifier, reviewer, documenter,
@@ -137,11 +131,8 @@ docs/         User documentation + GitHub Pages site
 make dev              # Hot-reload: API (:8420) + Vite HMR (:5173) + daemon
 make test             # Run unit tests (parallel; excludes compute E2E + integration)
 make test-file F=path # Run a single test file
-make test-e2e         # Playwright E2E suite (web + desktop)
+make test-e2e         # Playwright E2E suite (web)
 make web              # Launch web dashboard (production build)
-make desktop          # Launch Electron desktop app
-make build-desktop    # Build Electron app with bundled ark-native
-make package-desktop  # Package Electron app (.dmg + .AppImage)
 make lint             # ESLint + TypeScript (zero warnings allowed)
 make format           # Prettier auto-fix
 make clean            # Remove build artifacts

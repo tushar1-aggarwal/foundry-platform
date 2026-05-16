@@ -13,7 +13,9 @@ const skillDefinitionShape = z
   .object({
     name: z.string(),
     description: z.string(),
-    body: z.string(),
+    // SkillDefinition's body is stored as `prompt` (matches every YAML in
+    // skills/) -- not `body`, which the store would persist as an unused key.
+    prompt: z.string(),
   })
   .passthrough();
 

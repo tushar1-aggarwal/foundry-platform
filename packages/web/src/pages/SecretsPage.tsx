@@ -19,16 +19,14 @@ import { ConfirmDialog } from "../components/ui/ConfirmDialog.js";
 import { NewSecretForm } from "../components/secrets/NewSecretForm.js";
 import { SecretsList, type SecretRowData } from "../components/secrets/SecretsList.js";
 import { useApi } from "../hooks/useApi.js";
-import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 
 interface SecretsPageProps {
   view: string;
   onNavigate: (view: string) => void;
   readOnly: boolean;
-  daemonStatus?: DaemonStatus | null;
 }
 
-export function SecretsPage({ view, onNavigate, readOnly, daemonStatus }: SecretsPageProps) {
+export function SecretsPage({ view, onNavigate, readOnly }: SecretsPageProps) {
   const api = useApi();
   const [secrets, setSecrets] = useState<SecretRowData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,7 +69,7 @@ export function SecretsPage({ view, onNavigate, readOnly, daemonStatus }: Secret
   }
 
   return (
-    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus}>
+    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly}>
       <PageShell title="Secrets">
         <div className="flex flex-col gap-6">
           <section className="flex flex-col gap-2">

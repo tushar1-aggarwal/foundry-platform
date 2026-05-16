@@ -1,8 +1,22 @@
 /**
- * TenantClaudeAuthRepository -- drizzle-backed adapter over `tenant_claude_auth`.
+ * TenantClaudeAuthRepository -- per-tenant binding between a tenant and the
+ * credential material used to authenticate Claude sessions dispatched for
+ * that tenant.
  *
- * The table maps a tenant to either an API-key secret or a subscription-blob
- * reference. Single-valued: `set()` overwrites the previous binding.
+ * Two modes:
+ *
+ *   - `api_key` -- `secret_ref` is the name of a string secret in the
+ *     SecretsCapability backend. The value is injected as the
+ *     `ANTHROPIC_API_KEY` env var at dispatch time. Works today.
+ *
+ *   - `subscription_blob` -- `secret_ref` is the name of a blob in the
+ *     SecretsCapability backend (set via `secret/blob/set`). At dispatch
+ *     the daemon fetches the blob, materializes a per-session k8s Secret,
+ *     and wires it into the compute config as `credsSecretName`.
+ *
+ * Single-valued: `set()` overwrites the previous binding. `clear()` drops
+ * it. Neither operation touches the referenced secret / blob -- admins
+ * frequently want to keep those around for re-binding.
  */
 
 import type { DatabaseAdapter } from "../database/index.js";
@@ -59,6 +73,12 @@ export class TenantClaudeAuthRepository {
 
   /** Create-or-replace the binding. */
   async set(tenantId: string, kind: ClaudeAuthKind, secretRef: string): Promise<TenantClaudeAuthRow> {
+    if (!tenantId || typeof tenantId !== "string") throw new Error("tenantId must be a non-empty string");
+    if (kind !== "api_key" && kind !== "subscription_blob") {
+      throw new Error(`Invalid claude auth kind '${kind}': must be 'api_key' or 'subscription_blob'`);
+    }
+    if (!secretRef || typeof secretRef !== "string") throw new Error("secretRef must be a non-empty string");
+
     const ts = now();
     const existing = await this.get(tenantId);
     const d = this.d();
@@ -77,7 +97,7 @@ export class TenantClaudeAuthRepository {
     return (await this.get(tenantId))!;
   }
 
-  async delete(tenantId: string): Promise<boolean> {
+  async clear(tenantId: string): Promise<boolean> {
     const d = this.d();
     const t = d.schema.tenantClaudeAuth;
     const res = await (d.db as any).delete(t).where(eq(t.tenantId, tenantId));

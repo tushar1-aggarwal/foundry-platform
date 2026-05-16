@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../hooks/useApi.js";
-import { useSkillsQuery } from "../hooks/useToolQueries.js";
+import { useSkillsQuery } from "../hooks/useCatalogQueries.js";
 import { cn } from "../lib/utils.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";

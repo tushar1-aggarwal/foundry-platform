@@ -64,6 +64,10 @@ export function useSessionDetail({
 
   const session = detail?.session;
   const events = detail?.events || [];
+  // `isActive` gates the live polling loop, the live terminal WS, and the
+  // "agent is working" placeholder text. Keep it tight: only statuses where
+  // a runtime is actually attached. The header's Stop button derives its
+  // own visibility from `status` directly (see HeaderActions).
   const isActive = session?.status === "running" || session?.status === "waiting";
 
   const { messages: liveMessages, send, sending } = useMessages({ sessionId, enabled: isActive, pollMs: 2000 });

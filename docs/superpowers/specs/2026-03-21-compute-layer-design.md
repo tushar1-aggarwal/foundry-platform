@@ -1,5 +1,8 @@
 # Ark Compute Layer -- Design Spec
 
+> **Historical:** This document predates the Arc → Ark rename and references the now-deleted `arc.json` / `ArcJson` / `parseArcJson` machinery. Body preserved as-is for git-blame continuity; live behavior is documented in `docs/superpowers/specs/2026-05-05-compute-cleanup-design.md` and the current `packages/compute/` source.
+
+
 ## Goal
 
 Integrate compute provisioning, host management, environment sync, and full observability into Ark -- absorbing key capabilities from the original Arc (Python/Pulumi) and BigBox (Python/boto3) into Ark's TypeScript/Bun stack. This makes Ark a complete autonomous agent platform that can dispatch agents to local machines, Docker containers, and remote EC2 instances.

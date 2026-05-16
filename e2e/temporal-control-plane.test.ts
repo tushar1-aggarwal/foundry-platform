@@ -186,6 +186,6 @@ describe("docs-flow e2e -- hosted (Temporal + docker isolation)", () => {
           rpc = new RpcClient(server.webUrl);
         },
       });
-    }, 240_000);
+    }, 180_000);
   });
 });

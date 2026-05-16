@@ -24,6 +24,7 @@ import type {
 } from "./types.js";
 import { NotSupportedError } from "./types.js";
 import { cloneWorkspaceViaArkd } from "./workspace-clone.js";
+import { resolveAgentIdentityForRemoteCompute } from "./git-identity.js";
 import { LocalPlacementCtx } from "./local-placement-ctx.js";
 import { DEFAULT_ARKD_URL, DEFAULT_CONDUCTOR_URL } from "../constants.js";
 import { channelLaunchSpec } from "../install-paths.js";
@@ -137,12 +138,24 @@ export class LocalCompute implements Compute {
 
   async prepareWorkspace(h: ComputeHandle, opts: PrepareWorkspaceOpts): Promise<void> {
     if (!opts.source || !opts.remoteWorkdir) return;
+    // Local+docker isolation: the agent runs in a sidecar with a separate
+    // filesystem from the conductor. Same shape as K8s/EC2 -- clone inside
+    // the sidecar, checkout a session branch, persist workdir+branch on the
+    // row. Local+direct (laptop, no docker) early-returns above because the
+    // caller passes null source/remoteWorkdir (conductor already owns the
+    // worktree via setupSessionWorktree).
+    const branch = opts.branch ?? `ark-${opts.sessionId}`;
+    const identity = await resolveAgentIdentityForRemoteCompute(this.app, this.app.tenantId ?? "default");
     await this.cloneHelper({
       arkdUrl: this.getArkdUrl(h),
       arkdToken: process.env.ARK_ARKD_TOKEN ?? null,
       source: opts.source,
       remoteWorkdir: opts.remoteWorkdir,
+      branch,
+      authorName: identity.name,
+      authorEmail: identity.email,
     });
+    await this.app.sessions.update(opts.sessionId, { workdir: opts.remoteWorkdir, branch });
   }
 
   async ensureReachable(h: ComputeHandle): Promise<void> {

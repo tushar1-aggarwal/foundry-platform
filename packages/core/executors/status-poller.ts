@@ -299,12 +299,28 @@ async function _handleStatus(
 
     // Defensive guard: with explicit stopStatusPoller calls in stage-advance,
     // this branch should never fire on a healthy stage handoff. Kept as a
-    // safety net for direct sessions.update() calls that bypass StageAdvancer.
+    // safety net for direct sessions.update() calls that bypass StageAdvanceService.
     if (session.session_id && session.session_id !== handle) return;
 
-    // "not_found" means the tmux session exited (process finished) -- treat as completed
-    const newStatus = status.state === "failed" ? "failed" : "completed";
-    const error = status.state === "failed" ? (status as { error?: string }).error : null;
+    // `not_found` means the handle is gone. That happens cleanly when the
+    // agent fires its completion hook and the process exits, or abnormally
+    // when the agent is killed before firing the hook (the prior daemon
+    // died mid-flight, the user pkilled the worker, etc). The two cases
+    // are indistinguishable from the probe alone -- check the events log
+    // for the completion hook to tell them apart.
+    let newStatus: "completed" | "failed" = status.state === "failed" ? "failed" : "completed";
+    let error = status.state === "failed" ? (status as { error?: string }).error : null;
+    if (status.state === "not_found") {
+      const events = await app.events.list(sessionId);
+      const sawCompletionHook = events.some(
+        (e: { type: string; data?: unknown }) =>
+          e.type === "hook_status" && (e.data as { event?: string } | undefined)?.event === "SessionEnd",
+      );
+      if (!sawCompletionHook) {
+        newStatus = "failed";
+        error = "agent process exited without firing completion hook -- interrupted before reporting done";
+      }
+    }
 
     // Under Temporal orchestration, skip the brief "completed" write on
     // success: external observers polling session.status for a terminal
@@ -323,7 +339,10 @@ async function _handleStatus(
     await app.events.log(sessionId, `session_${newStatus}`, {
       stage: session.stage,
       actor: "system",
-      data: { reason: "agent process exited", exitCode: (status as { exitCode?: number }).exitCode },
+      data: {
+        reason: error ?? "agent process exited",
+        exitCode: (status as { exitCode?: number }).exitCode,
+      },
     });
 
     logInfo("session", `status-poller: ${sessionId} -> ${newStatus}`);

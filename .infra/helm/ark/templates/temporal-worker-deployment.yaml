@@ -35,6 +35,12 @@ spec:
                 name: {{ .Values.postgresql.external.existingSecret }}
             {{- end }}
           env:
+            # In-cluster Kubernetes API CA trust. Required for the temporal
+            # worker to call K8sCompute.provision (Phase 3 -- not wired today
+            # but the env must be in place so the wiring lands clean). Same
+            # rationale as control-plane-deployment.yaml.
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
             {{- if and (not .Values.postgresql.enabled) .Values.postgresql.external.host }}
             - name: DB_HOST
               value: {{ .Values.postgresql.external.host | quote }}

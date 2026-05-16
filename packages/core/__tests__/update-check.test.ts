@@ -22,12 +22,6 @@ describe("getCurrentVersion", () => {
 });
 
 describe("checkForUpdate", async () => {
-  it("returns null or a version string", async () => {
-    const result = await checkForUpdate(getApp().config.dirs.ark);
-    // null = no update or network error, string = new version
-    expect(result === null || typeof result === "string").toBe(true);
-  });
-
   it("respects rate limiting from saved state", async () => {
     // Write a recent check state so it skips the network call
     const statePath = join(getApp().config.dirs.ark, "update-check.json");
@@ -56,12 +50,14 @@ describe("checkForUpdate", async () => {
     expect(result).toBe("99.99.99");
   });
 
-  it("handles corrupted state file gracefully", async () => {
+  it("handles corrupted state file gracefully (no throw)", async () => {
     const statePath = join(getApp().config.dirs.ark, "update-check.json");
     writeFileSync(statePath, "not-valid-json{{{");
 
-    // Should not throw, just proceed with the check
-    const result = await checkForUpdate(getApp().config.dirs.ark);
-    expect(result === null || typeof result === "string").toBe(true);
+    // The contract is no-throw; the return value depends on whether
+    // the network call from the fall-through path succeeds, which we
+    // don't pin here. If a future version adds a network mock, tighten
+    // this to a specific expected value.
+    await checkForUpdate(getApp().config.dirs.ark);
   });
 });

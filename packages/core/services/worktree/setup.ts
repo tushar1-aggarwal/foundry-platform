@@ -88,15 +88,46 @@ export async function setupSessionWorktree(
 
   let effectiveWorkdir = repoSource;
 
-  // Create git worktree unless the registered Compute doesn't support it
-  // or session config explicitly disables it. We worktree when repoSource
-  // is a real git repo -- even if it resolves to the current cwd (that is
-  // precisely when isolation matters most for the self-dogfood loop).
-  //
-  // Capability lives on `Compute.capabilities.supportsWorktree` now; we
-  // read off the registered Compute keyed by the row's `compute_kind`.
+  // Capability lives on `Compute.capabilities.supportsWorktree`; read off
+  // the registered Compute keyed by the row's `compute_kind`.
   const computeImpl = compute ? app.getCompute(compute.compute_kind) : app.getCompute("local");
   const supportsWorktree = computeImpl?.capabilities.supportsWorktree === true;
+
+  // Short-circuit for remote computes (K8s, EC2, shared-host EC2, ...). The
+  // conductor cannot touch a remote box's filesystem; the compute's own
+  // `prepareWorkspace` lifecycle step owns clone + branch + workdir for
+  // those. Without this guard, the conductor would persist `resolve(".")`
+  // (or similar bogus path) into session.workdir and pre-empt the compute
+  // side, leaving the pod with no checkout and the agent in /app. See
+  // s-hi1cr8wz4g (2026-05-15).
+  //
+  // We still need to RETURN a workdir so the executor can thread it into
+  // `runTargetLifecycle.workspace.remoteWorkdir` -- otherwise prepareWorkspace
+  // skips (its guard requires non-null source AND remoteWorkdir). Ask the
+  // compute via resolveWorkdir using a synthetic handle. resolveWorkdir is
+  // expected to derive the path from `session` + compute config alone
+  // (K8s + EC2 + Firecracker all do; they read handle.meta only for
+  // optional overrides with defaults). Without this, stage-1 dispatch hit
+  // a chicken-and-egg: attachExistingHandle returns null pre-provision, so
+  // the executor's previewHandle was null, resolveWorkdir was skipped, and
+  // prepareWorkspace got remoteWorkdir=null and silently no-op'd. See
+  // s-w6212tpa72 (2026-05-15).
+  if (!supportsWorktree) {
+    if (computeImpl?.resolveWorkdir && compute) {
+      const fakeHandle = {
+        kind: compute.compute_kind,
+        name: compute.name,
+        meta: {},
+      } as unknown as Parameters<NonNullable<typeof computeImpl.resolveWorkdir>>[0];
+      return computeImpl.resolveWorkdir(fakeHandle, session);
+    }
+    return session.workdir ?? null;
+  }
+
+  // Create git worktree unless session config explicitly disables it. We
+  // worktree when repoSource is a real git repo -- even if it resolves to
+  // the current cwd (that is precisely when isolation matters most for the
+  // self-dogfood loop).
   const wantWorktree = supportsWorktree && session.config?.worktree !== false;
   if (wantWorktree && existsSync(join(repoSource, ".git"))) {
     log("Setting up git worktree...");

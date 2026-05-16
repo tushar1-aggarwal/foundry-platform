@@ -2,17 +2,12 @@ import { proxyActivities } from "@temporalio/workflow";
 import type * as acts from "../activities/index.js";
 import type { StageWorkflowInput } from "../types.js";
 
-const {
-  resolveComputeForStageActivity,
-  provisionComputeActivity,
-  dispatchStageActivity,
-  awaitStageCompletionActivity,
-  projectStageActivity,
-} = proxyActivities<typeof acts>({
-  startToCloseTimeout: "1 hour",
-  heartbeatTimeout: "60 seconds",
-  retry: { maximumAttempts: 2, initialInterval: "1s", backoffCoefficient: 2 },
-});
+const { provisionComputeActivity, dispatchStageActivity, awaitStageCompletionActivity, projectStageActivity } =
+  proxyActivities<typeof acts>({
+    startToCloseTimeout: "1 hour",
+    heartbeatTimeout: "60 seconds",
+    retry: { maximumAttempts: 2, initialInterval: "1s", backoffCoefficient: 2 },
+  });
 
 /**
  * Child workflow for a single fan-out branch.
@@ -20,8 +15,8 @@ const {
  * then returns the completion status so the parent can aggregate results.
  */
 export async function stageWorkflow(input: StageWorkflowInput): Promise<{ status: string }> {
-  await resolveComputeForStageActivity({ sessionId: input.childSessionId, stageIdx: input.stageIdx });
-  await provisionComputeActivity({ sessionId: input.childSessionId, computeName: "local" });
+  // The activity resolves the compute target from session.compute_name.
+  await provisionComputeActivity({ sessionId: input.childSessionId });
   await projectStageActivity({
     sessionId: input.childSessionId,
     stageIdx: input.stageIdx,

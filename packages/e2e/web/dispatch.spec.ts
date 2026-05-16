@@ -31,7 +31,7 @@ test.setTimeout(120_000);
 
 async function goToSessions() {
   await page.click('nav button:has-text("Sessions")');
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 }
 
 /** Create a session via RPC and return the session ID */
@@ -166,8 +166,10 @@ test("dispatched session shows in UI with updated status", async () => {
 
   // Click on the session to see detail
   await page.locator("text=E2E UI dispatch check").first().click();
-  // The detail pane renders a Conversation tab (unique to SessionDetail).
-  await expect(page.locator("text=Conversation").first()).toBeVisible({ timeout: 5_000 });
+  // The detail pane renders the conversation tab (id=tab-conversation, label
+  // "Session"). Asserting on the tab's stable DOM id avoids ambiguity with
+  // the "Sessions" h1 and the SessionList label.
+  await expect(page.locator("#tab-conversation")).toBeVisible({ timeout: 5_000 });
 
   // The status badge should not be "pending" or "ready" anymore
   // It could be running, waiting, failed, or stopped

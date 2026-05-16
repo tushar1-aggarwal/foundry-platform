@@ -3,10 +3,13 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./web",
   // Per-test wall-clock cap. Also governs beforeAll/afterAll hooks in
-  // Playwright (there is no separate hookTimeout). 60s is enough for a test
-  // + its share of setupWebServer; the fixture now caps its own teardown at
-  // 20s so afterAll cannot consume the whole 60s budget even on a hang.
-  timeout: 60_000,
+  // Playwright (there is no separate hookTimeout). CLAUDE.md mandates 180s
+  // per E2E test case; the fixture caps its own teardown at 20s so afterAll
+  // cannot consume the whole budget even on a hang.
+  timeout: 180_000,
+  // Bail on first failure: a single hanging test must not consume the
+  // entire CI job budget (CLAUDE.md requirement).
+  maxFailures: 1,
   // Default expect() assertion timeout. The Playwright default of 5s trips
   // on cold CI where first-paint after a reload can take 6-8s. 10s keeps
   // the short-circuit for real regressions but absorbs the common slow-paint
