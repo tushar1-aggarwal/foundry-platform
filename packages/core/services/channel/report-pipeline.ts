@@ -18,22 +18,14 @@ import { sendOSNotification } from "../../notify.js";
 import { markDispatchFailedShared } from "../session-dispatch-listeners.js";
 
 export async function handleReport(app: AppContext, sessionId: string, report: OutboundMessage): Promise<void> {
-  const result = await app.sessionHooks.applyReport(sessionId, report);
-
-  for (const evt of result.logEvents ?? []) {
-    await app.events.log(sessionId, evt.type, evt.opts);
-  }
-
-  if (result.message) {
-    await app.messages.send(sessionId, result.message.role, result.message.content, result.message.type);
-  }
+  // Decide + persist the mechanical side-effects (events log, message
+  // send, session updates, artifact tracking). Returns the decision so
+  // this function can still drive cross-cutting concerns (bus emit,
+  // retry-dispatch, stage handoff, OS notification, auto-PR).
+  const result = await app.sessionHooks.ingestReport(sessionId, report);
 
   for (const evt of result.busEvents ?? []) {
     eventBus.emit(evt.type, evt.sessionId, evt.data);
-  }
-
-  if (Object.keys(result.updates).length > 0) {
-    await app.sessions.update(sessionId, result.updates);
   }
 
   if (result.shouldAdvance) {
@@ -117,25 +109,6 @@ export async function handleReport(app: AppContext, sessionId: string, report: O
       actor: "agent",
       data: { pr_url: result.prUrl },
     });
-  }
-
-  try {
-    const r = report as unknown as Record<string, unknown>;
-    if (result.prUrl) {
-      await app.artifacts.add(sessionId, "pr", [result.prUrl]);
-    }
-    if (Array.isArray(r.filesChanged) && r.filesChanged.length > 0) {
-      await app.artifacts.add(sessionId, "file", r.filesChanged as string[]);
-    }
-    if (Array.isArray(r.commits) && r.commits.length > 0) {
-      await app.artifacts.add(sessionId, "commit", r.commits as string[]);
-    }
-    const s = await app.sessions.get(sessionId);
-    if (s?.branch && report.type === "completed") {
-      await app.artifacts.add(sessionId, "branch", [s.branch]);
-    }
-  } catch {
-    logDebug("conductor", "best-effort artifact tracking");
   }
 
   if (report.type === "completed" && !result.prUrl) {

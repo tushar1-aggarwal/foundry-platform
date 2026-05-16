@@ -158,23 +158,11 @@ export async function processHookPayload(
     return { mapped: "ok", guardrail: evalResult.action };
   }
 
-  // Delegate business logic to session.ts
-  const result = await scoped.sessionHooks.applyHookStatus(s, event, payload);
-
-  // Apply events
-  for (const evt of result.events ?? []) {
-    await scoped.events.log(sessionId, evt.type, evt.opts);
-  }
-
-  // Apply store updates
-  if (result.updates) {
-    await scoped.sessions.update(sessionId, result.updates);
-  }
-
-  // Mark messages read on terminal states
-  if (result.markRead) {
-    await scoped.messages.markRead(sessionId);
-  }
+  // Decide + persist the mechanical side-effects (events log, session
+  // updates, mark-as-read). Returns the decision so this function can
+  // still drive the cross-cutting concerns (bus emit, retry-dispatch,
+  // span end, stage handoff, terminal cleanup) below.
+  const result = await scoped.sessionHooks.ingestHookStatus(s, event, payload);
 
   // On-failure retry loop
   if (result.shouldRetry && result.newStatus === "failed") {
