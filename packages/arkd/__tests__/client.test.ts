@@ -260,3 +260,38 @@ describe("client errors", async () => {
     }
   });
 });
+
+// Regression guard for the hook-pipeline outage: subscribeToChannel used the
+// global `WebSocket`, absent in the Node-20 temporal-worker -> every
+// Temporal-orchestrated session's agent timeline was empty (commit 7dd98731).
+// The fix falls back to the `ws` package when there's no global. This locks
+// the two ways that regresses: `ws` dep removed, or its API drifting away
+// from the EventTarget surface webSocketToAsyncIterable depends on.
+describe("subscribeToChannel WebSocket fallback (no global)", async () => {
+  it("`ws` package is resolvable and API-compatible with the iterator", async () => {
+    const mod = (await import("ws")) as unknown as { default: unknown };
+    const WS = mod.default as unknown as new (url: string) => unknown;
+    expect(typeof WS).toBe("function");
+    // webSocketToAsyncIterable uses addEventListener("message"|"close"|
+    // "error") + close(). ws v8's WebSocket implements exactly this.
+    const proto = (WS as unknown as { prototype: Record<string, unknown> }).prototype;
+    expect(typeof proto.addEventListener).toBe("function");
+    expect(typeof proto.close).toBe("function");
+  });
+
+  it("subscribeToChannel succeeds against live arkd without a global WebSocket", async () => {
+    const savedWS = (globalThis as { WebSocket?: unknown }).WebSocket;
+    // Simulate the Node-worker runtime: no global WebSocket.
+    delete (globalThis as { WebSocket?: unknown }).WebSocket;
+    try {
+      const c = new ArkdClient(`http://localhost:${TEST_PORT}`);
+      // Must NOT throw "WebSocket is not defined"; resolves to an iterable
+      // via the `ws` fallback once the server acks the subscription.
+      const iterable = await c.subscribeToChannel("hooks");
+      expect(iterable).toBeDefined();
+      expect(typeof (iterable as AsyncIterable<unknown>)[Symbol.asyncIterator]).toBe("function");
+    } finally {
+      if (savedWS !== undefined) (globalThis as { WebSocket?: unknown }).WebSocket = savedWS;
+    }
+  });
+});
