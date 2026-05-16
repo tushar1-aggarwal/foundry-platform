@@ -20,17 +20,6 @@ export async function registerInstance(
 ): Promise<{ stop: () => void; isPrimary: () => Promise<boolean> }> {
   const db = app.db;
 
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS instance_heartbeat (
-        id TEXT PRIMARY KEY,
-        pid INTEGER NOT NULL,
-        started_at TEXT NOT NULL,
-        last_heartbeat TEXT NOT NULL
-      )`,
-    )
-    .run();
-
   await cleanStaleInstances(app);
 
   const now = new Date().toISOString();
@@ -101,14 +90,6 @@ async function cleanStaleInstances(app: AppContext): Promise<void> {
 export async function activeInstanceCount(app: AppContext): Promise<number> {
   try {
     const db = app.db;
-    await db
-      .prepare(
-        `CREATE TABLE IF NOT EXISTS instance_heartbeat (
-          id TEXT PRIMARY KEY, pid INTEGER NOT NULL,
-          started_at TEXT NOT NULL, last_heartbeat TEXT NOT NULL
-        )`,
-      )
-      .run();
     await cleanStaleInstances(app);
     const row = (await db.prepare("SELECT COUNT(*) as count FROM instance_heartbeat").get()) as { count: number };
     return row.count;
