@@ -80,50 +80,28 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     }
 
     // Phase 1 scoping: resolve `runtime` override and stash a hint on
-    // session.config for dispatch. See commit body for full reasoning;
-    // load-bearing decisions captured here:
+    // session.config for dispatch. scoping_overrides rows are PREFERENCES
+    // (defaults), not POLICY -- a user-level row is a saved `--runtime`,
+    // team / tenant rows are the same one scope outward. Phase 2 may add
+    // a separate `policy_lock` mechanism if hard mandates are needed.
     //
-    // (1) Preference, not policy. scoping_overrides rows are READ as
-    //     defaults that fill in when the caller didn't choose. A
-    //     user-level row is functionally a "saved --runtime"; team
-    //     and tenant rows are the same shape one scope outward. They
-    //     are NOT mandates. Caller-explicit therefore wins over rows
-    //     at every scope -- the most-explicit/most-recent signal is
-    //     authoritative. (Considered: tenant=policy + user=preference
-    //     and all-scopes=policy; both rejected because they make
-    //     user-level rows philosophically awkward and bifurcate the
-    //     mental model. Phase 2 may add a separate `policy_lock`
-    //     mechanism if hard mandates are needed.)
+    // Fail-loud on unknown runtime: an override pointing at an
+    // unregistered runtime throws INVALID_PARAMS so a misconfigured row
+    // surfaces immediately instead of silently dropping. Phase 2 adds
+    // admin write-time validation so the bad row never lands.
     //
-    // (2) Caller-explicit short-circuits the resolver. When opts.runtime
-    //     is set we do NOT call resolve() at all. Validation cost saved
-    //     and the resolver cannot reject a request the caller already
-    //     answered. A bad scoping_overrides row will still surface --
-    //     just on the next default-using call rather than this one.
-    //
-    // (3) Fail-loud on unknown runtime. If the resolved override does
-    //     NOT match a registered runtime, throw INVALID_PARAMS rather
-    //     than logDebug + drop. Same fail-closed posture as the
-    //     team-chain cycle defense; debug logs are off in default
-    //     prod log levels and would hide the misconfigured row from
-    //     both the caller and ops. Phase 2 adds admin write-time
-    //     validation so the bad row never lands in the first place.
-    //
-    // (4) Agent-side opt-out (`runtime_locked: true` in agent YAML)
-    //     is enforced at DISPATCH, not here -- the agent isn't
-    //     resolved at session/start. See applyScopingRuntimeHint().
-    if (!opts.runtime) {
-      const runtimeOverride = await app.scoping.resolve<string>(ctx, "runtime");
-      if (runtimeOverride !== null) {
-        if (app.runtimes.get(runtimeOverride) === null) {
-          throw new RpcError(
-            `Runtime override '${runtimeOverride}' is not a registered runtime ` +
-              `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
-            ErrorCodes.INVALID_PARAMS,
-          );
-        }
-        opts.config = { ...(opts.config ?? {}), scoping_runtime_hint: runtimeOverride };
+    // Agent-side opt-out (`runtime_locked: true`) is enforced at DISPATCH
+    // -- the agent isn't resolved yet here. See applyScopingRuntimeHint().
+    const runtimeOverride = await app.scoping.resolve<string>(ctx, "runtime");
+    if (runtimeOverride !== null) {
+      if (app.runtimes.get(runtimeOverride) === null) {
+        throw new RpcError(
+          `Runtime override '${runtimeOverride}' is not a registered runtime ` +
+            `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
+          ErrorCodes.INVALID_PARAMS,
+        );
       }
+      opts.config = { ...(opts.config ?? {}), scoping_runtime_hint: runtimeOverride };
     }
 
     // Phase 1 scoping: resolve `model` override. Same shape and

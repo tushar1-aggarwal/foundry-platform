@@ -29,7 +29,7 @@ export interface WhoAmIResponse {
   userId: string;
   email: string | null;
   tenantId: string;
-  role: "admin" | "member" | "viewer";
+  role: "admin" | "member" | "viewer" | "worker";
 }
 
 export function registerAuthWhoamiHandlers(router: Router, app: AppContext): void {

@@ -14,7 +14,7 @@ export interface Identity {
   userId: string;
   email: string | null;
   tenantId: string;
-  role: "admin" | "member" | "viewer";
+  role: "admin" | "member" | "viewer" | "worker";
 }
 
 interface WhoAmIResponse {
