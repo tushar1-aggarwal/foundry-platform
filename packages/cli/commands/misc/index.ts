@@ -7,7 +7,6 @@
 import type { Command } from "commander";
 import { registerPrCommands } from "./pr.js";
 import { registerWatchCommand } from "./watch.js";
-import { registerClaudeCommands } from "./claude.js";
 import { registerDoctorCommand } from "./doctor.js";
 import { registerArkdCommand } from "./arkd.js";
 import { registerChannelCommand } from "./channel.js";
@@ -21,7 +20,6 @@ import { registerInitCommand } from "./init.js";
 export function registerMiscCommands(program: Command): void {
   registerPrCommands(program);
   registerWatchCommand(program);
-  registerClaudeCommands(program);
   registerDoctorCommand(program);
   registerArkdCommand(program);
   registerChannelCommand(program);
