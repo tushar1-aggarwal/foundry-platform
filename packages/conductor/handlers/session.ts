@@ -92,16 +92,22 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     //
     // Agent-side opt-out (`runtime_locked: true`) is enforced at DISPATCH
     // -- the agent isn't resolved yet here. See applyScopingRuntimeHint().
-    const runtimeOverride = await app.scoping.resolve<string>(ctx, "runtime");
-    if (runtimeOverride !== null) {
-      if (app.runtimes.get(runtimeOverride) === null) {
-        throw new RpcError(
-          `Runtime override '${runtimeOverride}' is not a registered runtime ` +
-            `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
-          ErrorCodes.INVALID_PARAMS,
-        );
+    // An explicit caller-chosen runtime (opts.runtime) wins outright: the
+    // tenant override is a preference/default, so a caller who already
+    // picked their runtime should neither be validated against nor have a
+    // hint stashed -- and a misconfigured override row must not block them.
+    if (!opts.runtime) {
+      const runtimeOverride = await app.scoping.resolve<string>(ctx, "runtime");
+      if (runtimeOverride !== null) {
+        if (app.runtimes.get(runtimeOverride) === null) {
+          throw new RpcError(
+            `Runtime override '${runtimeOverride}' is not a registered runtime ` +
+              `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
+            ErrorCodes.INVALID_PARAMS,
+          );
+        }
+        opts.config = { ...(opts.config ?? {}), scoping_runtime_hint: runtimeOverride };
       }
-      opts.config = { ...(opts.config ?? {}), scoping_runtime_hint: runtimeOverride };
     }
 
     // Phase 1 scoping: resolve `model` override. Same shape and

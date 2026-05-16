@@ -38,7 +38,7 @@ describe("web server", async () => {
   it("starts and serves dashboard HTML", async () => {
     const { existsSync } = await import("fs");
     const { join } = await import("path");
-    const distIndex = join(import.meta.dir, "../../../web/dist/index.html");
+    const distIndex = join(import.meta.dir, "../../web/dist/index.html");
     if (!existsSync(distIndex)) {
       throw new Error(`prereq missing: ${distIndex} -- run 'make build-web' before 'make test'`);
     }
