@@ -55,6 +55,31 @@ import { ArkdClientError } from "../common/errors.js";
 import { fetchWithRetry } from "./retry.js";
 import { webSocketToAsyncIterable } from "./ws-iterator.js";
 
+/**
+ * Resolve a WebSocket constructor that works on every runtime Ark targets.
+ *
+ * Bun (and browsers / Node >=22) expose `globalThis.WebSocket`. The
+ * temporal-worker deliberately runs under Node 20 (Dockerfile.temporal-
+ * worker: the Temporal SDK needs Node's V8 promiseHooks), where
+ * `WebSocket` is NOT a global -- `new WebSocket()` threw
+ * "WebSocket is not defined", so the arkd-events hooks consumer never
+ * subscribed and the agent timeline stayed empty for every Temporal-
+ * orchestrated session. Fall back to the `ws` package (explicit dep) on
+ * runtimes without the global. Cached after first resolve.
+ */
+let _wsCtor: typeof WebSocket | undefined;
+async function resolveWebSocketCtor(): Promise<typeof WebSocket> {
+  if (_wsCtor) return _wsCtor;
+  const g = (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
+  if (g) {
+    _wsCtor = g;
+    return g;
+  }
+  const mod = (await import("ws")) as unknown as { default: typeof WebSocket };
+  _wsCtor = mod.default;
+  return _wsCtor;
+}
+
 export class ArkdClient {
   private token: string | null;
   private requestTimeoutMs: number;
@@ -196,14 +221,15 @@ export class ArkdClient {
    * `Sec-WebSocket-Protocol` for the `Bearer.` prefix -- same `checkAuth`
    * function as for HTTP requests.
    */
-  subscribeToChannel<E extends Record<string, unknown> = Record<string, unknown>>(
+  async subscribeToChannel<E extends Record<string, unknown> = Record<string, unknown>>(
     channel: string,
     opts?: { signal?: AbortSignal },
   ): Promise<AsyncIterable<E>> {
     const wsBase = this.baseUrl.replace(/^http(s?):\/\//, "ws$1://");
     const url = `${wsBase}/ws/channel/${encodeURIComponent(channel)}`;
     const protocols = this.token ? [`Bearer.${this.token}`] : undefined;
-    const ws = new WebSocket(url, protocols);
+    const WS = await resolveWebSocketCtor();
+    const ws = new WS(url, protocols) as unknown as WebSocket;
     return webSocketToAsyncIterable<E>(ws, channel, opts?.signal);
   }
 
