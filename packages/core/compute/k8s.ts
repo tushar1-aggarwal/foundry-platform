@@ -433,6 +433,14 @@ export class K8sCompute implements Compute {
 
   async ensureReachable(h: ComputeHandle, opts: EnsureReachableOpts): Promise<void> {
     await this.setupPortForward(h, opts);
+    // Drain the agent pod's arkd hooks channel into the conductor, same as
+    // LocalCompute/EC2Compute. Without this the agent's StopFailure/SessionEnd
+    // hooks buffer on the pod and never reach session.error. Idempotent.
+    const arkdUrl = this.getArkdUrl(h);
+    if (arkdUrl) {
+      const { startArkdEventsConsumer } = await import("../services/channel/arkd-events-consumer.js");
+      startArkdEventsConsumer(opts.app, h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
+    }
   }
 
   // ── setupPortForward (private; shared by provision + ensureReachable) ────

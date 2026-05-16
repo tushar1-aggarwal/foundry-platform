@@ -28,6 +28,21 @@ function resolveClaudeExecutable(): string | undefined {
   } catch {
     /* no vendored binary next to ark -- fall through */
   }
+  try {
+    const sdkPkg = require.resolve("@anthropic-ai/claude-agent-sdk/package.json");
+    const atAnthropic = join(dirname(sdkPkg), "..");
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    for (const suffix of [`linux-${arch}`, `linux-${arch}-musl`]) {
+      const p = join(atAnthropic, `claude-agent-sdk-${suffix}`, "claude");
+      try {
+        if (statSync(p).isFile()) return p;
+      } catch {
+        /* try next variant */
+      }
+    }
+  } catch {
+    /* SDK package not resolvable -- fall through to PATH lookup */
+  }
   return Bun.which("claude") ?? undefined;
 }
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
@@ -495,6 +510,7 @@ async function drainStream(
   let exitCode = 0;
   let sdkSessionId: string | undefined;
   let outcome: StreamOutcome = "completed";
+  let launchError: string | null = null;
 
   try {
     for await (const message of stream) {
@@ -571,13 +587,28 @@ async function drainStream(
       return { outcome, sawResult, exitCode: 1, sdkSessionId };
     }
     const e = err as { message?: string } | null;
-    writeLine({ type: "error", source: "launch", message: String(e?.message ?? err) });
+    launchError = String(e?.message ?? err);
+    writeLine({ type: "error", source: "launch", message: launchError });
     exitCode = 1;
   }
 
   if (!sawResult && exitCode === 0 && outcome === "completed") {
-    writeLine({ type: "error", source: "launch", message: "stream ended without result message" });
+    launchError = "stream ended without result message";
+    writeLine({ type: "error", source: "launch", message: launchError });
     exitCode = 1;
+  }
+
+  // When the agent fails before the SDK emits a `result` (binary missing,
+  // auth rejected, stream died), no Stop/StopFailure hook is generated, so
+  // the conductor would only ever see a bare non-zero exit. Forward a
+  // synthetic is_error result through the same hook path the real
+  // is_error result uses -- this drives the StopFailure transition and
+  // lands the actual reason in session.error / the event log.
+  if (launchError) {
+    await forwardToConductor(
+      { type: "result", is_error: true, error: launchError, errors: [launchError], subtype: "launch_error" },
+      forwardDeps,
+    );
   }
 
   return { outcome, sawResult, exitCode, sdkSessionId };
@@ -959,12 +990,15 @@ export async function runAgentSdkLaunch(opts: RunAgentSdkLaunchOpts): Promise<Ru
     ],
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    executable: "bun",
     model: effectiveModel,
     maxTurns,
     maxBudgetUsd,
     systemPrompt: systemAppend ? { type: "preset", preset: "claude_code", append: systemAppend } : undefined,
-    ...(claudeExePath ? { pathToClaudeCodeExecutable: claudeExePath } : {}),
+    // claudeExePath is the bundled native standalone binary -- it self-execs,
+    // so spawn it directly (no `executable: bun`, which would make the SDK run
+    // `bun <native-elf>` and exit 1). Only fall back to bun-running the SDK's
+    // own JS CLI when no native binary was resolved.
+    ...(claudeExePath ? { pathToClaudeCodeExecutable: claudeExePath } : { executable: "bun" as const }),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     // Stop hook: gates the SDK's actual stop on the explicit-complete +
     // empty-queue contract above. Returning `decision: "block"` with a
