@@ -347,7 +347,6 @@ jobs:
   web-e2e:
     runs-on: macos-latest
     timeout-minutes: 15
-    continue-on-error: true # WIP: fixtures use Bun APIs incompatible with Playwright/Node runner
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -363,10 +362,11 @@ jobs:
       - name: Install dependencies
         run: bun install
       - name: Install Playwright browsers
-        # bunx --bun: the fixture (packages/e2e/fixtures/web-server.ts)
-        # uses Bun APIs (`import { spawn } from "bun"`, `import.meta.dir`,
-        # `Bun.sleep`) that the Node Playwright runner can't parse. Running
-        # Playwright under Bun makes the imports resolve.
-        run: cd packages/e2e && bun install && bunx --bun playwright install chromium
+        # Standard Node Playwright runner: the fixtures
+        # (packages/e2e/fixtures/*.ts) are Node-only -- the Bun-coupled
+        # `ark web` server runs out-of-process as its own Bun subprocess,
+        # state is seeded over HTTP. Running Playwright under Node is the
+        # supported path; `bunx --bun` was a non-working hack.
+        run: cd packages/e2e && bun install && npx playwright install chromium
       - name: Run Web UI E2E tests
-        run: cd packages/e2e && bunx --bun playwright test
+        run: cd packages/e2e && npx playwright test
