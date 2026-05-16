@@ -192,6 +192,12 @@ export function makeApi(transport: WebTransport) {
       }),
     getTranscript: (id: string) =>
       rpc<{ messages: any[]; size: number; exists: boolean }>("session/transcript", { sessionId: id }),
+    getSessionEvents: (id: string) => rpc<{ events: any[] }>("session/events", { sessionId: id }),
+    getProcessLog: (component: string, opts?: { tail?: number }) =>
+      rpc<{ content: string; size: number; exists: boolean }>("diagnostics/processLog", {
+        component,
+        ...(opts?.tail ? { tail: opts.tail } : {}),
+      }),
     createSession: (data: SessionStartRequest) =>
       rpc<SessionStartResponse>("session/start", data).then((r) => ({ ok: true as const, session: r.session })),
     stop: (id: string) => rpc<SessionStopResponse>("session/stop", { sessionId: id } satisfies SessionStopRequest),
