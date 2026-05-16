@@ -458,7 +458,7 @@ export class K8sCompute implements Compute {
     const arkdUrl = this.getArkdUrl(h);
     if (arkdUrl) {
       const { startArkdEventsConsumer } = await import("../services/channel/arkd-events-consumer.js");
-      startArkdEventsConsumer(opts.app, h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
+      startArkdEventsConsumer(opts.app, h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null, opts.sessionId);
       // Durable, session-attached proof the conductor pointed a hooks
       // consumer at THIS session's pod arkd. If a session's event log has
       // no arkd_consumer_attached, ensureReachable never ran for it; if it
