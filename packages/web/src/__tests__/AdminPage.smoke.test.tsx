@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import React from "react";
 import { renderToString } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockTransport } from "../transport/MockTransport.js";
 import { TransportProvider } from "../transport/TransportContext.js";
 import { AdminPage } from "../pages/AdminPage.js";
@@ -27,10 +28,13 @@ describe("AdminPage smoke", () => {
     let html: string | null = null;
     let err: Error | null = null;
     try {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
       html = renderToString(
-        <TransportProvider transport={transport}>
-          <AdminPage view="admin" onNavigate={() => {}} readOnly={false} />
-        </TransportProvider>,
+        <QueryClientProvider client={qc}>
+          <TransportProvider transport={transport}>
+            <AdminPage view="admin" onNavigate={() => {}} readOnly={false} />
+          </TransportProvider>
+        </QueryClientProvider>,
       );
     } catch (e) {
       err = e as Error;

@@ -8,13 +8,11 @@ import { UsersTab } from "../components/admin/UsersTab.js";
 import { ScopingTab } from "../components/admin/ScopingTab.js";
 import { SkillsTab } from "../components/admin/SkillsTab.js";
 import { useOptionalAuth } from "../auth/AuthContext.js";
-import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 
 interface AdminPageProps {
   view: string;
   onNavigate: (view: string) => void;
   readOnly: boolean;
-  daemonStatus?: DaemonStatus | null;
   onToast?: (msg: string, type: string) => void;
 }
 
@@ -31,7 +29,7 @@ interface AdminPageProps {
  * the early return here just keeps the UI from rendering four empty
  * tables and a stream of FORBIDDEN toasts to a non-admin caller.
  */
-export function AdminPage({ view, onNavigate, readOnly, daemonStatus, onToast }: AdminPageProps) {
+export function AdminPage({ view, onNavigate, readOnly, onToast }: AdminPageProps) {
   // Hooks first so order is stable across render branches.
   const [tab, setTab] = useState<string>("tenants");
   const auth = useOptionalAuth();
@@ -39,7 +37,7 @@ export function AdminPage({ view, onNavigate, readOnly, daemonStatus, onToast }:
 
   if (role !== "admin") {
     return (
-      <Layout view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus}>
+      <Layout view={view} onNavigate={onNavigate} readOnly={readOnly}>
         <PageShell title="Admin">
           <AdminAccessDenied authStatus={auth?.status ?? "anonymous"} onNavigate={onNavigate} />
         </PageShell>
@@ -48,7 +46,7 @@ export function AdminPage({ view, onNavigate, readOnly, daemonStatus, onToast }:
   }
 
   return (
-    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus}>
+    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly}>
       <PageShell title="Admin" padded={false}>
         <ContentTabs
           tabs={[

@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { fmtCost, relTime } from "../util.js";
 import { cn } from "../lib/utils.js";
 import { AlertCircle, CheckCircle2, Clock, PlugZap, RotateCcw } from "lucide-react";
-import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 import { useDashboardSummaryQuery, useAllSessionsQuery } from "../hooks/useDashboardQuery.js";
 import { Button } from "./ui/button.js";
 import { Avatar } from "./ui/Avatar.js";
@@ -55,7 +54,6 @@ interface DashboardViewProps {
   onNavigate: (view: string) => void;
   onSelectSession?: (sessionId: string) => void;
   readOnly: boolean;
-  daemonStatus?: DaemonStatus | null;
 }
 
 /** `fetch()` throws a TypeError with "Failed to fetch" when the network layer
@@ -377,7 +375,6 @@ export function DashboardView({
   onNavigate: _onNavigate,
   onSelectSession,
   readOnly: _readOnly,
-  daemonStatus: _daemonStatus,
 }: DashboardViewProps) {
   const summaryQuery = useDashboardSummaryQuery();
   const sessionsQuery = useAllSessionsQuery();

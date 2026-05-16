@@ -4,7 +4,6 @@ import { PageShell } from "../components/PageShell.js";
 import { ToolsView } from "../components/ToolsView.js";
 import { cn } from "../lib/utils.js";
 import { Sparkles, BookOpen } from "lucide-react";
-import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 
 const TAB_ICONS = { skills: Sparkles, recipes: BookOpen } as const;
 
@@ -12,14 +11,13 @@ interface ToolsPageProps {
   view: string;
   onNavigate: (view: string) => void;
   readOnly: boolean;
-  daemonStatus?: DaemonStatus | null;
 }
 
-export function ToolsPage({ view, onNavigate, readOnly, daemonStatus }: ToolsPageProps) {
+export function ToolsPage({ view, onNavigate, readOnly }: ToolsPageProps) {
   const [toolsTab, setToolsTab] = useState<"skills" | "recipes">("skills");
 
   return (
-    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus}>
+    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly}>
       <PageShell
         title="Tools"
         padded={false}

@@ -3,13 +3,11 @@ import { Layout } from "../components/Layout.js";
 import { PageShell } from "../components/PageShell.js";
 import { FlowsView } from "../components/FlowsView.js";
 import { Button } from "../components/ui/button.js";
-import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 
 interface FlowsPageProps {
   view: string;
   onNavigate: (view: string) => void;
   readOnly: boolean;
-  daemonStatus?: DaemonStatus | null;
   initialSelectedId?: string | null;
   onSelectedChange?: (id: string | null) => void;
 }
@@ -18,14 +16,13 @@ export function FlowsPage({
   view,
   onNavigate,
   readOnly,
-  daemonStatus,
   initialSelectedId,
   onSelectedChange,
 }: FlowsPageProps) {
   const [showNew, setShowNew] = useState(false);
 
   return (
-    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus}>
+    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly}>
       <PageShell
         title="Flows"
         padded={false}
