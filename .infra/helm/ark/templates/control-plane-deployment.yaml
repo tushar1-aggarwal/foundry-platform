@@ -116,12 +116,6 @@ spec:
               value: "test"
             {{- end }}
             {{- end }}
-            {{- if .Values.controlPlane.devAllowLocalHostedStorage }}
-            # See values.yaml note: bypass for the still-TODO S3SnapshotStore.
-            # Safe at replicaCount=1 only.
-            - name: ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE
-              value: "1"
-            {{- end }}
           {{- if or .Values.llm.anthropicApiKey .Values.llm.existingSecret }}
             - name: ANTHROPIC_API_KEY
               valueFrom:

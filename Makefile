@@ -223,7 +223,6 @@ dev-k8s-local: ## Deploy full ark control plane to local OrbStack k8s (LocalStac
 		--set controlPlane.image.tag=$(IMG_TAG) \
 		--set controlPlane.image.pullPolicy=Never \
 		--set controlPlane.auth.enabled=false \
-		--set controlPlane.devAllowLocalHostedStorage=true \
 		--set workers.image.tag=$(IMG_TAG) \
 		--set workers.image.pullPolicy=Never \
 		--set temporal.worker.image.repository=ark-temporal-worker \
@@ -531,7 +530,7 @@ test-e2e-t6-docker: build-ark-image test-e2e-control-plane-up ## Run T6 (real cl
 	  DATABASE_URL="postgres://ark:ark@localhost:15434/ark?sslmode=disable" \
 	  ARK_TEMPORAL_SERVER_URL=localhost:7234 ARK_TEMPORAL_NAMESPACE=default \
 	  ARK_PROFILE=control-plane ARK_BLOB_BACKEND=local \
-	  ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE=1 ARK_SECRETS_BACKEND=file \
+	  ARK_SECRETS_BACKEND=file \
 	  ARK_AUTH_REQUIRE_TOKEN=false ARK_DEFAULT_TENANT=default \
 	  ARK_TEMPORAL_WORKER=true ARK_TEMPORAL_ORCHESTRATION=true \
 	  ARK_ENABLE_TEST_ACTIONS=1 \
@@ -620,7 +619,7 @@ test-e2e-local-real-llm: build-ark-image test-e2e-control-plane-up ## Local real
 	  DATABASE_URL="postgres://ark:ark@localhost:15434/ark?sslmode=disable" \
 	  ARK_TEMPORAL_SERVER_URL=localhost:7234 ARK_TEMPORAL_NAMESPACE=default \
 	  ARK_PROFILE=control-plane ARK_BLOB_BACKEND=local \
-	  ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE=1 ARK_SECRETS_BACKEND=file \
+	  ARK_SECRETS_BACKEND=file \
 	  ARK_AUTH_REQUIRE_TOKEN=false ARK_DEFAULT_TENANT=default \
 	  ARK_TEMPORAL_WORKER=true ARK_TEMPORAL_ORCHESTRATION=true \
 	  ARK_ENABLE_TEST_ACTIONS=1 \

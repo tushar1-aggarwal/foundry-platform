@@ -70,18 +70,6 @@ export const claudeAgentExecutor: Executor = {
       return { ok: false, handle: "", message: `Session ${opts.sessionId} not found` };
     }
 
-    if (app.mode.kind === "hosted" && process.env.ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE !== "1") {
-      return {
-        ok: false,
-        handle: "",
-        message:
-          "claude-agent executor is local-mode only -- per-session state writes to the conductor's " +
-          "tracks dir which lives on the pod's ephemeral disk in hosted mode. Use claude-code on a " +
-          "real compute target for hosted deployments. " +
-          "For laptop dev (docker-compose), set ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE=1.",
-      };
-    }
-
     // Conductor-side session dir for the executor's log tee (stdio.log) so
     // `ark session output` and the dashboard's Logs tab have something to
     // read while arkd is still being provisioned. The agent's own

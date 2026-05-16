@@ -124,34 +124,11 @@ export function registerRuntime(container: AppContainer): void {
       dispose: (r: StatusPollerRegistry) => r.dispose(),
     }),
 
-    // Snapshot store. Local mode uses the FS-backed store at
-    // `<arkDir>/snapshots/`. Hosted mode refuses the FS fallback at boot --
-    // snapshots are pod-ephemeral and not visible across replicas, so any
-    // session pause/resume that lands on a different pod would silently fail.
-    // Hand-tuned to throw with a clear configuration error so the operator
-    // wires up an `S3SnapshotStore` (TODO #fixme) before turning hosted mode
-    // on. The interface stays unchanged so the eventual S3 implementation
-    // drops in here without rippling through callers.
-    snapshotStore: asFunction(
-      (c: { config: ArkConfig; mode: import("../modes/app-mode.js").AppMode }) => {
-        // ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE keeps the laptop dev loop
-        // usable while an S3SnapshotStore is still TODO. NEVER set in
-        // production -- a multi-replica deployment loses snapshot
-        // visibility across pods if this is on.
-        if (c.mode.kind === "hosted" && process.env.ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE !== "1") {
-          throw new Error(
-            "snapshotStore: hosted mode requires a non-fs snapshot backend " +
-              "(FsSnapshotStore is pod-ephemeral and not multi-replica safe). " +
-              "Wire up an S3SnapshotStore implementation before enabling hosted mode. " +
-              "For laptop dev, set ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE=1 (NOT for prod).",
-          );
-        }
-        return new FsSnapshotStore(join(c.config.dirs.ark, "snapshots"));
-      },
-      {
-        lifetime: Lifetime.SINGLETON,
-      },
-    ),
+    // FS-backed snapshot store. Only exercised by the Firecracker/EC2
+    // warm-pool + session pause/resume; unused by k8s/local-direct compute.
+    snapshotStore: asFunction((c: { config: ArkConfig }) => new FsSnapshotStore(join(c.config.dirs.ark, "snapshots")), {
+      lifetime: Lifetime.SINGLETON,
+    }),
 
     // ── Infra launchers (every one has start/stop; disposers tear down) ─
 
