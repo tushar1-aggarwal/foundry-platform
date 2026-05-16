@@ -35,6 +35,27 @@ const { destroyComputeActivity } = proxyActivities<typeof acts>({
   retry: { maximumAttempts: 1 },
 });
 
+/**
+ * Temporal wraps activity throws as `ActivityFailure` whose own `.message` is
+ * the useless "Activity task failed" -- the real reason (the activity's
+ * ApplicationFailure) is nested in `.cause`. Walk the chain and keep the
+ * deepest non-generic message so `session.error` explains itself instead of
+ * forcing a dig through temporal-worker logs. Pure + sandbox-safe.
+ */
+function unwrapWorkflowError(err: unknown): string {
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  let best = "";
+  while (cur && typeof cur === "object" && !seen.has(cur)) {
+    seen.add(cur);
+    const msg =
+      typeof (cur as { message?: unknown }).message === "string" ? (cur as { message: string }).message.trim() : "";
+    if (msg && !/^Activity task failed/.test(msg)) best = msg;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return best || String((err as Error)?.message ?? err);
+}
+
 export const approveReviewGateSignal = defineSignal<[{ sessionId: string }]>("approveReviewGate");
 export const rejectReviewGateSignal = defineSignal<[{ sessionId: string; reason: string }]>("rejectReviewGate");
 
@@ -156,14 +177,15 @@ export async function sessionWorkflow(input: SessionWorkflowInput): Promise<void
       try {
         launch = await dispatchStageActivity({ sessionId: input.sessionId, stageIdx });
       } catch (err) {
+        const reason = unwrapWorkflowError(err);
         await projectStageActivity({
           sessionId: input.sessionId,
           stageIdx,
-          patch: { status: "failed", error: String((err as Error)?.message ?? err) },
+          patch: { status: "failed", error: reason },
         });
         await projectSessionActivity({
           sessionId: input.sessionId,
-          patch: { status: "failed", error: String((err as Error)?.message ?? err) },
+          patch: { status: "failed", error: reason },
         });
         throw err;
       }
@@ -182,13 +204,13 @@ export async function sessionWorkflow(input: SessionWorkflowInput): Promise<void
       await projectStageActivity({
         sessionId: input.sessionId,
         stageIdx,
-        patch: { status: result.status },
+        patch: { status: result.status, ...(result.error ? { error: result.error } : {}) },
       });
 
       if (result.status !== "completed") {
         await projectSessionActivity({
           sessionId: input.sessionId,
-          patch: { status: result.status },
+          patch: { status: result.status, ...(result.error ? { error: result.error } : {}) },
         });
         return;
       }

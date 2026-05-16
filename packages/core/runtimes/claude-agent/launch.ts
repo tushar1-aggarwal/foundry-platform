@@ -1147,9 +1147,13 @@ async function main(): Promise<void> {
   const worktree = need("ARK_WORKTREE");
   const promptFile = need("ARK_PROMPT_FILE");
 
-  if (!process.env.ANTHROPIC_API_KEY && process.env.ARK_DEV_FORCE_DIRECT !== "1") {
+  if (
+    !process.env.ANTHROPIC_API_KEY &&
+    !process.env.CLAUDE_CODE_OAUTH_TOKEN &&
+    process.env.ARK_DEV_FORCE_DIRECT !== "1"
+  ) {
     console.error(
-      "[agent-sdk launch] ANTHROPIC_API_KEY is required. Set it in the environment or via StageSecretResolver.",
+      "[agent-sdk launch] one of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN is required. Set it in the environment or via StageSecretResolver.",
     );
     process.exit(2);
   }

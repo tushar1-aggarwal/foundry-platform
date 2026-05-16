@@ -218,7 +218,10 @@ agent-image: ## Build ONLY the lean per-session agent image (the sole iteration 
 	@echo "Then dispatch with compute_name=k8s-agent. Only this image is rebuilt per iteration."
 
 dev-k8s-local: ## Deploy full ark control plane to local OrbStack k8s (LocalStack + Temporal + Postgres + Redis in-cluster)
-	@test -n "$$ANTHROPIC_API_KEY" || { echo 'ANTHROPIC_API_KEY must be set'; exit 1; }
+	# Agent auth is the CLAUDE_CODE_OAUTH_TOKEN tenant secret set via the
+	# conductor (`ark secrets set`), NOT a helm-baked key -- claude-agent is
+	# the only runtime here. ANTHROPIC_API_KEY stays optional: when unset the
+	# chart's `if .Values.llm.anthropicApiKey` blocks skip cleanly.
 	@kubectl config use-context orbstack >/dev/null
 	$(eval IMG_TAG := local-$(shell date +%s))
 	@echo "Building ark image (tag: $(IMG_TAG))..."

@@ -168,7 +168,7 @@ export const claudeAgentExecutor: Executor = {
       // rejected silently as "not for me".
       ARK_SESSION_HANDLE: handle,
       ARK_SESSION_DIR: workerSessionDir,
-      ARK_WORKTREE: workerWorkdir ?? session.workdir ?? session.repo ?? "",
+      ARK_WORKTREE: workerWorkdir ?? session.workdir ?? session.repo ?? workerSessionDir,
       ARK_PROMPT_FILE: workerPromptFile,
       ARK_ARKD_URL: process.env.ARK_ARKD_URL ?? `http://localhost:${app.config.ports.arkd}`,
     };

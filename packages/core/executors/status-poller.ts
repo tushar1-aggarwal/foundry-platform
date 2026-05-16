@@ -9,6 +9,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import type { AppContext } from "../app.js";
+import type { Session } from "../../types/index.js";
 import type { Executor, ExecutorStatus } from "../executor.js";
 import { getExecutor } from "../executor.js";
 import { logDebug, logError, logInfo, logWarn } from "../observability/structured-log.js";
@@ -152,6 +153,34 @@ async function probeSessionStatus(
 }
 
 /**
+ * Resolve the live arkd URL for a session's compute pod, or null when it
+ * can't be reached (no compute, template-only row, pod gone). Used purely
+ * for best-effort forensic capture -- callers must tolerate null.
+ */
+async function resolveArkdUrl(app: AppContext, session: Session): Promise<string | null> {
+  try {
+    if (!session.compute_name) return null;
+    const { target, compute: computeRow } = await resolveComputeTarget(app, session);
+    if (!target || !computeRow) return null;
+    const persistedHandle =
+      ((session.config as { compute_handle?: import("../compute/types.js").ComputeHandle } | null | undefined)
+        ?.compute_handle as import("../compute/types.js").ComputeHandle | undefined) ?? undefined;
+    const computeHandle =
+      target.compute.attachExistingHandle?.({
+        name: computeRow.name,
+        status: computeRow.status,
+        config: computeRow.config ?? {},
+      }) ??
+      persistedHandle ??
+      null;
+    if (!computeHandle) return null;
+    return target.compute.getArkdUrl(computeHandle);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * One poller tick. Exported as _tickForTest so tests can drive ticks manually
  * without relying on setInterval timing. NOT part of the public API.
  *
@@ -269,6 +298,17 @@ export function startStatusPoller(app: AppContext, sessionId: string, handle: st
             if (tree) {
               await app.sessions.mergeConfig(sessionId, { process_tree: tree });
             }
+            // Heartbeat forensic snapshot: the terminal capture can race pod
+            // teardown (a kill -9'd or OOM'd pod leaves no exit handler), so
+            // periodically mirror the worker logs to durable storage. Hosted
+            // only -- local mode already has the conductor-side tee on disk.
+            if (app.mode.kind === "hosted") {
+              const arkdUrl = await resolveArkdUrl(app, session);
+              if (arkdUrl) {
+                const { captureWorkerForensics } = await import("../services/session-forensic.js");
+                await captureWorkerForensics(app, session, arkdUrl);
+              }
+            }
           }
         } catch {
           logDebug("status", "best-effort");
@@ -319,6 +359,24 @@ async function _handleStatus(
       if (!sawCompletionHook) {
         newStatus = "failed";
         error = "agent process exited without firing completion hook -- interrupted before reporting done";
+      }
+    }
+
+    // Pull the worker's stdio.log + transcript.jsonl into durable storage
+    // before the compute pod is reaped (hosted mode skips the conductor-side
+    // tee, so this snapshot is the only post-mortem copy). On failure, fold
+    // the stdio tail into the error + event so the session record explains
+    // itself instead of just "process exited with code N". Best-effort.
+    const arkdUrl = await resolveArkdUrl(app, session);
+    if (arkdUrl) {
+      try {
+        const { captureWorkerForensics } = await import("../services/session-forensic.js");
+        const { stdioTail } = await captureWorkerForensics(app, session, arkdUrl);
+        if (newStatus === "failed" && stdioTail) {
+          error = `${error ?? "agent process exited"}\n--- worker stdio (tail) ---\n${stdioTail}`;
+        }
+      } catch {
+        logDebug("status", "forensic capture best-effort");
       }
     }
 

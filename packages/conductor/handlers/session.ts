@@ -437,10 +437,11 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const scoped = resolveTenantApp(app, ctx);
     const session = await scoped.sessions.get(sessionId);
     if (!session) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
-    const { readForensicFile } = await import("../../core/services/session-forensic.js");
+    const { readSessionForensic } = await import("../../core/services/session-forensic.js");
     // Forensic files live under the daemon's tracks dir (not per-tenant on
-    // disk). Access control is via the tenant-scoped sessions lookup above.
-    const read = await readForensicFile(scoped.config.dirs.tracks, sessionId, "stdio.log", { tail });
+    // disk); in hosted mode the tee is skipped so this falls back to the
+    // durable blob snapshot. Access control is via the tenant-scoped lookup.
+    const read = await readSessionForensic(scoped, session, "stdio.log", { tail });
     if (read.tooLarge) {
       throw new RpcError(
         `stdio.log is ${read.size} bytes, over the 2MB cap -- pass tail=<N> to read the tail`,
@@ -455,8 +456,8 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const scoped = resolveTenantApp(app, ctx);
     const session = await scoped.sessions.get(sessionId);
     if (!session) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
-    const { readForensicFile, parseJsonl } = await import("../../core/services/session-forensic.js");
-    const read = await readForensicFile(scoped.config.dirs.tracks, sessionId, "transcript.jsonl");
+    const { readSessionForensic, parseJsonl } = await import("../../core/services/session-forensic.js");
+    const read = await readSessionForensic(scoped, session, "transcript.jsonl");
     if (read.tooLarge) {
       throw new RpcError(`transcript.jsonl is ${read.size} bytes, over the 2MB cap`, ErrorCodes.INVALID_PARAMS);
     }
@@ -939,9 +940,12 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const fileName = file === "stdio" ? "stdio.log" : "transcript.jsonl";
     const filePath = join(scoped.config.dirs.tracks, sessionId, fileName);
 
-    // Read current contents up to the 2MB cap.
-    const { readForensicFile } = await import("../../core/services/session-forensic.js");
-    const initial = await readForensicFile(scoped.config.dirs.tracks, sessionId, fileName);
+    // Read current contents up to the 2MB cap. Falls back to the durable
+    // blob snapshot in hosted mode (no local tee); the live-follow watcher
+    // below then simply has nothing to tail, which is correct -- there is no
+    // local file to follow when the worker pod owns the only live copy.
+    const { readSessionForensic } = await import("../../core/services/session-forensic.js");
+    const initial = await readSessionForensic(scoped, session, fileName);
 
     // Track the byte offset after the initial read so we only push new bytes.
     let offset = initial.exists ? initial.size : 0;
