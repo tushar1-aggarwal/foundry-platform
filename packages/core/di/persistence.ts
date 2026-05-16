@@ -37,7 +37,7 @@ import {
   AuthSessionManager,
   LoginManager,
 } from "../auth/index.js";
-import { TenantClaudeAuthManager } from "../auth/tenant-claude-auth.js";
+import { TenantClaudeAuthRepository } from "../repositories/tenant_claude_auth.js";
 import {
   FileFlowStore,
   FileSkillStore,
@@ -123,7 +123,7 @@ export function registerRepositories(container: AppContainer): void {
     tenants: asFunction((c: { db: DatabaseAdapter }) => new TenantManager(c.db), { lifetime: Lifetime.SINGLETON }),
     teams: asFunction((c: { db: DatabaseAdapter }) => new TeamManager(c.db), { lifetime: Lifetime.SINGLETON }),
     users: asFunction((c: { db: DatabaseAdapter }) => new UserManager(c.db), { lifetime: Lifetime.SINGLETON }),
-    tenantClaudeAuth: asFunction((c: { db: DatabaseAdapter }) => new TenantClaudeAuthManager(c.db), {
+    tenantClaudeAuth: asFunction((c: { db: DatabaseAdapter }) => new TenantClaudeAuthRepository(c.db), {
       lifetime: Lifetime.SINGLETON,
     }),
     tenantPolicyManager: asFunction((c: { db: DatabaseAdapter }) => new TenantPolicyManager(c.db), {

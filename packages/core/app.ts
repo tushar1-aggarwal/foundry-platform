@@ -67,7 +67,7 @@ import type {
   AuthSessionManager,
   LoginManager,
 } from "./auth/index.js";
-import type { TenantClaudeAuthManager } from "./auth/tenant-claude-auth.js";
+import type { TenantClaudeAuthRepository } from "./repositories/tenant_claude_auth.js";
 import type { WorkerRegistry } from "./hosted/worker-registry.js";
 import type { SessionScheduler } from "./hosted/scheduler.js";
 import type { PricingRegistry } from "./observability/pricing.js";
@@ -662,8 +662,8 @@ export class AppContext {
     return this._resolve("users");
   }
 
-  /** Per-tenant Claude credential binding manager. Available after boot. */
-  get tenantClaudeAuth(): TenantClaudeAuthManager {
+  /** Per-tenant Claude credential binding repository. Available after boot. */
+  get tenantClaudeAuth(): TenantClaudeAuthRepository {
     return this._resolve("tenantClaudeAuth");
   }
 
