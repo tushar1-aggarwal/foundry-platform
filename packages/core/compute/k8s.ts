@@ -465,6 +465,8 @@ export class K8sCompute implements Compute {
       // has this but no arkd_hook_received, the consumer never delivered
       // (subscribe failed / agent didn't publish / wrong arkd). Survives
       // pod death; the decisive root-cause locator for the hook pipeline.
+      // `.catch` keeps a logging hiccup from breaking ensureReachable;
+      // app.events itself is a structural AppContext invariant.
       await opts.app.events
         .log(opts.sessionId, "arkd_consumer_attached", {
           actor: "system",

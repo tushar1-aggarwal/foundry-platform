@@ -638,8 +638,10 @@ describe("portForwardPid not written in cluster mode", () => {
       },
     };
 
-    // ensureReachable calls setupPortForward.
-    await c.ensureReachable!(handle, {});
+    // ensureReachable calls setupPortForward. opts must satisfy
+    // EnsureReachableOpts (app + sessionId) -- same as the other
+    // ensureReachable tests in this file.
+    await c.ensureReachable!(handle, { app, sessionId: "s-1" });
 
     expect(spawnCalled).toBe(false); // no port-forward spawned in cluster mode
     expect((handle.meta as any).k8s.portForwardPid).toBeNull();
@@ -687,7 +689,7 @@ describe("ensureReachable in-cluster probes pod IP", () => {
       },
     };
 
-    await c.ensureReachable!(handle, {});
+    await c.ensureReachable!(handle, { app, sessionId: "s-1" });
 
     // In cluster mode, setupPortForward probes the pod IP path directly.
     const clusterProbe = probed.find((u) => u.includes("10.244.2.77"));
