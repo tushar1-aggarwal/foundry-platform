@@ -39,4 +39,6 @@ export interface ModelDefinition {
   provider_slugs: Record<string, string>;
   /** Context window in tokens. */
   context_window?: number;
+  _source?: "builtin" | "global" | "project";
+  _path?: string;
 }
