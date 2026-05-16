@@ -11,10 +11,7 @@ permission_mode: bypassPermissions
 # and the default `true` applies.
 interactive: false
 secrets:
-  - ANTHROPIC_API_KEY
   - CLAUDE_CODE_OAUTH_TOKEN
-  - ANTHROPIC_BASE_URL
-  - ANTHROPIC_CUSTOM_HEADERS
 # Gateway wire-format compatibility modes. Empty by default (direct Anthropic
 # API works out of the box). Enable as needed when routing through a gateway
 # that doesn't accept the SDK's native wire shape.
