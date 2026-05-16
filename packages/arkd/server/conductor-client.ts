@@ -103,7 +103,12 @@ export async function createConductorClient(
   // initial registration must explicitly initialize first. Without this the
   // conductor rejects every worker/register + heartbeat with
   // "Not initialized -- call initialize first" and the worker never joins.
-  client
+  // Heartbeat must never overtake the initial register: a heartbeat for a
+  // worker the conductor hasn't registered yet is meaningless and the
+  // registry drops it. createConductorClient returns before this resolves
+  // (so a down conductor doesn't block the caller), so gate heartbeat() on
+  // this promise rather than firing workerHeartbeat directly.
+  const registered = client
     .initialize()
     .then(() => client!.workerRegister(registerParams))
     .catch((err: unknown) =>
@@ -112,8 +117,8 @@ export async function createConductorClient(
 
   return {
     heartbeat() {
-      client
-        ?.workerHeartbeat({ id: registerParams.id })
+      registered
+        .then(() => client?.workerHeartbeat({ id: registerParams.id }))
         .catch((err: unknown) =>
           process.stderr.write(`[arkd] worker/heartbeat failed: ${(err as Error)?.message ?? err}\n`),
         );
