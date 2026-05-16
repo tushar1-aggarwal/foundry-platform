@@ -1,5 +1,3 @@
-export { startSessionActivity } from "./start-session.js";
-export { resolveComputeForStageActivity } from "./resolve-compute.js";
 export { provisionComputeActivity } from "./provision-compute.js";
 export { destroyComputeActivity } from "./destroy-compute.js";
 export { dispatchStageActivity } from "./dispatch-stage.js";

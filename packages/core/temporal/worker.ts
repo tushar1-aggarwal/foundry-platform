@@ -2,8 +2,6 @@ import { Worker, NativeConnection } from "@temporalio/worker";
 import { loadAppConfig } from "../config.js";
 import { AppContext } from "../app.js";
 import { depsFromApp } from "../services/deps.js";
-import * as actStartSession from "./activities/start-session.js";
-import * as actResolveCompute from "./activities/resolve-compute.js";
 import * as actProvision from "./activities/provision-compute.js";
 import * as actDestroy from "./activities/destroy-compute.js";
 import * as actDispatch from "./activities/dispatch-stage.js";
@@ -22,8 +20,6 @@ async function main() {
   await app.boot();
   const deps = depsFromApp(app);
 
-  actStartSession.injectDeps(deps);
-  actResolveCompute.injectDeps(deps);
   actProvision.injectDeps(deps);
   actDestroy.injectDeps(deps);
   actDispatch.injectDeps(deps);

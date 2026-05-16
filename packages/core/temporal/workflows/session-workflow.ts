@@ -13,8 +13,6 @@ import { stageWorkflow } from "./stage-workflow.js";
 import { classifyStage } from "../dag-helpers.js";
 
 const {
-  startSessionActivity,
-  resolveComputeForStageActivity,
   provisionComputeActivity,
   dispatchStageActivity,
   awaitStageCompletionActivity,
@@ -52,7 +50,10 @@ export async function sessionWorkflow(input: SessionWorkflowInput): Promise<void
   });
 
   try {
-    await startSessionActivity(input);
+    // SessionService.start() already wrote the row and the session_created
+    // event before scheduling this workflow; no separate start activity is
+    // needed (a previous version of startSessionActivity re-emitted the
+    // event and broke the projection invariant).
     await projectSessionActivity({ sessionId: input.sessionId, patch: { status: "ready" } });
 
     const flow = await loadFlowActivity({ flowName: input.flowName });
@@ -142,9 +143,9 @@ export async function sessionWorkflow(input: SessionWorkflowInput): Promise<void
         continue;
       }
 
-      // Linear/DAG stage: dispatch + await completion.
-      await resolveComputeForStageActivity({ sessionId: input.sessionId, stageIdx });
-      await provisionComputeActivity({ sessionId: input.sessionId, computeName: "local" });
+      // Linear/DAG stage: dispatch + await completion. The activity
+      // resolves the compute target from session.compute_name.
+      await provisionComputeActivity({ sessionId: input.sessionId });
       await projectStageActivity({
         sessionId: input.sessionId,
         stageIdx,

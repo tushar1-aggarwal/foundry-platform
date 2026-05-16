@@ -16,7 +16,11 @@ function deps(): OrchestrationDeps {
  * Provision compute for a session stage.
  *
  * Phase 3: ports `services/dispatch/target-resolver.resolveTargetAndHandle`
- * into the Temporal activity boundary. Idempotent on session id:
+ * into the Temporal activity boundary. The compute target is resolved
+ * from `session.compute_name` (via `app.resolveComputeTarget`) -- there
+ * is no other source of compute identity in hosted mode.
+ *
+ * Idempotent on session id:
  *
  *   1. Persisted handle  -> rehydrate via `Compute.rehydrateHandle`. This
  *      is the second-stage / resume path; method closures don't survive
@@ -32,12 +36,8 @@ function deps(): OrchestrationDeps {
  * Session has no compute target (e.g. hosted-mode default with no
  * compute_name and no AppMode default): activity is a no-op. The
  * dispatcher will surface the missing-target case downstream.
- *
- * No-compute fallback (e.g. local mode + LocalCompute): the input's
- * `computeName: "local"` argument is the workflow's Phase 1 default;
- * this activity now reads `session.compute_name` and ignores that input.
  */
-export async function provisionComputeActivity(input: { sessionId: string; computeName: string }): Promise<void> {
+export async function provisionComputeActivity(input: { sessionId: string }): Promise<void> {
   const d = deps();
   Context.current().heartbeat("provision-start");
 
@@ -46,7 +46,6 @@ export async function provisionComputeActivity(input: { sessionId: string; compu
     // No AppContext escape hatch wired (test profile) -- preserve Phase 1
     // no-op behaviour so unit tests that don't need real provisioning keep
     // passing.
-    void input;
     return;
   }
 

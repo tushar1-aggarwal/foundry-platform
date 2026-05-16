@@ -3,7 +3,6 @@ import type * as acts from "../activities/index.js";
 import type { StageWorkflowInput } from "../types.js";
 
 const {
-  resolveComputeForStageActivity,
   provisionComputeActivity,
   dispatchStageActivity,
   awaitStageCompletionActivity,
@@ -20,8 +19,8 @@ const {
  * then returns the completion status so the parent can aggregate results.
  */
 export async function stageWorkflow(input: StageWorkflowInput): Promise<{ status: string }> {
-  await resolveComputeForStageActivity({ sessionId: input.childSessionId, stageIdx: input.stageIdx });
-  await provisionComputeActivity({ sessionId: input.childSessionId, computeName: "local" });
+  // The activity resolves the compute target from session.compute_name.
+  await provisionComputeActivity({ sessionId: input.childSessionId });
   await projectStageActivity({
     sessionId: input.childSessionId,
     stageIdx: input.stageIdx,
