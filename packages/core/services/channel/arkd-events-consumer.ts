@@ -17,11 +17,12 @@
  * the channel-relay path respectively. See `arkd/routes/channel.ts` for
  * publishers and `arkd/routes/channels.ts` for the generic pub/sub.
  *
- * One reader per remote compute. Started when the compute becomes
- * reachable (right after the forward tunnel is up), stopped when the
- * compute is stopped. The map below is module-scoped because a
- * conductor process owns at most one reader per compute name; the
- * keying matches `app.computes` 1:1.
+ * One reader per remote compute, keyed by compute name. Started when the
+ * compute becomes reachable (right after the forward tunnel is up). The
+ * reader follows the compute's *current* arkd: if the underlying arkd URL
+ * changes (k8s provisions a fresh ephemeral pod per stage/session), the
+ * stale reader is torn down and a new one is bound to the new URL so the
+ * per-name keying never pins us to a dead pod.
  *
  * Resilience: the reader auto-reconnects with backoff on any error
  * other than an explicit stop. Failures are logged but never thrown --
@@ -39,6 +40,13 @@ import { ArkdClient } from "../../../arkd/client/index.js";
 
 interface ConsumerEntry {
   computeName: string;
+  /**
+   * The arkd base URL this consumer is bound to. Tracked so a compute
+   * whose underlying arkd moved (k8s provisions a fresh ephemeral pod ->
+   * fresh arkd URL per stage/session) re-targets instead of the
+   * per-computeName dedup pinning the consumer to a dead pod forever.
+   */
+  arkdUrl: string;
   abort: AbortController;
   stopped: boolean;
 }
@@ -89,11 +97,22 @@ export function startArkdEventsConsumer(
 ): void {
   const existing = consumers.get(computeName);
   if (existing && !existing.stopped) {
-    logDebug("conductor", `arkd-events: already running for compute=${computeName}`);
-    return;
+    if (existing.arkdUrl === arkdUrl) {
+      logDebug("conductor", `arkd-events: already running for compute=${computeName}`);
+      return;
+    }
+    // The compute's arkd moved (k8s ephemeral pod-per-stage/session gives a
+    // fresh arkd URL each dispatch). The old loop is reconnecting against a
+    // dead pod and the per-computeName dedup would otherwise pin us there
+    // forever -- every later pod's hook stream (AgentMessage/PreToolUse/...)
+    // would never reach the conductor. Tear it down and re-target.
+    logInfo("conductor", `arkd-events: retargeting compute=${computeName} ${existing.arkdUrl} -> ${arkdUrl}`);
+    existing.stopped = true;
+    existing.abort.abort();
+    consumers.delete(computeName);
   }
   const abort = new AbortController();
-  const entry: ConsumerEntry = { computeName, abort, stopped: false };
+  const entry: ConsumerEntry = { computeName, arkdUrl, abort, stopped: false };
   consumers.set(computeName, entry);
   void runConsumerLoop(app, entry, arkdUrl, arkdToken);
   logInfo("conductor", `arkd-events: consumer started for compute=${computeName} url=${arkdUrl}`);

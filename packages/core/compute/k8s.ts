@@ -604,6 +604,12 @@ export class K8sCompute implements Compute {
 
   async stop(h: ComputeHandle): Promise<void> {
     const meta = this.readMeta(h);
+    // Tear down the hooks-channel consumer bound to this pod's arkd. Without
+    // this the consumer reconnect-loops against the dead pod forever and the
+    // per-computeName dedup blocks the next pod's consumer -- the agent's
+    // AgentMessage/PreToolUse stream never reaches the conductor again.
+    const { stopArkdEventsConsumer } = await import("../services/channel/arkd-events-consumer.js");
+    stopArkdEventsConsumer(h.name);
     if (meta.portForwardPid) {
       logInfo("compute", "k8s: tearing down port-forward", {
         compute: h.name,
