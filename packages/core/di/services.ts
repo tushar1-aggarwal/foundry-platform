@@ -17,6 +17,8 @@ import type { ComputeRepository } from "../repositories/compute.js";
 import type { EventRepository } from "../repositories/event.js";
 import type { MessageRepository } from "../repositories/message.js";
 import type { TodoRepository } from "../repositories/todo.js";
+import type { ArtifactRepository } from "../repositories/artifact.js";
+import type { LedgerRepository } from "../repositories/ledger.js";
 import type { FlowStateRepository } from "../repositories/flow-state.js";
 import type { FlowStore } from "../stores/flow-store.js";
 import type { RuntimeStore } from "../stores/runtime-store.js";
@@ -87,6 +89,8 @@ export function registerServices(
         events: EventRepository;
         messages: MessageRepository;
         todos: TodoRepository;
+        artifacts: ArtifactRepository;
+        ledger: LedgerRepository;
         flows: FlowStore;
         usageRecorder: UsageRecorder;
         transcriptParsers: TranscriptParserRegistry;
@@ -97,6 +101,8 @@ export function registerServices(
           events: c.events,
           messages: c.messages,
           todos: c.todos,
+          artifacts: c.artifacts,
+          ledger: c.ledger,
           flows: c.flows,
           usageRecorder: c.usageRecorder,
           transcriptParsers: c.transcriptParsers,
@@ -107,6 +113,7 @@ export function registerServices(
           recordSessionUsage: (session, usage, provider, source) =>
             c.app.sessionLifecycle.recordSessionUsage(session, usage, provider, source),
           getOutput: (id, opts) => getOutput(c.app, id, opts),
+          cleanupOnTerminal: (id) => c.app.sessionLifecycle.cleanupOnTerminal(id),
           ...buildFlowCallbacks(c.app),
         }),
       { lifetime },

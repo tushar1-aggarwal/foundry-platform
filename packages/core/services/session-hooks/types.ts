@@ -12,6 +12,8 @@ import type { SessionRepository } from "../../repositories/session.js";
 import type { EventRepository } from "../../repositories/event.js";
 import type { MessageRepository } from "../../repositories/message.js";
 import type { TodoRepository } from "../../repositories/todo.js";
+import type { ArtifactRepository } from "../../repositories/artifact.js";
+import type { LedgerRepository } from "../../repositories/ledger.js";
 import type { FlowStore } from "../../stores/flow-store.js";
 import type { UsageRecorder } from "../../observability/usage.js";
 import type { TranscriptParserRegistry } from "../../runtimes/transcript-parser.js";
@@ -50,6 +52,15 @@ export interface GetOutputCb {
 }
 export type { GetStageCb, GetStageActionCb } from "../flow-callbacks.js";
 
+/**
+ * Terminal-state cleanup (worktree removal, claude-auth deletion, status
+ * poller stop, etc.). Lives on SessionLifecycle; passed as a callback so
+ * SessionHooks doesn't take a dependency on the whole lifecycle service.
+ */
+export interface CleanupOnTerminalCb {
+  (sessionId: string): Promise<void>;
+}
+
 // ── Deps ────────────────────────────────────────────────────────────────────
 
 export interface SessionHooksDeps {
@@ -57,6 +68,8 @@ export interface SessionHooksDeps {
   events: EventRepository;
   messages: MessageRepository;
   todos: TodoRepository;
+  artifacts: ArtifactRepository;
+  ledger: LedgerRepository;
   flows: FlowStore;
   usageRecorder: UsageRecorder;
   transcriptParsers: TranscriptParserRegistry;
@@ -70,6 +83,7 @@ export interface SessionHooksDeps {
   getOutput: GetOutputCb;
   getStage: GetStageCb;
   getStageAction: GetStageActionCb;
+  cleanupOnTerminal: CleanupOnTerminalCb;
 }
 
 // ── Public result shapes (stable; re-exported from the barrel) ──────────────
