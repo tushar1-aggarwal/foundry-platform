@@ -76,14 +76,6 @@ test("click Flows tab navigates to flows page", async () => {
   await expect(page.locator("h1", { hasText: "Flows" })).toBeVisible();
 });
 
-test.skip("click History tab navigates to history page", async () => {
-  // The History rail entry is still present in BASE_NAV_ITEMS but App.tsx
-  // does not (yet) route `view === "history"` to a page component, so the
-  // click leads to an empty main pane. Re-enable when HistoryPage lands.
-  await page.click('nav button:has-text("History")');
-  await expect(page.locator("h1", { hasText: "History" })).toBeVisible();
-});
-
 test("click Compute tab navigates to compute page", async () => {
   await page.click('nav button:has-text("Compute")');
   await expect(page.locator("h1", { hasText: "Compute" })).toBeVisible();
@@ -92,14 +84,6 @@ test("click Compute tab navigates to compute page", async () => {
 test("click Schedules tab navigates to schedules page", async () => {
   await page.click('nav button:has-text("Schedules")');
   await expect(page.locator("h1", { hasText: "Schedules" })).toBeVisible();
-});
-
-test.skip("click Knowledge tab navigates to memory page", async () => {
-  // The Knowledge / Memory rail entry has been removed from BASE_NAV_ITEMS
-  // and there is no "memory" view in useHashRouter's VALID_VIEWS. Re-enable
-  // if/when a Knowledge surface returns to the icon rail.
-  await page.click('nav button:has-text("Knowledge")');
-  await expect(page.locator("h1", { hasText: "Memory" })).toBeVisible();
 });
 
 test("click Costs tab navigates to costs page", async () => {

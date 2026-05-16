@@ -83,25 +83,6 @@ test("add todo via API and verify in detail panel", async () => {
   expect(texts).toContain("Run the tests");
 });
 
-// TODO(#174): The inline "Add a todo..." input was removed when the Todos
-// tab became a read-only checklist (todos are now authored by agents via
-// the todo RPC, not directly by users). Re-enable this test if that UI
-// returns, or delete if design is permanent.
-test.skip("add todo via detail panel UI", async () => {
-  const _id = await createSession("Todo UI test");
-  await page.reload();
-  await page.waitForSelector("nav", { timeout: 10_000 });
-  await goToSessions();
-  await page.locator("text=Todo UI test").first().click();
-  await expect(page.locator("text=Conversation").first()).toBeVisible({ timeout: 5_000 });
-
-  const todoInput = page.locator('input[placeholder="Add a todo..."]');
-  await expect(todoInput).toBeVisible();
-  await todoInput.fill("Write documentation");
-  await page.locator('button:has-text("Add")').click();
-  await expect(page.locator("text=Write documentation")).toBeVisible({ timeout: 5_000 });
-});
-
 // -- Send message to session --------------------------------------------------
 
 test("send message form appears and submits", async () => {

@@ -42,15 +42,6 @@ test("sessions page shows search input", async () => {
   await expect(page.locator('input[placeholder*="Search"]')).toBeVisible();
 });
 
-// TODO(#176): SessionList only renders chips for running/waiting/completed/
-// failed statuses (see packages/web/src/components/SessionList.tsx). Fresh
-// sessions created via `session/start` in the e2e fixture land in "ready"
-// status and never transition to one of those four without a live conductor
-// to dispatch them. Re-enable when the fixture can produce a running session.
-test.skip("sessions page shows filter chips", async () => {
-  await goToSessions();
-});
-
 test("sessions page shows New Session button", async () => {
   await expect(page.locator('button[title^="New session"]').first()).toBeVisible();
 });
@@ -128,21 +119,6 @@ test("search filters sessions by summary text", async () => {
   // Clear search -- beta should reappear in the list.
   await searchInput.fill("");
   await expect(list.locator("text=E2E test session beta")).toBeVisible();
-});
-
-// -- Filter by status chips ---------------------------------------------------
-
-// TODO(#177): The FilterChip UI was rewritten: only chips for statuses
-// with sessions are rendered, there is no "All" chip (deselect by clicking
-// the active chip again), and labels are lowercase ("3 running", not
-// "Running"). This test's assertions no longer map to the UI and need
-// rewriting against the current contract.
-test.skip("filter chips show only matching status sessions", async () => {
-  await goToSessions();
-  await page.click('button:has-text("Running")');
-  await expect(page.locator("text=E2E test session alpha")).not.toBeVisible({ timeout: 3_000 });
-  await page.click('button:has-text("All")');
-  await expect(page.locator("text=E2E test session alpha")).toBeVisible();
 });
 
 // -- Delete and undelete session ----------------------------------------------
