@@ -27,6 +27,7 @@ import { registerToolsHandlers } from "./handlers/tools.js";
 import { registerMetricsHandlers } from "./handlers/metrics.js";
 import { registerMetricsLocalHandlers } from "./handlers/metrics-local.js";
 import { registerScheduleHandlers } from "./handlers/schedule.js";
+import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
 import { registerWebHandlers } from "./handlers/web.js";
 import { registerDashboardHandlers } from "./handlers/dashboard.js";
 import { registerFsHandlers } from "./handlers/fs.js";
@@ -95,6 +96,7 @@ export function registerSharedHandlers(router: Router, app: AppContext): void {
   registerToolsHandlers(router, app);
   registerMetricsHandlers(router, app);
   registerScheduleHandlers(router, app);
+  registerDiagnosticsHandlers(router, app);
   registerWebHandlers(router, app);
   registerDashboardHandlers(router, app);
   registerTriggerHandlers(router, app);

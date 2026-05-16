@@ -53,4 +53,8 @@ for i in $(seq 1 60); do
   sleep 0.5
 done
 
-exec tsx packages/core/temporal/worker.ts
+# tee (not a bare redirect) so logs reach BOTH the container stdout
+# (kubectl logs) AND a durable logfile that startProcessTraceShipping
+# flushes to the blob store -- conductor/worker history must survive pod
+# death (the hook-pipeline regression was invisible because it didn't).
+exec tsx packages/core/temporal/worker.ts 2>&1 | tee /tmp/ark-temporal-worker.log

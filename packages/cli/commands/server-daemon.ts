@@ -166,6 +166,13 @@ export function registerServerDaemonCommands(serverCmd: Command) {
 
       const ws = server.startWebSocket(port, { app });
 
+      // Durable process-trace: ship this daemon's logfile to the blob store
+      // so conductor-side history survives pod death (the hook-pipeline
+      // regression was undiagnosable precisely because it didn't). Path
+      // matches the helm container command's stdio redirect.
+      const { startProcessTraceShipping } = await import("../../core/observability/process-trace.js");
+      const traceShipper = startProcessTraceShipping(app, "conductor-daemon", "/tmp/ark-conductor-daemon.log");
+
       writePidFile({ pid: process.pid, port, startedAt: new Date().toISOString() });
 
       console.log(chalk.green(`Ark server daemon started (pid ${process.pid})`));
@@ -176,6 +183,7 @@ export function registerServerDaemonCommands(serverCmd: Command) {
 
       const shutdown = async () => {
         console.log(chalk.dim("\nStopping server daemon..."));
+        traceShipper.stop();
         ws.stop();
         await app.shutdown();
         removePidFile();

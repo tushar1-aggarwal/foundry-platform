@@ -18,6 +18,15 @@ async function main() {
 
   const app = new AppContext(config);
   await app.boot();
+
+  // Durable process-trace: the dispatch lifecycle + arkd-events consumer
+  // run in THIS process. Shipping its logfile to the blob store is what
+  // makes Temporal-side failures diagnosable after the pod is gone (the
+  // hook-pipeline regression lived here and was invisible). Path matches
+  // the temporal-worker entrypoint's tee target.
+  const { startProcessTraceShipping } = await import("../observability/process-trace.js");
+  startProcessTraceShipping(app, "temporal-worker", "/tmp/ark-temporal-worker.log");
+
   const deps = depsFromApp(app);
 
   actProvision.injectDeps(deps);
