@@ -44,6 +44,31 @@ export interface ForensicReadResult {
   tooLarge: boolean;
 }
 
+/** A tail value is "usable" only when it's a finite positive number. */
+function hasTail(tail?: number): tail is number {
+  return tail != null && Number.isFinite(tail) && tail > 0;
+}
+
+/** Over the cap with no tail hint -> refuse (caller returns tooLarge). */
+function isForensicTooLarge(size: number, tail?: number): boolean {
+  return size > MAX_FORENSIC_BYTES && !hasTail(tail);
+}
+
+/**
+ * Keep the last `tail` visible lines of an in-memory forensic buffer.
+ * No-op when `tail` is unusable. The final element is the empty
+ * trailing-newline remnant when the buffer ended in `\n`; drop it before
+ * counting so `tail=10` means the last 10 visible lines, then restore the
+ * trailing newline so the client never renders a half-record.
+ */
+function applyForensicTail(raw: string, tail?: number): string {
+  if (!hasTail(tail)) return raw;
+  const lines = raw.split("\n");
+  const trailingEmpty = lines.length > 0 && lines[lines.length - 1] === "";
+  const body = trailingEmpty ? lines.slice(0, -1) : lines;
+  return body.slice(Math.max(0, body.length - Math.floor(tail))).join("\n") + (trailingEmpty ? "\n" : "");
+}
+
 /**
  * Read a forensic file from `<tracksDir>/<sessionId>/<file>` with tail support.
  *
@@ -71,8 +96,7 @@ export async function readForensicFile(
   const size = stat.size;
   const { tail } = opts;
 
-  // Over the cap with no tail hint -> refuse.
-  if (size > MAX_FORENSIC_BYTES && (tail == null || !Number.isFinite(tail) || tail <= 0)) {
+  if (isForensicTooLarge(size, tail)) {
     return { content: "", exists: true, size, tooLarge: true };
   }
 
@@ -97,18 +121,7 @@ export async function readForensicFile(
     raw = await fsPromises.readFile(path, "utf8");
   }
 
-  if (tail != null && Number.isFinite(tail) && tail > 0) {
-    const lines = raw.split("\n");
-    // The last element is the empty trailing-newline remnant when the file
-    // ended in `\n`. Drop it before counting so `tail=10` really means the
-    // last 10 visible lines.
-    const trailingEmpty = lines.length > 0 && lines[lines.length - 1] === "";
-    const body = trailingEmpty ? lines.slice(0, -1) : lines;
-    const sliced = body.slice(Math.max(0, body.length - Math.floor(tail)));
-    raw = sliced.join("\n") + (trailingEmpty ? "\n" : "");
-  }
-
-  return { content: raw, exists: true, size, tooLarge: false };
+  return { content: applyForensicTail(raw, tail), exists: true, size, tooLarge: false };
 }
 
 /** Parse an NDJSON forensic string into an array; skips blank + unparseable lines. */
@@ -196,18 +209,10 @@ export async function readSessionForensic(
     const locator = encodeLocator({ tenantId, namespace: FORENSIC_NS, id: session.id, filename: fileName });
     const { bytes } = await app.blobStore.get(locator, tenantId);
     const size = bytes.byteLength;
-    const { tail } = opts;
-    if (size > MAX_FORENSIC_BYTES && (tail == null || !Number.isFinite(tail) || tail <= 0)) {
+    if (isForensicTooLarge(size, opts.tail)) {
       return { content: "", exists: true, size, tooLarge: true };
     }
-    let content = bytes.toString("utf-8");
-    if (tail != null && Number.isFinite(tail) && tail > 0) {
-      const lines = content.split("\n");
-      const trailingEmpty = lines.length > 0 && lines[lines.length - 1] === "";
-      const body = trailingEmpty ? lines.slice(0, -1) : lines;
-      content = body.slice(Math.max(0, body.length - Math.floor(tail))).join("\n") + (trailingEmpty ? "\n" : "");
-    }
-    return { content, exists: true, size, tooLarge: false };
+    return { content: applyForensicTail(bytes.toString("utf-8"), opts.tail), exists: true, size, tooLarge: false };
   } catch {
     return { content: "", exists: false, size: 0, tooLarge: false };
   }

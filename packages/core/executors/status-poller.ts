@@ -81,6 +81,37 @@ export class StatusPollerRegistry {
 }
 
 /**
+ * Resolve a session's compute target + a usable ComputeHandle.
+ *
+ * `computeHandle` is null when the row can't yield one yet -- callers decide
+ * whether that's fatal. The persisted-handle fallback exists because for K8s
+ * sessions on a TEMPLATE compute (e.g. session.compute_name="docs-k8s") the
+ * template row never has pod_name; pod metadata is persisted to
+ * session.config.compute_handle by the dispatcher's runTargetLifecycle.
+ * Without it attachExistingHandle returns null, the K8s checkAlive branch is
+ * skipped, executor.status() runs a local `tmux has-session` against a
+ * pod-side tmux name that never exists on the conductor, and the session is
+ * wrongly marked "agent process exited" while claude is still alive in the
+ * pod. (claude-code.ts uses the same fallback for previewHandle.)
+ */
+async function resolveComputeHandle(app: AppContext, session: Session) {
+  const { target, compute: computeRow } = await resolveComputeTarget(app, session);
+  if (!target || !computeRow) return null;
+  const persistedHandle =
+    ((session.config as { compute_handle?: import("../compute/types.js").ComputeHandle } | null | undefined)
+      ?.compute_handle as import("../compute/types.js").ComputeHandle | undefined) ?? undefined;
+  const computeHandle =
+    target.compute.attachExistingHandle?.({
+      name: computeRow.name,
+      status: computeRow.status,
+      config: computeRow.config ?? {},
+    }) ??
+    persistedHandle ??
+    null;
+  return { target, computeRow, computeHandle };
+}
+
+/**
  * Probe whether the agent is still live on its compute target.
  *
  * Each runtime owns its own status check via `Executor.probeStatus`:
@@ -108,38 +139,16 @@ async function probeSessionStatus(
   const session = await app.sessions.get(sessionId);
   if (session?.compute_name) {
     try {
-      // Resolve the compute target once. The runtime-specific probeStatus
-      // path (e.g. claude-agent's /process/status) gets first crack via its
-      // own resolver; if absent we fall back to AgentHandle.checkAlive
-      // which talks /agent/status to arkd.
-      const { target, compute: computeRow } = await resolveComputeTarget(app, session);
-      if (target && computeRow) {
+      // The runtime-specific probeStatus path (e.g. claude-agent's
+      // /process/status) gets first crack; if absent we fall back to
+      // AgentHandle.checkAlive which talks /agent/status to arkd.
+      const resolved = await resolveComputeHandle(app, session);
+      if (resolved) {
         if (executor.probeStatus) {
           return await executor.probeStatus({ app, session, handle });
         }
-        // attachExistingHandle reads the COMPUTE row's config. For K8s
-        // sessions on a TEMPLATE compute (e.g. session.compute_name="docs-k8s"),
-        // the template row never has pod_name -- pod metadata is persisted to
-        // session.config.compute_handle by the dispatcher's runTargetLifecycle.
-        // Without this fallback, attachExistingHandle returns null, the K8s
-        // checkAlive branch is skipped, executor.status() runs a local
-        // `tmux has-session` against the pod-side tmux name (which never
-        // exists on the conductor), declares "not_found", and the session is
-        // marked "agent process exited" while claude is still alive in the pod.
-        // Mirror the same fallback claude-code.ts already uses for previewHandle.
-        const persistedHandle =
-          ((session.config as { compute_handle?: import("../compute/types.js").ComputeHandle } | null | undefined)
-            ?.compute_handle as import("../compute/types.js").ComputeHandle | undefined) ?? undefined;
-        const computeHandle =
-          target.compute.attachExistingHandle?.({
-            name: computeRow.name,
-            status: computeRow.status,
-            config: computeRow.config ?? {},
-          }) ??
-          persistedHandle ??
-          null;
-        if (computeHandle) {
-          const agent = target.isolation.attachAgent(target.compute, computeHandle, handle);
+        if (resolved.computeHandle) {
+          const agent = resolved.target.isolation.attachAgent(resolved.target.compute, resolved.computeHandle, handle);
           const running = await agent.checkAlive();
           return running ? { state: "running" } : { state: "not_found" };
         }
@@ -160,21 +169,9 @@ async function probeSessionStatus(
 async function resolveArkdUrl(app: AppContext, session: Session): Promise<string | null> {
   try {
     if (!session.compute_name) return null;
-    const { target, compute: computeRow } = await resolveComputeTarget(app, session);
-    if (!target || !computeRow) return null;
-    const persistedHandle =
-      ((session.config as { compute_handle?: import("../compute/types.js").ComputeHandle } | null | undefined)
-        ?.compute_handle as import("../compute/types.js").ComputeHandle | undefined) ?? undefined;
-    const computeHandle =
-      target.compute.attachExistingHandle?.({
-        name: computeRow.name,
-        status: computeRow.status,
-        config: computeRow.config ?? {},
-      }) ??
-      persistedHandle ??
-      null;
-    if (!computeHandle) return null;
-    return target.compute.getArkdUrl(computeHandle);
+    const resolved = await resolveComputeHandle(app, session);
+    if (!resolved?.computeHandle) return null;
+    return resolved.target.compute.getArkdUrl(resolved.computeHandle);
   } catch {
     return null;
   }
