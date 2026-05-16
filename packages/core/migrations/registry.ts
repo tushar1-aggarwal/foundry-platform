@@ -59,6 +59,10 @@ import * as m022 from "./022_skills.js";
 // by TenantPolicyManager._migrateIntegrationColumns, now owned by the
 // migration runner.
 import * as m023 from "./023_tenant_policies_integration_columns.js";
+// Migration 024: workers table for the hosted-mode worker registry --
+// previously created at runtime by WorkerRegistry.ensureSchema; no
+// migration had ever owned it.
+import * as m024 from "./024_workers_table.js";
 
 export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m001.VERSION, name: m001.NAME, up: m001.up },
@@ -88,4 +92,5 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m021.VERSION, name: m021.NAME, up: m021.up },
   { version: m022.VERSION, name: m022.NAME, up: m022.up },
   { version: m023.VERSION, name: m023.NAME, up: m023.up },
+  { version: m024.VERSION, name: m024.NAME, up: m024.up },
 ];

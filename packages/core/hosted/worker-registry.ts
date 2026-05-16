@@ -3,11 +3,8 @@
  * control plane. Workers (ArkD instances) register themselves, send
  * heartbeats, and are pruned when stale.
  *
- * State is persisted in a `workers` SQL table so it survives restarts.
- *
- * Every method is async because DatabaseAdapter is async. The constructor no
- * longer performs DDL synchronously; instead, `ensureSchema()` runs lazily
- * on first use.
+ * State is persisted in the `workers` SQL table (migration 024). Every
+ * method is async because DatabaseAdapter is async.
  */
 
 import type { DatabaseAdapter } from "../database/index.js";
@@ -37,34 +34,10 @@ interface WorkerRow {
 }
 
 export class WorkerRegistry {
-  private _initialized: Promise<void> | null = null;
-
   constructor(private db: DatabaseAdapter) {}
-
-  private async ensureSchema(): Promise<void> {
-    if (this._initialized) return this._initialized;
-    this._initialized = this.db
-      .prepare(
-        `CREATE TABLE IF NOT EXISTS workers (
-          id TEXT PRIMARY KEY,
-          url TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'online',
-          capacity INTEGER NOT NULL DEFAULT 5,
-          active_sessions INTEGER NOT NULL DEFAULT 0,
-          last_heartbeat TEXT NOT NULL,
-          compute_name TEXT,
-          tenant_id TEXT,
-          metadata TEXT DEFAULT '{}'
-        )`,
-      )
-      .run()
-      .then(() => undefined);
-    return this._initialized;
-  }
 
   /** Register a new worker (or re-register an existing one). */
   async register(worker: Omit<WorkerNode, "status" | "active_sessions" | "last_heartbeat">): Promise<void> {
-    await this.ensureSchema();
     const now = new Date().toISOString();
     const meta = JSON.stringify(worker.metadata ?? {});
     // Upsert: if worker exists, update its fields and mark online
@@ -88,20 +61,17 @@ export class WorkerRegistry {
 
   /** Update heartbeat timestamp for a worker. Marks it online if it was offline. */
   async heartbeat(workerId: string): Promise<void> {
-    await this.ensureSchema();
     const now = new Date().toISOString();
     await this.db.prepare("UPDATE workers SET last_heartbeat = ?, status = 'online' WHERE id = ?").run(now, workerId);
   }
 
   /** Remove a worker from the registry. */
   async deregister(workerId: string): Promise<void> {
-    await this.ensureSchema();
     await this.db.prepare("DELETE FROM workers WHERE id = ?").run(workerId);
   }
 
   /** List workers, optionally filtered by status and/or tenant. */
   async list(opts?: { status?: string; tenantId?: string }): Promise<WorkerNode[]> {
-    await this.ensureSchema();
     let sql = "SELECT * FROM workers WHERE 1=1";
     const params: unknown[] = [];
 
@@ -121,7 +91,6 @@ export class WorkerRegistry {
 
   /** Get available (online, not at capacity) workers, optionally filtered. */
   async getAvailable(opts?: { tenantId?: string; computeName?: string }): Promise<WorkerNode[]> {
-    await this.ensureSchema();
     let sql = "SELECT * FROM workers WHERE status = 'online' AND active_sessions < capacity";
     const params: unknown[] = [];
 
@@ -141,7 +110,6 @@ export class WorkerRegistry {
 
   /** Get the least loaded online worker, or null if none available. */
   async getLeastLoaded(): Promise<WorkerNode | null> {
-    await this.ensureSchema();
     const row = (await this.db
       .prepare(
         `SELECT * FROM workers WHERE status = 'online' AND active_sessions < capacity
@@ -153,13 +121,11 @@ export class WorkerRegistry {
 
   /** Increment the active session count for a worker. */
   async incrementSessions(workerId: string): Promise<void> {
-    await this.ensureSchema();
     await this.db.prepare("UPDATE workers SET active_sessions = active_sessions + 1 WHERE id = ?").run(workerId);
   }
 
   /** Decrement the active session count for a worker. */
   async decrementSessions(workerId: string): Promise<void> {
-    await this.ensureSchema();
     await this.db
       .prepare("UPDATE workers SET active_sessions = MAX(0, active_sessions - 1) WHERE id = ?")
       .run(workerId);
@@ -170,7 +136,6 @@ export class WorkerRegistry {
    * Returns the number of workers pruned.
    */
   async pruneStale(timeoutMs: number): Promise<number> {
-    await this.ensureSchema();
     const cutoff = new Date(Date.now() - timeoutMs).toISOString();
     const result = await this.db
       .prepare("UPDATE workers SET status = 'offline' WHERE status = 'online' AND last_heartbeat < ?")
@@ -180,7 +145,6 @@ export class WorkerRegistry {
 
   /** Get a single worker by ID. */
   async get(workerId: string): Promise<WorkerNode | null> {
-    await this.ensureSchema();
     const row = (await this.db.prepare("SELECT * FROM workers WHERE id = ?").get(workerId)) as WorkerRow | undefined;
     return row ? this.hydrateRow(row) : null;
   }
