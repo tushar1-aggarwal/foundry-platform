@@ -54,6 +54,11 @@ import * as m021 from "./021_scoping_audit_columns.js";
 // Migration 022: Skill Hub -- skills + skill_versions tables for the
 // central skill registry. See docs/skillhub-rfc.md.
 import * as m022 from "./022_skills.js";
+// Migration 023: tenant_policies integration columns (router_*, auto_index_*,
+// tensorzero_enabled, allowed_k8s_contexts) -- previously created at runtime
+// by TenantPolicyManager._migrateIntegrationColumns, now owned by the
+// migration runner.
+import * as m023 from "./023_tenant_policies_integration_columns.js";
 
 export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m001.VERSION, name: m001.NAME, up: m001.up },
@@ -82,4 +87,5 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m020.VERSION, name: m020.NAME, up: m020.up },
   { version: m021.VERSION, name: m021.NAME, up: m021.up },
   { version: m022.VERSION, name: m022.NAME, up: m022.up },
+  { version: m023.VERSION, name: m023.NAME, up: m023.up },
 ];

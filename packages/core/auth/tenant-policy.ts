@@ -8,7 +8,7 @@
  */
 
 import type { DatabaseAdapter } from "../database/index.js";
-import { logInfo, logDebug } from "../observability/structured-log.js";
+import { logDebug } from "../observability/structured-log.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -56,63 +56,7 @@ const DEFAULT_POLICY: Omit<TenantComputePolicy, "tenant_id"> = {
 // ── Manager ────────────────────────────────────────────────────────────────
 
 export class TenantPolicyManager {
-  private _initialized: Promise<void> | null = null;
-
   constructor(private db: DatabaseAdapter) {}
-
-  /**
-   * Lazily ensure the schema exists. Replaces the (now-async) constructor
-   * work that used to init schema synchronously. Every public method awaits
-   * this once before touching the table.
-   */
-  private async ensureSchema(): Promise<void> {
-    if (this._initialized) return this._initialized;
-    this._initialized = (async () => {
-      await this.db
-        .prepare(
-          `CREATE TABLE IF NOT EXISTS tenant_policies (
-            tenant_id TEXT PRIMARY KEY,
-            allowed_providers TEXT NOT NULL DEFAULT '[]',
-            default_provider TEXT NOT NULL DEFAULT 'k8s',
-            max_concurrent_sessions INTEGER NOT NULL DEFAULT 10,
-            max_cost_per_day_usd REAL,
-            compute_pools TEXT NOT NULL DEFAULT '[]',
-            router_enabled INTEGER,
-            router_required INTEGER NOT NULL DEFAULT 0,
-            router_policy TEXT,
-            auto_index INTEGER,
-            auto_index_required INTEGER NOT NULL DEFAULT 0,
-            tensorzero_enabled INTEGER,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-          )`,
-        )
-        .run();
-      await this._migrateIntegrationColumns();
-    })();
-    return this._initialized;
-  }
-
-  private async _migrateIntegrationColumns(): Promise<void> {
-    const cols: [string, string][] = [
-      ["router_enabled", "INTEGER"],
-      ["router_required", "INTEGER NOT NULL DEFAULT 0"],
-      ["router_policy", "TEXT"],
-      ["auto_index", "INTEGER"],
-      ["auto_index_required", "INTEGER NOT NULL DEFAULT 0"],
-      ["tensorzero_enabled", "INTEGER"],
-      ["allowed_k8s_contexts", "TEXT NOT NULL DEFAULT '[]'"],
-      // Agent G -- cluster config YAML blob (see migration 008).
-      ["compute_config_yaml", "TEXT"],
-    ];
-    for (const [col, def] of cols) {
-      try {
-        await this.db.prepare(`ALTER TABLE tenant_policies ADD COLUMN ${col} ${def}`).run();
-      } catch {
-        logInfo("general", "exists");
-      }
-    }
-  }
 
   // ── Cluster / compute config blob (agent G) ───────────────────────────────
   //
@@ -124,7 +68,6 @@ export class TenantPolicyManager {
 
   /** Fetch the tenant's compute-config YAML blob, or null if none. */
   async getComputeConfig(tenantId: string): Promise<string | null> {
-    await this.ensureSchema();
     try {
       const row = (await this.db
         .prepare("SELECT compute_config_yaml FROM tenant_policies WHERE tenant_id = ?")
@@ -145,7 +88,6 @@ export class TenantPolicyManager {
    * method stores the blob verbatim.
    */
   async setComputeConfig(tenantId: string, yaml: string): Promise<void> {
-    await this.ensureSchema();
     const now = new Date().toISOString();
     const existing = await this.db.prepare("SELECT tenant_id FROM tenant_policies WHERE tenant_id = ?").get(tenantId);
     if (existing) {
@@ -166,7 +108,6 @@ export class TenantPolicyManager {
 
   /** Clear the tenant's compute-config YAML blob. Returns true when a row was updated. */
   async clearComputeConfig(tenantId: string): Promise<boolean> {
-    await this.ensureSchema();
     const result = await this.db
       .prepare("UPDATE tenant_policies SET compute_config_yaml = NULL, updated_at = ? WHERE tenant_id = ?")
       .run(new Date().toISOString(), tenantId);
@@ -175,7 +116,6 @@ export class TenantPolicyManager {
 
   /** Get the policy for a tenant, or null if no explicit policy exists. */
   async getPolicy(tenantId: string): Promise<TenantComputePolicy | null> {
-    await this.ensureSchema();
     const row = (await this.db.prepare("SELECT * FROM tenant_policies WHERE tenant_id = ?").get(tenantId)) as
       | TenantPolicyRow
       | undefined;
@@ -192,7 +132,6 @@ export class TenantPolicyManager {
 
   /** Set (create or update) a tenant policy. */
   async setPolicy(policy: TenantComputePolicy): Promise<void> {
-    await this.ensureSchema();
     const now = new Date().toISOString();
     const providers = JSON.stringify(policy.allowed_providers);
     const pools = JSON.stringify(policy.compute_pools);
@@ -274,14 +213,12 @@ export class TenantPolicyManager {
 
   /** Delete a tenant policy. Returns true if a policy was deleted. */
   async deletePolicy(tenantId: string): Promise<boolean> {
-    await this.ensureSchema();
     const result = await this.db.prepare("DELETE FROM tenant_policies WHERE tenant_id = ?").run(tenantId);
     return result.changes > 0;
   }
 
   /** List all tenant policies. */
   async listPolicies(): Promise<TenantComputePolicy[]> {
-    await this.ensureSchema();
     const rows = (await this.db.prepare("SELECT * FROM tenant_policies ORDER BY tenant_id").all()) as TenantPolicyRow[];
     return rows.map((r) => this._hydrateRow(r));
   }
