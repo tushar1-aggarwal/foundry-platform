@@ -208,6 +208,8 @@ dev-k8s-local: ## Deploy full ark control plane to local OrbStack k8s (LocalStac
 	$(eval IMG_TAG := local-$(shell date +%s))
 	@echo "Building ark image (tag: $(IMG_TAG))..."
 	docker build -t ark:$(IMG_TAG) .
+	@echo "Building temporal-worker image (Node+tsx; runs the dispatch path)..."
+	docker build -f .infra/Dockerfile.temporal-worker -t ark-temporal-worker:$(IMG_TAG) .
 	@echo "Deploying helm release..."
 	# --wait-for-jobs (not --wait): helm blocks until the post-install hook
 	# Jobs (temporal-db-bootstrap -> temporal-schema -> temporal-namespace)
@@ -224,6 +226,9 @@ dev-k8s-local: ## Deploy full ark control plane to local OrbStack k8s (LocalStac
 		--set controlPlane.devAllowLocalHostedStorage=true \
 		--set workers.image.tag=$(IMG_TAG) \
 		--set workers.image.pullPolicy=Never \
+		--set temporal.worker.image.repository=ark-temporal-worker \
+		--set temporal.worker.image.tag=$(IMG_TAG) \
+		--set temporal.worker.image.pullPolicy=Never \
 		--set localstack.enabled=true \
 		--set s3.bucket=ark-local \
 		--set s3.region=us-east-1 \
