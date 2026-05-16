@@ -49,5 +49,9 @@ RUN printf '#!/bin/sh\nexec bun /app/packages/cli/index.ts arkd "$@"\n' > /usr/l
  && ln -sf /app/ark /usr/local/bin/ark \
  && mkdir -p /root/.ark
 
+# claude-code refuses --dangerously-skip-permissions as root unless sandboxed;
+# this image is only ever an isolated agent pod.
+ENV IS_SANDBOX=1
+
 EXPOSE 19300
 CMD ["/bin/sh", "-c", "arkd || sleep infinity"]
