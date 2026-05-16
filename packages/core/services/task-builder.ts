@@ -17,7 +17,7 @@ import * as agentRegistry from "../agent/agent.js";
 import { buildSessionVars } from "../template.js";
 import { resolveFlow } from "./flow.js";
 import { filterMessages, parseMessageFilter } from "../message-filter.js";
-import { logDebug } from "../observability/structured-log.js";
+import { logDebug, logWarn } from "../observability/structured-log.js";
 import { readPlanMd } from "./plan-artifact.js";
 
 /** Convert a typed Session to a plain Record for template variable resolution. */
@@ -62,7 +62,12 @@ export function formatTaskHeader(app: AppContext, session: Session, stage: strin
   // no completion ritual appended.
   const projectRoot = agentRegistry.findProjectRoot(session.workdir || session.repo) ?? undefined;
   const agent = app.agents.get(agentName, projectRoot);
-  const effectiveRuntime = session.runtime ?? agent?.runtime;
+  // The runtime override (via `scoping_overrides`) is applied by
+  // `applyScopingRuntimeHint` in dispatch-core BEFORE task-builder runs,
+  // so `agent.runtime` already reflects any override here. The legacy
+  // `session.runtime` short-circuit was reading a field `Session` never
+  // had -- dropped.
+  const effectiveRuntime = agent?.runtime;
   if (effectiveRuntime) {
     const runtime = app.runtimes.get(effectiveRuntime);
     if (runtime?.task_prompt) {

@@ -136,7 +136,7 @@ const sessionKill: ToolDef = {
   handler: async (input, { app }) => {
     const parsed = input as z.infer<typeof sessionKillInput>;
     const result = await app.sessionLifecycle.kill(parsed.sessionId);
-    if (!result.ok && result.message.includes("not found")) {
+    if (result.ok === false && result.message.includes("not found")) {
       throw new Error(`Session not found: ${parsed.sessionId}`);
     }
     return result;

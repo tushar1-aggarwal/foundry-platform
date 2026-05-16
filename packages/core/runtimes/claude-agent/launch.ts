@@ -160,6 +160,14 @@ export interface RunAgentSdkLaunchOpts {
    */
   authToken?: string;
   /**
+   * Direct conductor URL for the ask-user MCP server. This MCP needs an
+   * inbound RPC path back to the conductor and doesn't have a via-arkd
+   * route yet -- when only ARK_ARKD_URL is set (remote dispatch),
+   * ask-user is silently disabled by passing this as undefined.
+   * Read from ARK_CONDUCTOR_URL in `main()`.
+   */
+  conductorUrl?: string;
+  /**
    * Fetch implementation. Defaults to the global fetch. Injected in tests
    * so no real HTTP connections are made.
    */

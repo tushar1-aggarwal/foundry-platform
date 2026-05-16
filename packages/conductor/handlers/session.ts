@@ -638,7 +638,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const scoped = resolveTenantApp(app, ctx);
 
     const result = await scoped.sessionLifecycle.kill(sessionId);
-    if (!result.ok && result.message.includes("not found")) {
+    if (result.ok === false && result.message.includes("not found")) {
       throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
 
