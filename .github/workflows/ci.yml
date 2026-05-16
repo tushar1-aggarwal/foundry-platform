@@ -7,9 +7,7 @@ on:
     branches: [main]
   # workflow_dispatch lets a maintainer fire CI manually from the Actions
   # tab (or via `gh workflow run CI`). Useful for validating long-lived
-  # feature branches whose base is an integration branch rather than main
-  # -- e.g. PRs into `temporal-integration` don't satisfy the branch
-  # filter above and would otherwise never see this workflow.
+  # feature branches whose base is an integration branch rather than main.
   workflow_dispatch:
 
 jobs:
