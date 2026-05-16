@@ -371,11 +371,7 @@ function RuntimeTag({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function DashboardView({
-  onNavigate: _onNavigate,
-  onSelectSession,
-  readOnly: _readOnly,
-}: DashboardViewProps) {
+export function DashboardView({ onNavigate: _onNavigate, onSelectSession, readOnly: _readOnly }: DashboardViewProps) {
   const summaryQuery = useDashboardSummaryQuery();
   const sessionsQuery = useAllSessionsQuery();
   const data = summaryQuery.data as DashboardData | undefined;

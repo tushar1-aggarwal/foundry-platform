@@ -153,9 +153,7 @@ function App() {
               onTabChange={setTab}
             />
           )}
-          {view === "tools" && (
-            <ToolsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />
-          )}
+          {view === "tools" && <ToolsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />}
           {view === "flows" && (
             <FlowsPage
               view={view}
@@ -175,12 +173,8 @@ function App() {
               onToast={showToast}
             />
           )}
-          {view === "schedules" && (
-            <SchedulesPage view={view} onNavigate={onNavigate} readOnly={readOnly} />
-          )}
-          {view === "costs" && (
-            <CostsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />
-          )}
+          {view === "schedules" && <SchedulesPage view={view} onNavigate={onNavigate} readOnly={readOnly} />}
+          {view === "costs" && <CostsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />}
           {view === "integrations" && (
             <IntegrationsPage
               view={view}
@@ -190,20 +184,11 @@ function App() {
               onTabChange={setSubId}
             />
           )}
-          {view === "secrets" && (
-            <SecretsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />
-          )}
+          {view === "secrets" && <SecretsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />}
           {view === "admin" && (
-            <AdminPage
-              view={view}
-              onNavigate={onNavigate}
-              readOnly={readOnly}
-              onToast={showToast}
-            />
+            <AdminPage view={view} onNavigate={onNavigate} readOnly={readOnly} onToast={showToast} />
           )}
-          {view === "settings" && (
-            <SettingsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />
-          )}
+          {view === "settings" && <SettingsPage view={view} onNavigate={onNavigate} readOnly={readOnly} />}
         </Suspense>
       </RouteErrorBoundary>
       <CommandPalette

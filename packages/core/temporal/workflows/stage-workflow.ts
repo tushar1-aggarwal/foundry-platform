@@ -2,16 +2,12 @@ import { proxyActivities } from "@temporalio/workflow";
 import type * as acts from "../activities/index.js";
 import type { StageWorkflowInput } from "../types.js";
 
-const {
-  provisionComputeActivity,
-  dispatchStageActivity,
-  awaitStageCompletionActivity,
-  projectStageActivity,
-} = proxyActivities<typeof acts>({
-  startToCloseTimeout: "1 hour",
-  heartbeatTimeout: "60 seconds",
-  retry: { maximumAttempts: 2, initialInterval: "1s", backoffCoefficient: 2 },
-});
+const { provisionComputeActivity, dispatchStageActivity, awaitStageCompletionActivity, projectStageActivity } =
+  proxyActivities<typeof acts>({
+    startToCloseTimeout: "1 hour",
+    heartbeatTimeout: "60 seconds",
+    retry: { maximumAttempts: 2, initialInterval: "1s", backoffCoefficient: 2 },
+  });
 
 /**
  * Child workflow for a single fan-out branch.

@@ -447,13 +447,7 @@ function IntegrationsTab() {
 
 // ── Page shell ─────────────────────────────────────────────────────────────
 
-export function IntegrationsPage({
-  view,
-  onNavigate,
-  readOnly,
-  initialTab,
-  onTabChange,
-}: IntegrationsPageProps) {
+export function IntegrationsPage({ view, onNavigate, readOnly, initialTab, onTabChange }: IntegrationsPageProps) {
   const [subTab, setSubTab] = useState<SubTab>((initialTab as SubTab) || "triggers");
   const { data: triggers } = useTriggers();
   const { data: connectors } = useConnectors();

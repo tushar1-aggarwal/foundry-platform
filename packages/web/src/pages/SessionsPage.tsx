@@ -207,13 +207,7 @@ export function SessionsPage({
   ) : undefined;
 
   return (
-    <Layout
-      view={view}
-      onNavigate={onNavigate}
-      readOnly={readOnly}
-      totalUnread={totalUnread}
-      list={listPanel}
-    >
+    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly} totalUnread={totalUnread} list={listPanel}>
       <h1 className="sr-only">Sessions</h1>
 
       {/* Center Panel */}

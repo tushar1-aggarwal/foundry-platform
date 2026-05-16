@@ -12,13 +12,7 @@ interface FlowsPageProps {
   onSelectedChange?: (id: string | null) => void;
 }
 
-export function FlowsPage({
-  view,
-  onNavigate,
-  readOnly,
-  initialSelectedId,
-  onSelectedChange,
-}: FlowsPageProps) {
+export function FlowsPage({ view, onNavigate, readOnly, initialSelectedId, onSelectedChange }: FlowsPageProps) {
   const [showNew, setShowNew] = useState(false);
 
   return (

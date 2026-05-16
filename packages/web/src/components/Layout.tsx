@@ -92,15 +92,7 @@ const SHORTCUTS: Record<string, string> = {
  * don't need a context column (e.g. Settings, Admin) can omit it and the grid
  * collapses to `60px 1fr`.
  */
-export function Layout({
-  view,
-  onNavigate,
-  list,
-  children,
-  totalUnread,
-  avatarInitials,
-  latencyText,
-}: LayoutProps) {
+export function Layout({ view, onNavigate, list, children, totalUnread, avatarInitials, latencyText }: LayoutProps) {
   // Phase 1: when an authenticated identity is present, render the
   // UserMenu (avatar + popover with email/role/logout) in the IconRail
   // bottom slot. Layout is also rendered by unit tests outside the

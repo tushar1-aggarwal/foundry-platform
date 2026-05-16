@@ -314,8 +314,7 @@ async function _handleStatus(
       const events = await app.events.list(sessionId);
       const sawCompletionHook = events.some(
         (e: { type: string; data?: unknown }) =>
-          e.type === "hook_status" &&
-          (e.data as { event?: string } | undefined)?.event === "SessionEnd",
+          e.type === "hook_status" && (e.data as { event?: string } | undefined)?.event === "SessionEnd",
       );
       if (!sawCompletionHook) {
         newStatus = "failed";
