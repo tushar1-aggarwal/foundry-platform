@@ -14,7 +14,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { AppContext } from "../../app.js";
 import { setApp, clearApp } from "../../__tests__/test-helpers.js";
-import { TenantClaudeAuthManager } from "../../auth/tenant-claude-auth.js";
 import {
   materializeClaudeAuthForDispatch,
   deletePerSessionCredsSecret,
@@ -115,7 +114,7 @@ describe("materializeClaudeAuthForDispatch", () => {
       ".credentials.json": '{"apiKey":"sk-abc"}',
       ".claude.json": "{}",
     });
-    await new TenantClaudeAuthManager(app.db).set(tenant, "subscription_blob", "claude-subscription");
+    await app.tenantClaudeAuth.set(tenant, "subscription_blob", "claude-subscription");
 
     const api = new StubK8sApi();
     const fetched = await app.sessions.get(session.id);
@@ -153,7 +152,7 @@ describe("materializeClaudeAuthForDispatch", () => {
     const session = await createSession("k8s-target");
     const tenant = sessionTenantId();
     await app.secrets.setBlob(tenant, "claude-sub", { a: "X" });
-    await new TenantClaudeAuthManager(app.db).set(tenant, "subscription_blob", "claude-sub");
+    await app.tenantClaudeAuth.set(tenant, "subscription_blob", "claude-sub");
 
     const api = new StubK8sApi();
     // Pre-seed the Secret so create returns 409.
@@ -176,7 +175,7 @@ describe("materializeClaudeAuthForDispatch", () => {
     const session = await createSession("k8s-target");
     const tenant = sessionTenantId();
     await app.secrets.set(tenant, "ANTHROPIC_API_KEY", "sk-real");
-    await new TenantClaudeAuthManager(app.db).set(tenant, "api_key", "ANTHROPIC_API_KEY");
+    await app.tenantClaudeAuth.set(tenant, "api_key", "ANTHROPIC_API_KEY");
 
     const api = new StubK8sApi();
     const fetched = await app.sessions.get(session.id);
@@ -218,7 +217,7 @@ describe("materializeClaudeAuthForDispatch", () => {
     const session = await createSession("docker-target");
     const tenant = sessionTenantId();
     await app.secrets.setBlob(tenant, "claude-sub", { a: "X" });
-    await new TenantClaudeAuthManager(app.db).set(tenant, "subscription_blob", "claude-sub");
+    await app.tenantClaudeAuth.set(tenant, "subscription_blob", "claude-sub");
     const api = new StubK8sApi();
     const fetched = await app.sessions.get(session.id);
     const compute = await app.computes.get("docker-target");
@@ -244,7 +243,7 @@ describe("deletePerSessionCredsSecret", () => {
     const session = await createSession("k8s-target");
     const tenant = sessionTenantId();
     await app.secrets.setBlob(tenant, "claude-sub", { a: "X" });
-    await new TenantClaudeAuthManager(app.db).set(tenant, "subscription_blob", "claude-sub");
+    await app.tenantClaudeAuth.set(tenant, "subscription_blob", "claude-sub");
 
     const api = new StubK8sApi();
     const fetched = await app.sessions.get(session.id);

@@ -14,7 +14,7 @@ import { describe, it, expect, afterEach } from "bun:test";
 import { asValue } from "awilix";
 import { AppContext } from "../app.js";
 import { ApiKeyManager, TenantManager, TeamManager, UserManager, TenantPolicyManager } from "../auth/index.js";
-import { TenantClaudeAuthManager } from "../auth/tenant-claude-auth.js";
+import { TenantClaudeAuthRepository } from "../repositories/tenant_claude_auth.js";
 
 let app: AppContext | null = null;
 
@@ -34,7 +34,7 @@ describe("auth-manager DI registrations (DI-2)", async () => {
     expect(app.container.cradle.tenants).toBeInstanceOf(TenantManager);
     expect(app.container.cradle.teams).toBeInstanceOf(TeamManager);
     expect(app.container.cradle.users).toBeInstanceOf(UserManager);
-    expect(app.container.cradle.tenantClaudeAuth).toBeInstanceOf(TenantClaudeAuthManager);
+    expect(app.container.cradle.tenantClaudeAuth).toBeInstanceOf(TenantClaudeAuthRepository);
     expect(app.container.cradle.tenantPolicyManager).toBeInstanceOf(TenantPolicyManager);
   });
 

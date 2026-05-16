@@ -20,7 +20,7 @@ import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
 import { requireAdmin } from "../../core/auth/context.js";
-import type { ClaudeAuthKind } from "../../core/auth/tenant-claude-auth.js";
+import type { ClaudeAuthKind } from "../../core/repositories/tenant_claude_auth.js";
 
 export function registerTenantAuthHandlers(router: Router, app: AppContext): void {
   // TenantClaudeAuthManager is a DI singleton; resolve via the accessor.
