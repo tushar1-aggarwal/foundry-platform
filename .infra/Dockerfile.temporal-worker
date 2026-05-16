@@ -43,7 +43,7 @@ COPY package.json bun.lock* ./
 # The worker doesn't actually need bun:sqlite at runtime (Postgres-only mode).
 RUN bun install --frozen-lockfile --ignore-scripts
 COPY . .
-RUN chmod +x scripts/temporal-worker-entrypoint.sh
+RUN chmod +x scripts/temporal-worker-entrypoint.sh /app/ark && ln -sf /app/ark /usr/local/bin/ark
 CMD ["scripts/temporal-worker-entrypoint.sh"]
 
 # Note (T6 / DockerIsolation): a previous iteration added the `docker` CLI

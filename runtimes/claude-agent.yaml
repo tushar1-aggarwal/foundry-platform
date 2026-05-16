@@ -24,7 +24,7 @@ secrets:
 #             SNI routing works. The agent's model catalog entry supplies the
 #             concrete provider slug for the gateway -- launch.ts never
 #             synthesises one.
-compat: [bedrock]
+compat: []
 # Optional: override the bundled claude binary's default haiku model id used
 # by built-in subagents (Explore etc.). Built-in subagents cannot be
 # reconfigured via the SDK's `agents` option per the SDK docs, but the
