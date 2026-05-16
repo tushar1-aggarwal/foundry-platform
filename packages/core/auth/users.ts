@@ -5,8 +5,6 @@
  * Users here are durable identities that memberships hang off. An auth
  * layer that has just validated a credential calls `upsertByEmail` to
  * create-or-fetch the user without worrying about races.
- *
- * Mirrors `TenantPolicyManager`: lazy `ensureSchema()`, async end-to-end.
  */
 
 import type { DatabaseAdapter } from "../database/index.js";
@@ -19,7 +17,6 @@ import {
   type UserWithTenantTeamCount,
 } from "../repositories/users.js";
 import { MembershipRepository, type MembershipWithTeamTenant } from "../repositories/memberships.js";
-import { logDebug } from "../observability/structured-log.js";
 
 export type User = UserRow;
 export type { TenantSearchUser, TenantUserRow, UserWithTenantTeamCount, MembershipWithTeamTenant };
@@ -35,7 +32,6 @@ function assertEmail(email: string): void {
 }
 
 export class UserManager {
-  private _initialized: Promise<void> | null = null;
   private _repo: UserRepository;
   private _memberships: MembershipRepository;
 
@@ -44,30 +40,7 @@ export class UserManager {
     this._memberships = new MembershipRepository(db);
   }
 
-  private async ensureSchema(): Promise<void> {
-    if (this._initialized) return this._initialized;
-    this._initialized = (async () => {
-      try {
-        await this.db.exec(
-          `CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            email TEXT NOT NULL,
-            name TEXT,
-            deleted_at TEXT,
-            deleted_by TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-          )`,
-        );
-      } catch {
-        logDebug("general", "users table exists");
-      }
-    })();
-    return this._initialized;
-  }
-
   async list(opts: ListOptions = {}): Promise<User[]> {
-    await this.ensureSchema();
     return this._repo.list(opts);
   }
 
@@ -78,19 +51,16 @@ export class UserManager {
    * repo. Each row carries a `team_count` scoped to `tenantId`.
    */
   async listInTenantOrOrphanWithTeamCount(tenantId: string): Promise<UserWithTenantTeamCount[]> {
-    await this.ensureSchema();
     return this._repo.listInTenantOrOrphanWithTeamCount(tenantId);
   }
 
   async get(idOrEmail: string, opts: ListOptions = {}): Promise<User | null> {
-    await this.ensureSchema();
     const byId = await this._repo.get(idOrEmail, opts);
     if (byId) return byId;
     return this._repo.getByEmail(idOrEmail, opts);
   }
 
   async create(opts: { email: string; name?: string | null }): Promise<User> {
-    await this.ensureSchema();
     assertEmail(opts.email);
     const existing = await this._repo.getByEmail(opts.email);
     if (existing) throw new Error(`User with email '${opts.email}' already exists`);
@@ -98,7 +68,6 @@ export class UserManager {
   }
 
   async upsertByEmail(opts: { email: string; name?: string | null }): Promise<User> {
-    await this.ensureSchema();
     assertEmail(opts.email);
     return this._repo.upsertByEmail(opts);
   }
@@ -116,7 +85,6 @@ export class UserManager {
    * their own account.
    */
   async delete(id: string, actingUserId: string | null = null): Promise<boolean> {
-    await this.ensureSchema();
     return this.db.transaction(async () => {
       const ok = await this._repo.softDelete(id, actingUserId);
       if (!ok) return false;
@@ -126,7 +94,6 @@ export class UserManager {
   }
 
   async restore(id: string): Promise<boolean> {
-    await this.ensureSchema();
     return this._repo.restore(id);
   }
 
@@ -145,7 +112,6 @@ export class UserManager {
     q: string,
     opts: { limit?: number; contextTeamId?: string } = {},
   ): Promise<TenantSearchUser[]> {
-    await this.ensureSchema();
     const trimmed = q.trim();
     if (trimmed.length < MIN_SEARCH_LEN) return [];
     return this._repo.searchByTenant(tenantId, trimmed, opts);
@@ -163,7 +129,6 @@ export class UserManager {
    * invisible to admins outside their tenant.
    */
   async listMemberships(userId: string, opts: { tenantId?: string } = {}): Promise<MembershipWithTeamTenant[]> {
-    await this.ensureSchema();
     return this._memberships.listByUserWithTeamTenant(userId, opts);
   }
 
@@ -172,7 +137,6 @@ export class UserManager {
    * mutation surface stays on TeamsTab + UsersTab.
    */
   async listTenantUsers(tenantId: string): Promise<TenantUserRow[]> {
-    await this.ensureSchema();
     return this._repo.listTenantUsers(tenantId);
   }
 
@@ -183,7 +147,6 @@ export class UserManager {
    * decisions without two separate queries.
    */
   async tenantMembershipStats(userId: string, tenantId: string): Promise<{ in_tenant: number; out_of_tenant: number }> {
-    await this.ensureSchema();
     return this._memberships.tenantMembershipStats(userId, tenantId);
   }
 }
