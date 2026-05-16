@@ -197,7 +197,10 @@ describe("/channel/:sessionId (report enqueue)", async () => {
     // conductor's `/api/channel/...` directly any more. That POST silently
     // fails on EC2 under pure SSM and was the root cause of stuck sessions.
     // Give the (non-existent) request a tick to fire if it were going to.
-    await Bun.sleep(50);
+    // Negative assertion: no positive condition to wait on. Give the
+    // (non-existent) request a single event-loop turn to fire if it were
+    // going to, then assert it didn't.
+    await new Promise((r) => setTimeout(r, 0));
     const directHits = conductorRequests.filter((r) => r.path.startsWith("/api/channel/"));
     expect(directHits.length).toBe(0);
   });
@@ -264,7 +267,7 @@ describe("/channel/relay", async () => {
     expect(result.ok).toBe(true);
     expect(result.forwarded).toBe(true);
 
-    await Bun.sleep(50);
+    await new Promise((r) => setTimeout(r, 0));
     const directHits = conductorRequests.filter((r) => r.path === "/api/relay");
     expect(directHits.length).toBe(0);
   });
@@ -343,7 +346,7 @@ describe("full relay chain", async () => {
     expect(result.forwarded).toBe(true);
 
     // No direct conductor POST -- the hooks channel is the only path.
-    await Bun.sleep(50);
+    await new Promise((r) => setTimeout(r, 0));
     expect(conductorRequests.filter((r) => r.path.startsWith("/api/channel/")).length).toBe(0);
   });
 

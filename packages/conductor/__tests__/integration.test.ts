@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../../core/app.js";
+import { waitFor } from "../../core/__tests__/test-helpers.js";
 import { ArkClient } from "../../protocol/client.js";
 import { ArkServer } from "../index.js";
 import { registerAllHandlers } from "../register.js";
@@ -81,7 +82,7 @@ describe("end-to-end: server + client", async () => {
     client.on("session/created", (data) => received.push(data));
 
     server.notify("session/created", { session: { id: "s-notify-test" } });
-    await Bun.sleep(50);
+    await waitFor(() => received.length >= 1, { timeout: 2000 });
 
     expect(received.length).toBe(1);
     expect(received[0].session.id).toBe("s-notify-test");
@@ -96,7 +97,10 @@ describe("end-to-end: server + client", async () => {
     client.on("metrics/updated", (data) => received.push(data));
 
     server.notify("metrics/updated", { snapshot: {} });
-    await Bun.sleep(50);
+    // No positive condition to wait on -- give the in-memory transport one
+    // event-loop turn so any (incorrectly) routed notification has a chance
+    // to arrive, then assert nothing did.
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(received.length).toBe(0);
     client.close();
@@ -113,22 +117,19 @@ describe("end-to-end: server + client", async () => {
 
     // Create -> should emit session/created
     const session = await client.sessionStart({ summary: "notify-test", repo: ".", flow: "bare" });
-    await Bun.sleep(50);
-    expect(received.some((r) => r.type === "created")).toBe(true);
+    await waitFor(() => received.some((r) => r.type === "created"), { timeout: 2000 });
     expect(received.find((r) => r.type === "created").data.session.id).toBe(session.id);
 
     // Update -> should emit session/updated
     received.length = 0;
     await client.sessionUpdate(session.id, { summary: "updated" });
-    await Bun.sleep(50);
-    expect(received.some((r) => r.type === "updated")).toBe(true);
+    await waitFor(() => received.some((r) => r.type === "updated"), { timeout: 2000 });
     expect(received.find((r) => r.type === "updated").data.session.summary).toBe("updated");
 
     // Delete -> should emit session/deleted
     received.length = 0;
     await client.sessionDelete(session.id);
-    await Bun.sleep(50);
-    expect(received.some((r) => r.type === "deleted")).toBe(true);
+    await waitFor(() => received.some((r) => r.type === "deleted"), { timeout: 2000 });
     expect(received.find((r) => r.type === "deleted").data.sessionId).toBe(session.id);
 
     client.close();
