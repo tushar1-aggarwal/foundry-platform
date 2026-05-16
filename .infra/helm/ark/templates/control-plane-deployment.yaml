@@ -27,17 +27,21 @@ spec:
           imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
           # Hosted mode boots the web server in-process but does NOT spawn the
           # conductor (the daemon that serves :19100/health, which the kubelet
-          # probes target). Spawn the daemon detached first, then exec the web
-          # server so the daemon survives the parent replace and PID 1 is the
-          # foreground process kubelet monitors.
+          # probes target). The daemon runs the conductor + arkd-events
+          # consumer + hook pipeline; `--detach` daemonized it with stdio
+          # swallowed, so conductor-side failures were undiagnosable. Instead
+          # run it in foreground, redirect stdio to an inspectable logfile,
+          # and background it with `&` so it survives the `exec` parent
+          # replace while PID 1 stays the web server kubelet monitors.
+          # Tail it with: kubectl exec <pod> -- cat /tmp/ark-conductor-daemon.log
           command:
             - sh
             - -c
             - >
               bun packages/cli/index.ts server daemon start
               --port {{ .Values.controlPlane.ports.conductor }}
-              --detach
-              && exec bun packages/cli/index.ts server start
+              > /tmp/ark-conductor-daemon.log 2>&1 &
+              exec bun packages/cli/index.ts server start
               --hosted --port {{ .Values.controlPlane.ports.web }}
           ports:
             - name: web
