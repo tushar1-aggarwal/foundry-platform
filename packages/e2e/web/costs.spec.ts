@@ -147,7 +147,7 @@ async function goToCostsFresh(): Promise<void> {
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 test("3 usage records aggregate to the correct total via RPC and DOM", async () => {
-  const arkDir = ws.env.app.arkDir;
+  const arkDir = ws.env.arkDir;
   resetCosts(arkDir);
   // Seeded costs: 1.50 + 2.75 + 0.25 = 4.50 total
   seedUsageRecord(arkDir, {
@@ -201,7 +201,7 @@ test("3 usage records aggregate to the correct total via RPC and DOM", async () 
 });
 
 test("per-model breakdown aggregates records grouped by model", async () => {
-  const arkDir = ws.env.app.arkDir;
+  const arkDir = ws.env.arkDir;
   resetCosts(arkDir);
   // Seeded: claude-sonnet-4-6 totals $3.00 (1.25 + 1.75), gpt-5 totals $2.00
   seedUsageRecord(arkDir, {
@@ -260,7 +260,7 @@ test("per-model breakdown aggregates records grouped by model", async () => {
 });
 
 test("cost_mode=subscription/free contribute zero dollars even with tokens", async () => {
-  const arkDir = ws.env.app.arkDir;
+  const arkDir = ws.env.arkDir;
   resetCosts(arkDir);
   // One billed record ($1.00) + one subscription record (cost_usd=0, tokens>0)
   // + one free record (cost_usd=0, tokens>0). Total must equal $1.00.
@@ -321,7 +321,7 @@ test("cost_mode=subscription/free contribute zero dollars even with tokens", asy
 });
 
 test("per-session attribution: 2 sessions aggregate their own records", async () => {
-  const arkDir = ws.env.app.arkDir;
+  const arkDir = ws.env.arkDir;
   resetCosts(arkDir);
   // Session alpha: two records totaling $2.50
   seedUsageRecord(arkDir, {

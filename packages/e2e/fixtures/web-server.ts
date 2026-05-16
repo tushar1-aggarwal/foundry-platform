@@ -1,33 +1,40 @@
 /**
  * Boots an `ark web` subprocess for Playwright tests.
  *
- * - Calls setupE2E() to get isolated AppContext + temp dir
+ * Playwright always runs its test runner (and therefore this fixture) under
+ * Node, so this file must stay Node-only -- no `bun` import, no Bun.* APIs.
+ * The subprocess itself IS Bun (`bun packages/cli/index.ts web`) and owns
+ * its own AppContext + DB; we only seed state over HTTP via rpc().
+ *
+ * - Calls setupE2E() to get an isolated temp arkDir + workdir
  * - Builds web frontend via `bun run packages/web/build.ts` (cached per-process)
- * - Spawns `ark web --port <random>` with ARK_TEST_DIR env var
- * - Polls /api/rpc until server is ready (30s timeout)
- * - Returns { port, baseUrl, env, serverProcess, teardown }
+ * - Spawns `bun <cli> web --port <random>` with ARK_TEST_DIR=<arkDir>
+ * - Polls /api/rpc + GET / until the server is ready (30s timeout)
+ * - Returns { port, baseUrl, env, serverProcess, teardown, rpc, rpcRaw }
  *
  * Teardown contract: must complete within TEARDOWN_BUDGET_MS even if the
- * subprocess ignores signals or AppContext.shutdown() hangs. The Playwright
- * `afterAll` hook has a 60s timeout -- if ours ever exceeds that, the worker
- * gets SIGKILLed, Playwright fails the whole suite with "Timed out waiting
- * 300s for the teardown for test suite to run", and downstream specs that
- * would have run on the same worker are reported as "did not run".
+ * subprocess ignores signals. The Playwright `afterAll` hook has a 60s
+ * timeout -- if ours ever exceeds that, the worker gets SIGKILLed,
+ * Playwright fails the whole suite with "Timed out waiting 300s for the
+ * teardown for test suite to run", and downstream specs that would have run
+ * on the same worker are reported as "did not run".
  */
 
-import { spawn, type Subprocess } from "bun";
-import { existsSync } from "fs";
-import { join } from "path";
+import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { setupE2E, type E2EEnv } from "./app.js";
 
-const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(HERE, "..", "..", "..");
 // Invoke the Bun CLI entry point directly rather than going through the
 // `ark` bash wrapper. The wrapper spawns `bun` as a child of `bash`, and
-// bash does NOT forward signals to children -- so `serverProcess.kill()`
+// bash does NOT forward signals to children -- so serverProcess.kill()
 // terminated bash but left bun reparented to launchd/init. That was the
 // dominant source of "orphan ark web process" warnings at the end of each
 // run. Spawning bun directly means SIGTERM lands on the process we care
-// about, and `serverProcess.exited` resolves promptly.
+// about, and the `exit` event fires promptly.
 const ARK_CLI = join(REPO_ROOT, "packages", "cli", "index.ts");
 const WEB_DIST = join(REPO_ROOT, "packages", "web", "dist", "index.html");
 
@@ -40,7 +47,7 @@ let buildPromise: Promise<void> | null = null;
 // Without this, a Playwright worker that dies mid-test leaks `ark web`
 // subprocesses to launchd (they survive as immortal zombies until the
 // box reboots -- we've seen 100+ accumulate over a day of flaky runs).
-const LIVE_SERVERS = new Set<Subprocess>();
+const LIVE_SERVERS = new Set<ChildProcess>();
 let exitHookInstalled = false;
 
 // Upper bound on how long teardown() may take. Must stay strictly below the
@@ -49,7 +56,13 @@ let exitHookInstalled = false;
 // protecting against.
 const TEARDOWN_BUDGET_MS = 20_000;
 
-function killServer(proc: Subprocess): void {
+/** Resolves once the child has exited (immediately if it already has). */
+function exited(proc: ChildProcess): Promise<void> {
+  if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => proc.once("exit", () => resolve()));
+}
+
+function killServer(proc: ChildProcess): void {
   try {
     proc.kill("SIGKILL");
   } catch {
@@ -86,6 +99,19 @@ function installExitHook(): void {
   });
 }
 
+/** Read a child stream fully to a string (returns "" if the stream is absent). */
+function drain(stream: NodeJS.ReadableStream | null): Promise<string> {
+  if (!stream) return Promise.resolve("");
+  return new Promise((resolve) => {
+    let buf = "";
+    stream.on("data", (c) => {
+      buf += String(c);
+    });
+    stream.on("end", () => resolve(buf));
+    stream.on("error", () => resolve(buf));
+  });
+}
+
 /**
  * Build the web frontend once per worker process. Subsequent calls await the
  * same promise, so N concurrent spec setups share a single build.
@@ -102,14 +128,14 @@ function buildWebOnce(): Promise<void> {
     return buildPromise;
   }
   buildPromise = (async () => {
-    const buildResult = spawn(["bun", "run", "packages/web/build.ts"], {
+    const buildResult = spawn("bun", ["run", "packages/web/build.ts"], {
       cwd: REPO_ROOT,
-      stdout: "pipe",
-      stderr: "pipe",
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    await buildResult.exited;
-    if (buildResult.exitCode !== 0) {
-      const stderr = await new Response(buildResult.stderr).text();
+    const stderrPromise = drain(buildResult.stderr);
+    const code: number | null = await new Promise((resolve) => buildResult.once("exit", (c) => resolve(c)));
+    if (code !== 0) {
+      const stderr = await stderrPromise;
       // Reset so a later retry can re-attempt the build instead of sticking
       // on the cached failure.
       buildPromise = null;
@@ -123,7 +149,7 @@ export interface WebServerEnv {
   port: number;
   baseUrl: string;
   env: E2EEnv;
-  serverProcess: Subprocess;
+  serverProcess: ChildProcess;
   teardown: () => Promise<void>;
   /** Send a JSON-RPC request to the web server and return the parsed result. */
   rpc: <T = any>(method: string, params?: Record<string, unknown>) => Promise<T>;
@@ -135,11 +161,16 @@ function randomPort(): number {
   return 10000 + Math.floor(Math.random() * 50000);
 }
 
+/** Resolves to `value` after `ms`. Used to bound hangs with Promise.race. */
+function deadline<T>(ms: number, value: T): Promise<T> {
+  return new Promise((r) => setTimeout(() => r(value), ms));
+}
+
 async function pollReady(baseUrl: string, timeoutMs = 30_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+  const stop = Date.now() + timeoutMs;
   let apiReady = false;
   let htmlReady = false;
-  while (Date.now() < deadline) {
+  while (Date.now() < stop) {
     if (!apiReady) {
       try {
         const res = await fetch(`${baseUrl}/api/rpc`, {
@@ -167,14 +198,9 @@ async function pollReady(baseUrl: string, timeoutMs = 30_000): Promise<void> {
         // static handler not yet attached
       }
     }
-    await Bun.sleep(250);
+    await new Promise((r) => setTimeout(r, 250));
   }
   throw new Error(`Web server did not become ready within ${timeoutMs}ms (api=${apiReady}, html=${htmlReady})`);
-}
-
-/** Resolves to `value` after `ms`. Used to bound hangs with Promise.race. */
-function deadline<T>(ms: number, value: T): Promise<T> {
-  return new Promise((r) => setTimeout(() => r(value), ms));
 }
 
 export async function setupWebServer(): Promise<WebServerEnv> {
@@ -187,19 +213,21 @@ export async function setupWebServer(): Promise<WebServerEnv> {
   const port = randomPort();
   const baseUrl = `http://localhost:${port}`;
 
-  const serverProcess = spawn(["bun", ARK_CLI, "web", "--port", String(port)], {
+  const serverProcess = spawn("bun", [ARK_CLI, "web", "--port", String(port)], {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
-      ARK_TEST_DIR: env.app.arkDir,
+      ARK_TEST_DIR: env.arkDir,
       // Belt-and-suspenders against orphan leak: if Playwright SIGKILLs this
       // worker (timeout, whole-run abort), our in-process reap hooks do not
       // fire. The child's parent-death watchdog notices ppid -> 1 and exits.
       ARK_WATCH_PARENT: "1",
     },
-    stdout: "pipe",
-    stderr: "pipe",
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  // Drain child stdio so a full pipe buffer can't wedge the subprocess.
+  serverProcess.stdout?.resume();
+  serverProcess.stderr?.resume();
   LIVE_SERVERS.add(serverProcess);
 
   try {
@@ -251,7 +279,7 @@ export async function setupWebServer(): Promise<WebServerEnv> {
       } catch {
         /* already gone */
       }
-      const termed = await Promise.race([serverProcess.exited.then(() => true), deadline(500, false)]);
+      const termed = await Promise.race([exited(serverProcess).then(() => true), deadline(500, false)]);
       if (!termed) {
         try {
           serverProcess.kill("SIGKILL");
@@ -259,15 +287,15 @@ export async function setupWebServer(): Promise<WebServerEnv> {
           /* already gone */
         }
         // After SIGKILL the kernel should reap within milliseconds. Wait but
-        // do not block forever -- if `exited` never resolves (Bun bug, pid
-        // table wedged) we still want to release the worker.
-        await Promise.race([serverProcess.exited, deadline(1_000, undefined)]);
+        // do not block forever -- if `exit` never fires (pid table wedged)
+        // we still want to release the worker.
+        await Promise.race([exited(serverProcess), deadline(1_000, undefined)]);
       }
       LIVE_SERVERS.delete(serverProcess);
 
-      // env.teardown() closes the SQLite handle, shuts AppContext timers,
-      // and rm -rf's the temp workdir. Any of those can hang under pressure
-      // (WAL checkpoint, tmux kill timeout, fs lock). Bound the total.
+      // env.teardown() rm -rf's the temp arkDir + workdir and prunes
+      // worktrees. Any of those can hang under pressure (fs lock, flock
+      // contention). Bound the total.
       await Promise.race([env.teardown(), deadline(remaining(), undefined)]);
     },
   };
