@@ -96,11 +96,19 @@ describe("PricingRegistry", () => {
 
     it("returns 0 for unknown model", () => {
       const reg = new PricingRegistry();
+      // Unknown model falls back to the default (sonnet) so callers don't
+      // have to special-case unmapped runtimes. A registry with no sonnet
+      // price either still returns 0; one with a sonnet price returns the
+      // sonnet-priced cost.
       const cost = reg.calculateCost("nonexistent-model", {
         input_tokens: 1_000_000,
         output_tokens: 100_000,
       });
-      expect(cost).toBe(0);
+      const sonnetCost = reg.calculateCost("sonnet", {
+        input_tokens: 1_000_000,
+        output_tokens: 100_000,
+      });
+      expect(cost).toBe(sonnetCost);
     });
 
     it("returns 0 for zero tokens", () => {

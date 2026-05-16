@@ -82,9 +82,15 @@ export class PricingRegistry {
     return null;
   }
 
-  /** Calculate cost in USD from token counts and model name. */
-  calculateCost(model: string, usage: TokenUsage): number {
-    const p = this.getPrice(model);
+  /**
+   * Calculate cost in USD from token counts and model name. Unknown / null /
+   * undefined model names fall back to "sonnet" so callers don't have to
+   * special-case unmapped runtimes (see `costs.ts` rationale).
+   */
+  calculateCost(model: string | null | undefined, usage: TokenUsage): number {
+    const m = model ?? PricingRegistry.DEFAULT_MODEL;
+    const resolved = this.getPrice(m) ? m : PricingRegistry.DEFAULT_MODEL;
+    const p = this.getPrice(resolved);
     if (!p) return 0;
     return (
       (usage.input_tokens ?? 0) * p.input_cost_per_token +
@@ -93,6 +99,8 @@ export class PricingRegistry {
       (usage.cache_write_tokens ?? 0) * (p.cache_write_per_token ?? p.input_cost_per_token * 1.25)
     );
   }
+
+  static readonly DEFAULT_MODEL = "sonnet";
 
   /** Check if any prices are loaded. */
   get size(): number {
