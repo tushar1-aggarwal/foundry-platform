@@ -417,9 +417,9 @@ export class AppContext {
           // Read the canonical launch_executor (set by post-launch when the
           // session was dispatched), with the agent-definition runtime as
           // fallback for legacy sessions. Defaulting to "claude-code" was a
-          // mix of concerns: each runtime needs its own probeStatus path
-          // (#435) -- claude-agent uses /process/status, not tmux. A wrong
-          // runtime here makes the poller probe the wrong endpoint.
+          // mix of concerns: each runtime needs its own probeStatus path --
+          // claude-agent uses /process/status, not tmux. A wrong runtime
+          // here makes the poller probe the wrong endpoint.
           const tenantApp = this.forTenant(session.tenant_id);
           const runtime = await resolveSessionExecutor(tenantApp, session);
           if (!runtime) {
