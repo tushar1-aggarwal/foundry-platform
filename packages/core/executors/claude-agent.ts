@@ -201,6 +201,27 @@ export const claudeAgentExecutor: Executor = {
     // Secrets (ANTHROPIC_API_KEY etc.) take precedence -- last-write-wins.
     const secretEnv = opts.env ?? {};
 
+    // Durable precondition signal. An empty CLAUDE_CODE_OAUTH_TOKEN /
+    // ANTHROPIC_API_KEY is the single most common silent-hang cause: the
+    // agent launches, calls the SDK query, and waits on auth forever with
+    // no error. Record auth presence on the session event log BEFORE the
+    // launch so "MISSING" is a loud, queryable signal instead of a hang
+    // that has to be found by grepping launcher.sh inside a dead pod.
+    const trimmed = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+    const auth = trimmed(secretEnv.CLAUDE_CODE_OAUTH_TOKEN)
+      ? "oauth"
+      : trimmed(secretEnv.ANTHROPIC_API_KEY)
+        ? "api_key"
+        : process.env.ARK_DEV_FORCE_DIRECT === "1" || arkEnv.ARK_DEV_FORCE_DIRECT === "1"
+          ? "dev_direct"
+          : "MISSING";
+    await app.events
+      .log(session.id, "agent_launch", {
+        actor: "system",
+        data: { runtime: "claude-agent", compute: compute.name, handle, auth },
+      })
+      .catch(() => {});
+
     // Launcher script: write task.txt, export env, exec ark run-agent-sdk.
     // No `exec bash` keepalive -- the headless SDK loop exits on end_turn,
     // arkd reaps the process, and the next stage's spawn happens cleanly

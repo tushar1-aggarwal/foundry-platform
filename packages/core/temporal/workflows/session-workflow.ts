@@ -79,6 +79,28 @@ export async function sessionWorkflow(input: SessionWorkflowInput): Promise<void
 
     const flow = await loadFlowActivity({ flowName: input.flowName });
 
+    // Loud, durable signal for the silent non-start. If the flow resolves
+    // to zero schedulable stages the loop below never runs and the session
+    // would sit at status=ready / stage=- forever with nothing explaining
+    // why. The common cause: an inline flow ("inline-s-..."), which the
+    // Temporal loadFlow path can't resolve (FlowStore is keyed by name;
+    // inline defs live on session.config). Fail loudly with the reason
+    // instead of leaving it in limbo.
+    if (!flow || !Array.isArray(flow.topoOrder) || flow.topoOrder.length === 0) {
+      await projectSessionActivity({
+        sessionId: input.sessionId,
+        patch: {
+          status: "failed",
+          error:
+            `Flow '${input.flowName}' resolved to no schedulable stages -- no stage was dispatched. ` +
+            `Inline flows are not supported under Temporal orchestration (loadFlow is FlowStore-by-name; ` +
+            `inline definitions live on session.config). Use a registered flow, or run with the bespoke ` +
+            `orchestrator.`,
+        },
+      });
+      return;
+    }
+
     for (const stageIdx of flow.topoOrder) {
       const stage = flow.stages[stageIdx];
       const kind = classifyStage(stage);
