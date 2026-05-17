@@ -81,7 +81,7 @@ dev: ## Hot-reload: API + Vite HMR + daemon
 	@echo ""
 	@trap 'kill 0' EXIT; \
 	  $(BUN) --watch packages/cli/index.ts web --port 8420 --api-only 2>&1 | sed 's/^/[api] /' & \
-	  sleep 1 && cd packages/web && npx vite --port 5173 2>&1 | sed 's/^/[web] /' & \
+	  sleep 1 && cd packages/web && bunx --bun vite --port 5173 2>&1 | sed 's/^/[web] /' & \
 	  wait
 
 dev-daemon: ## Hot-reload: server daemon (conductor :19100 + arkd :19300 + WS :19400)
@@ -107,7 +107,7 @@ dev-web: ## Hot-reload: API server (:8420) + Vite frontend (:5173)
 	@echo ""
 	@trap 'kill 0' EXIT; \
 	  $(BUN) --watch packages/cli/index.ts web --port 8420 --api-only 2>&1 | sed 's/^/[api] /' & \
-	  sleep 1 && cd packages/web && npx vite --port 5173 2>&1 | sed 's/^/[web] /' & \
+	  sleep 1 && cd packages/web && bunx --bun vite --port 5173 2>&1 | sed 's/^/[web] /' & \
 	  wait
 
 dev-temporal: ## Start local Temporal cluster (server :7233 + UI :8088) for Phase 0/1
@@ -732,7 +732,7 @@ build-cli: ## Build native macOS CLI binary (current arch)
 	@echo "Built: ark-native ($$(du -h ark-native | cut -f1))"
 
 build-web: ## Build web frontend (Vite production)
-	@cd packages/web && npx vite build --logLevel error 2>/dev/null || $(BUN) run packages/web/build.ts
+	@cd packages/web && bunx --bun vite build --logLevel error 2>/dev/null || $(BUN) run build.ts
 
 # ── Packaging (all platforms) ────────────────────────────────────────────────
 
