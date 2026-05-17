@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { AppContext } from "../app.js";
 import { pauseWithSnapshot, resumeFromSnapshot, resolveSessionCompute } from "../services/session-snapshot.js";
+import { depsFromApp } from "../services/deps.js";
 import type { Compute, ComputeHandle, Snapshot } from "../compute/types.js";
 import { NotSupportedError } from "../compute/types.js";
 import { FsSnapshotStore } from "../compute/snapshot-store-fs.js";
@@ -94,7 +95,7 @@ async function ensureComputeRow(name: string, _provider: string, computeKind: st
 
 describe("pauseWithSnapshot", async () => {
   it("returns ok: false for nonexistent session", async () => {
-    const result = await pauseWithSnapshot(app, "s-nonexistent");
+    const result = await pauseWithSnapshot(depsFromApp(app), "s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -110,7 +111,7 @@ describe("pauseWithSnapshot", async () => {
     });
     app.registerCompute(makeNoSnapshotCompute());
 
-    const result = await pauseWithSnapshot(app, session.id);
+    const result = await pauseWithSnapshot(depsFromApp(app), session.id);
     expect(result.ok).toBe(false);
     expect(result.notSupported).toBe(true);
     expect(result.message).toContain("does not support");
@@ -128,7 +129,7 @@ describe("pauseWithSnapshot", async () => {
     });
     app.registerCompute(makeSnapshotCapableCompute());
 
-    const result = await pauseWithSnapshot(app, session.id);
+    const result = await pauseWithSnapshot(depsFromApp(app), session.id);
     expect(result.ok).toBe(true);
     expect(result.snapshot).toBeTruthy();
     expect(result.snapshot!.computeKind).toBe("firecracker");
@@ -147,7 +148,7 @@ describe("pauseWithSnapshot", async () => {
     });
     app.registerCompute(makeSnapshotCapableCompute());
 
-    await pauseWithSnapshot(app, session.id, { reason: "manual pause" });
+    await pauseWithSnapshot(depsFromApp(app), session.id, { reason: "manual pause" });
 
     const updated = await app.sessions.get(session.id)!;
     expect(updated.status).toBe("blocked");
@@ -166,7 +167,7 @@ describe("pauseWithSnapshot", async () => {
     });
     app.registerCompute(makeSnapshotCapableCompute());
 
-    await pauseWithSnapshot(app, session.id);
+    await pauseWithSnapshot(depsFromApp(app), session.id);
 
     const updated = await app.sessions.get(session.id)!;
     expect(updated.breakpoint_reason).toBe("User paused");
@@ -184,7 +185,7 @@ describe("pauseWithSnapshot", async () => {
     });
     app.registerCompute(makeSnapshotCapableCompute());
 
-    const result = await pauseWithSnapshot(app, session.id);
+    const result = await pauseWithSnapshot(depsFromApp(app), session.id);
 
     const updated = await app.sessions.get(session.id)!;
     const config = updated.config as Record<string, unknown>;
@@ -201,7 +202,7 @@ describe("pauseWithSnapshot", async () => {
       compute_name: "unknown-xyz",
     });
 
-    const result = await pauseWithSnapshot(app, session.id);
+    const result = await pauseWithSnapshot(depsFromApp(app), session.id);
     expect(result.ok).toBe(false);
   });
 
@@ -217,7 +218,7 @@ describe("pauseWithSnapshot", async () => {
     });
     app.registerCompute(makeSnapshotCapableCompute());
 
-    const result = await pauseWithSnapshot(app, session.id);
+    const result = await pauseWithSnapshot(depsFromApp(app), session.id);
 
     const refs = await app.snapshotStore.list({ sessionId: session.id });
     expect(refs.length).toBe(1);
@@ -227,7 +228,7 @@ describe("pauseWithSnapshot", async () => {
 
 describe("resumeFromSnapshot", async () => {
   it("returns ok: false for nonexistent session", async () => {
-    const result = await resumeFromSnapshot(app, "s-nonexistent");
+    const result = await resumeFromSnapshot(depsFromApp(app), "s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -239,7 +240,7 @@ describe("resumeFromSnapshot", async () => {
     await app.sessions.update(session.id, { status: "blocked", stage: "work", compute_name: "firecracker-test" });
     app.registerCompute(makeSnapshotCapableCompute());
 
-    const result = await resumeFromSnapshot(app, session.id);
+    const result = await resumeFromSnapshot(depsFromApp(app), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("No snapshot available");
   });
@@ -256,10 +257,10 @@ describe("resumeFromSnapshot", async () => {
     });
     app.registerCompute(makeSnapshotCapableCompute());
 
-    const pauseResult = await pauseWithSnapshot(app, session.id);
+    const pauseResult = await pauseWithSnapshot(depsFromApp(app), session.id);
     expect(pauseResult.ok).toBe(true);
 
-    const resumeResult = await resumeFromSnapshot(app, session.id);
+    const resumeResult = await resumeFromSnapshot(depsFromApp(app), session.id);
     expect(resumeResult.ok).toBe(true);
     expect(resumeResult.snapshotId).toBe(pauseResult.snapshot!.id);
   });
@@ -276,11 +277,11 @@ describe("resumeFromSnapshot", async () => {
     });
     app.registerCompute(makeSnapshotCapableCompute());
 
-    await pauseWithSnapshot(app, session.id, { reason: "test pause" });
+    await pauseWithSnapshot(depsFromApp(app), session.id, { reason: "test pause" });
     const paused = await app.sessions.get(session.id)!;
     expect(paused.status).toBe("blocked");
 
-    await resumeFromSnapshot(app, session.id);
+    await resumeFromSnapshot(depsFromApp(app), session.id);
     const resumed = await app.sessions.get(session.id)!;
     expect(resumed.status).toBe("ready");
     expect(resumed.breakpoint_reason).toBeNull();
@@ -298,9 +299,9 @@ describe("resumeFromSnapshot", async () => {
     });
     app.registerCompute(makeSnapshotCapableCompute());
 
-    const pauseResult = await pauseWithSnapshot(app, session.id);
+    const pauseResult = await pauseWithSnapshot(depsFromApp(app), session.id);
 
-    const resumeResult = await resumeFromSnapshot(app, session.id, {
+    const resumeResult = await resumeFromSnapshot(depsFromApp(app), session.id, {
       snapshotId: pauseResult.snapshot!.id,
     });
     expect(resumeResult.ok).toBe(true);
@@ -315,7 +316,7 @@ describe("resumeFromSnapshot", async () => {
     const fcCompute = makeSnapshotCapableCompute();
     app.registerCompute(fcCompute);
 
-    const pauseResult = await pauseWithSnapshot(app, session.id);
+    const pauseResult = await pauseWithSnapshot(depsFromApp(app), session.id);
     expect(pauseResult.ok).toBe(false);
 
     app.registerCompute(makeNoSnapshotCompute());
@@ -331,7 +332,7 @@ describe("resumeFromSnapshot", async () => {
     );
     await app.sessions.update(session.id, { config: { last_snapshot_id: ref.id } });
 
-    const resumeResult = await resumeFromSnapshot(app, session.id);
+    const resumeResult = await resumeFromSnapshot(depsFromApp(app), session.id);
     expect(resumeResult.ok).toBe(false);
     expect(resumeResult.notSupported).toBe(true);
   });
@@ -349,8 +350,8 @@ describe("resumeFromSnapshot", async () => {
     });
     app.registerCompute(makeSnapshotCapableCompute());
 
-    await pauseWithSnapshot(app, session.id, { reason: "cost savings" });
-    await resumeFromSnapshot(app, session.id);
+    await pauseWithSnapshot(depsFromApp(app), session.id, { reason: "cost savings" });
+    await resumeFromSnapshot(depsFromApp(app), session.id);
 
     const updated = await app.sessions.get(session.id)!;
     expect(updated.status).toBe("ready");
@@ -363,7 +364,7 @@ describe("resumeFromSnapshot", async () => {
 
 describe("resolveSessionCompute", async () => {
   it("returns null for nonexistent session", async () => {
-    const result = await resolveSessionCompute(app, "s-nonexistent");
+    const result = await resolveSessionCompute(depsFromApp(app), "s-nonexistent");
     expect(result).toBeNull();
   });
 
@@ -373,7 +374,7 @@ describe("resolveSessionCompute", async () => {
     await ensureComputeRow("firecracker-xl", "firecracker", "firecracker");
     await app.sessions.update(session.id, { compute_name: "firecracker-xl" });
 
-    const result = await resolveSessionCompute(app, session.id);
+    const result = await resolveSessionCompute(depsFromApp(app), session.id);
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("firecracker");
   });
@@ -384,7 +385,7 @@ describe("resolveSessionCompute", async () => {
     await app.sessions.update(session.id, { compute_name: "ec2-medium" });
     app.registerCompute(makeSnapshotCapableCompute("ec2" as any));
 
-    const result = await resolveSessionCompute(app, session.id);
+    const result = await resolveSessionCompute(depsFromApp(app), session.id);
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("ec2");
   });
@@ -393,7 +394,7 @@ describe("resolveSessionCompute", async () => {
     const session = await app.sessions.create({ summary: "resolve-missing" });
     await app.sessions.update(session.id, { compute_name: "something-weird" });
 
-    const result = await resolveSessionCompute(app, session.id);
+    const result = await resolveSessionCompute(depsFromApp(app), session.id);
     expect(result).toBeNull();
   });
 
@@ -401,7 +402,7 @@ describe("resolveSessionCompute", async () => {
     const session = await app.sessions.create({ summary: "resolve-local-default" });
     app.registerCompute(makeNoSnapshotCompute());
 
-    const result = await resolveSessionCompute(app, session.id);
+    const result = await resolveSessionCompute(depsFromApp(app), session.id);
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("local");
   });

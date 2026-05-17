@@ -303,7 +303,8 @@ export function startStatusPoller(app: AppContext, sessionId: string, handle: st
               const arkdUrl = await resolveArkdUrl(app, session);
               if (arkdUrl) {
                 const { captureWorkerForensics } = await import("../services/session-forensic.js");
-                await captureWorkerForensics(app, session, arkdUrl);
+                const { depsFromApp } = await import("../services/deps.js");
+                await captureWorkerForensics(depsFromApp(app), session, arkdUrl);
               }
             }
           }
@@ -368,7 +369,8 @@ async function _handleStatus(
     if (arkdUrl) {
       try {
         const { captureWorkerForensics } = await import("../services/session-forensic.js");
-        const { stdioTail } = await captureWorkerForensics(app, session, arkdUrl);
+        const { depsFromApp } = await import("../services/deps.js");
+        const { stdioTail } = await captureWorkerForensics(depsFromApp(app), session, arkdUrl);
         if (newStatus === "failed" && stdioTail) {
           error = `${error ?? "agent process exited"}\n--- worker stdio (tail) ---\n${stdioTail}`;
         }

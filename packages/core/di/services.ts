@@ -114,7 +114,7 @@ function buildSessionLifecycleDeps(c: SessionLifecycleCradle): SessionLifecycleD
     advance: (id, force) => c.app.stageAdvance.advance(id, force),
     cleanupSession: async (session) => {
       const { cleanupSession } = await import("../services/session/cleanup.js");
-      await cleanupSession(c.app, session);
+      await cleanupSession(depsFromApp(c.app), session);
     },
     provisionWorkspaceWorkdir: (session, ws, opts) => provisionWorkspaceWorkdir(c.app, session, ws, opts),
     // Wire Temporal workflow starter when hosted mode + flag enabled.
@@ -156,7 +156,7 @@ export function registerServices(
       { lifetime },
     ),
 
-    sessionAttach: asFunction((c: { app: AppContext }) => new SessionAttachService(c.app), { lifetime }),
+    sessionAttach: asFunction((c: { app: AppContext }) => new SessionAttachService(depsFromApp(c.app)), { lifetime }),
 
     sessionHooks: asFunction(
       (c: {
@@ -187,7 +187,7 @@ export function registerServices(
           runVerification: (id) => c.app.sessionReviewer.runVerification(id),
           recordSessionUsage: (session, usage, provider, source) =>
             c.app.sessionCreator.recordUsage(session, usage, provider, source),
-          getOutput: (id, opts) => getOutput(c.app, id, opts),
+          getOutput: (id, opts) => getOutput(depsFromApp(c.app), id, opts),
           cleanupOnTerminal: (id) => c.app.sessionTerminator.cleanupOnTerminal(id),
           ...buildFlowCallbacks(c.app),
         }),
@@ -277,7 +277,7 @@ export function registerServices(
           mediateStageHandoff: (sessionId, opts) => c.app.sessionHooks.mediateStageHandoff(sessionId, opts),
           executeAction: (sessionId, action) => c.app.stageAdvance.executeAction(sessionId, action),
           dispatchChild: (childId) => c.app.dispatchService.dispatch(childId),
-          fork: (parentId, task, opts) => forkFn(c.app, parentId, task, opts),
+          fork: (parentId, task, opts) => forkFn(depsFromApp(c.app), parentId, task, opts),
           startStatusPoller: (sessionId, tmuxName, runtime) => startStatusPoller(c.app, sessionId, tmuxName, runtime),
 
           // Executor-interface coupling: LaunchOpts.app is required until

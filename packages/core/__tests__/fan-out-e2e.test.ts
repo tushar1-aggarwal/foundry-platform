@@ -2,6 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
 import { fanOut, checkAutoJoin } from "../services/fork-join.js";
 import { spawnSubagent } from "../services/subagents.js";
+import { depsFromApp } from "../services/deps.js";
 import { getReadyStages, getStages, validateDAG } from "../services/flow.js";
 
 let app: AppContext;
@@ -20,7 +21,7 @@ describe("fan-out E2E", async () => {
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
     // 2. Fan out into 3 children
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "Task A" }, { summary: "Task B" }, { summary: "Task C" }],
     });
     expect(result.ok).toBe(true);
@@ -39,15 +40,15 @@ describe("fan-out E2E", async () => {
 
     // 5. Complete children one by one -- auto-join only when ALL done
     await app.sessions.update(result.childIds![0], { status: "completed" });
-    let joined = await checkAutoJoin(app, result.childIds![0]);
+    let joined = await checkAutoJoin(depsFromApp(app), result.childIds![0]);
     expect(joined).toBe(false);
 
     await app.sessions.update(result.childIds![1], { status: "completed" });
-    joined = await checkAutoJoin(app, result.childIds![1]);
+    joined = await checkAutoJoin(depsFromApp(app), result.childIds![1]);
     expect(joined).toBe(false);
 
     await app.sessions.update(result.childIds![2], { status: "completed" });
-    joined = await checkAutoJoin(app, result.childIds![2]);
+    joined = await checkAutoJoin(depsFromApp(app), result.childIds![2]);
     expect(joined).toBe(true);
 
     // 6. Verify parent advanced
@@ -59,7 +60,7 @@ describe("fan-out E2E", async () => {
     const parent = await app.sessions.create({ summary: "Spawn test", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await spawnSubagent(app, parent.id, { task: "Child task" });
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "Child task" });
     expect(result.ok).toBe(true);
 
     const child = await app.sessions.get(result.sessionId!);
@@ -107,14 +108,14 @@ describe("fan-out E2E", async () => {
     const parent = await app.sessions.create({ summary: "Partial fail", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "Will pass" }, { summary: "Will fail" }],
     });
 
     await app.sessions.update(result.childIds![0], { status: "completed" });
     await app.sessions.update(result.childIds![1], { status: "failed" });
 
-    const joined = await checkAutoJoin(app, result.childIds![0]);
+    const joined = await checkAutoJoin(depsFromApp(app), result.childIds![0]);
     expect(joined).toBe(true);
 
     // Check that partial failure event was logged

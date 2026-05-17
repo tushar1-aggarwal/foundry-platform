@@ -6,13 +6,14 @@ withTestContext();
 
 // Import dynamically to avoid circular dep issues
 const session = await import("../services/subagents.js");
+const { depsFromApp } = await import("../services/deps.js");
 
 describe("spawnSubagent", () => {
   it("creates a child session with parent reference", async () => {
     const parent = await getApp().sessions.create({ summary: "parent", repo: "/tmp/repo" });
     await getApp().sessions.update(parent.id, { agent: "implementer", workdir: "/tmp/repo" });
 
-    const result = await session.spawnSubagent(getApp(), parent.id, { task: "subtask" });
+    const result = await session.spawnSubagent(depsFromApp(getApp()), parent.id, { task: "subtask" });
     expect(result.ok).toBe(true);
     expect(result.sessionId).toBeDefined();
 
@@ -27,7 +28,7 @@ describe("spawnSubagent", () => {
     const parent = await getApp().sessions.create({ summary: "parent", repo: "/tmp/repo" });
     await getApp().sessions.update(parent.id, { agent: "implementer", workdir: "/tmp/repo" });
 
-    const result = await session.spawnSubagent(getApp(), parent.id, {
+    const result = await session.spawnSubagent(depsFromApp(getApp()), parent.id, {
       task: "review task",
       agent: "reviewer",
     });
@@ -36,7 +37,7 @@ describe("spawnSubagent", () => {
   });
 
   it("rejects non-existent parent", async () => {
-    const result = await session.spawnSubagent(getApp(), "nope", { task: "orphan" });
+    const result = await session.spawnSubagent(depsFromApp(getApp()), "nope", { task: "orphan" });
     expect(result.ok).toBe(false);
   });
 
@@ -44,7 +45,7 @@ describe("spawnSubagent", () => {
     const parent = await getApp().sessions.create({ summary: "parent", repo: "/tmp/repo" });
     await getApp().sessions.update(parent.id, { agent: "worker", workdir: "/tmp/repo" });
 
-    const result = await session.spawnSubagent(getApp(), parent.id, { task: "sub" });
+    const result = await session.spawnSubagent(depsFromApp(getApp()), parent.id, { task: "sub" });
     const child = await getApp().sessions.get(result.sessionId!);
     expect(child!.config.subagent).toBe(true);
     expect(child!.config.parent_id).toBe(parent.id);
@@ -54,7 +55,7 @@ describe("spawnSubagent", () => {
     const parent = await getApp().sessions.create({ summary: "parent", repo: "/tmp/repo" });
     await getApp().sessions.update(parent.id, { agent: "worker", workdir: "/tmp/repo" });
 
-    const result = await session.spawnSubagent(getApp(), parent.id, { task: "sub" });
+    const result = await session.spawnSubagent(depsFromApp(getApp()), parent.id, { task: "sub" });
     const child = await getApp().sessions.get(result.sessionId!);
     expect(child!.flow).toBe("quick");
   });

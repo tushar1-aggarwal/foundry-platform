@@ -570,7 +570,8 @@ export class SessionService {
    */
   async send(id: string, message: string): Promise<SessionOpResult> {
     const { send: legacySend } = await import("./session-output.js");
-    return legacySend(this.app, id, message);
+    const { depsFromApp } = await import("./deps.js");
+    return legacySend(depsFromApp(this.app), id, message);
   }
 
   /**

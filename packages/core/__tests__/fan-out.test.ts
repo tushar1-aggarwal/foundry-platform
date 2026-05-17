@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
 import { fanOut, checkAutoJoin, joinFork } from "../services/fork-join.js";
 import { spawnSubagent, spawnParallelSubagents } from "../services/subagents.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 beforeAll(async () => {
@@ -16,7 +17,7 @@ describe("sub-agent fan-out", async () => {
   it("creates correct number of children", async () => {
     const parent = await app.sessions.create({ summary: "build feature", flow: "bare" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [
         { summary: "Implement auth module", agent: "implementer" },
         { summary: "Write auth tests", agent: "implementer" },
@@ -31,7 +32,7 @@ describe("sub-agent fan-out", async () => {
   it("children linked to parent", async () => {
     const parent = await app.sessions.create({ summary: "build feature", flow: "bare" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "task A" }, { summary: "task B" }],
     });
 
@@ -44,7 +45,7 @@ describe("sub-agent fan-out", async () => {
 
   it("children share fork_group", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare" });
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "task 1" }, { summary: "task 2" }],
     });
 
@@ -56,7 +57,7 @@ describe("sub-agent fan-out", async () => {
 
   it("parent in waiting state", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare" });
-    await fanOut(app, parent.id, {
+    await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "task 1" }],
     });
 
@@ -66,14 +67,14 @@ describe("sub-agent fan-out", async () => {
 
   it("empty task list rejected", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare" });
-    const result = await fanOut(app, parent.id, { tasks: [] });
+    const result = await fanOut(depsFromApp(app), parent.id, { tasks: [] });
 
     expect(result.ok).toBe(false);
     expect(result.message).toContain("No tasks provided");
   });
 
   it("missing parent returns error", async () => {
-    const result = await fanOut(app, "s-nonexistent", {
+    const result = await fanOut(depsFromApp(app), "s-nonexistent", {
       tasks: [{ summary: "task" }],
     });
 
@@ -85,7 +86,7 @@ describe("sub-agent fan-out", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare" });
     await app.sessions.update(parent.id, { repo: "my-repo", workdir: "/tmp/repo" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "child task" }],
     });
 
@@ -97,7 +98,7 @@ describe("sub-agent fan-out", async () => {
   it("children inherit parent group_name", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare", group_name: "my-group" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "child task" }],
     });
 
@@ -108,7 +109,7 @@ describe("sub-agent fan-out", async () => {
   it("children use custom agent when specified", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [
         { summary: "review task", agent: "reviewer" },
         { summary: "doc task", agent: "documenter" },
@@ -124,7 +125,7 @@ describe("sub-agent fan-out", async () => {
   it("children use custom flow when specified", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "child", flow: "quick" }],
     });
 
@@ -135,7 +136,7 @@ describe("sub-agent fan-out", async () => {
   it("children default to bare flow", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "child" }],
     });
 
@@ -146,7 +147,7 @@ describe("sub-agent fan-out", async () => {
   it("parent fork_group matches children fork_group", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }, { summary: "B" }],
     });
 
@@ -158,7 +159,7 @@ describe("sub-agent fan-out", async () => {
   it("logs fan_out event on parent", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }, { summary: "B" }],
     });
 
@@ -172,7 +173,7 @@ describe("sub-agent fan-out", async () => {
   it("getChildren returns all fan-out children", async () => {
     const parent = await app.sessions.create({ summary: "test", flow: "bare" });
 
-    await fanOut(app, parent.id, {
+    await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }, { summary: "B" }, { summary: "C" }],
     });
 
@@ -184,7 +185,7 @@ describe("sub-agent fan-out", async () => {
     const parent = await app.sessions.create({ summary: "big fan-out", flow: "bare" });
     const tasks = Array.from({ length: 10 }, (_, i) => ({ summary: `Task ${i}` }));
 
-    const result = await fanOut(app, parent.id, { tasks });
+    const result = await fanOut(depsFromApp(app), parent.id, { tasks });
     expect(result.ok).toBe(true);
     expect(result.childIds).toHaveLength(10);
 
@@ -200,8 +201,8 @@ describe("sub-agent fan-out", async () => {
     const parent1 = await app.sessions.create({ summary: "parent 1", flow: "bare" });
     const parent2 = await app.sessions.create({ summary: "parent 2", flow: "bare" });
 
-    const r1 = await fanOut(app, parent1.id, { tasks: [{ summary: "A" }] });
-    const r2 = await fanOut(app, parent2.id, { tasks: [{ summary: "B" }] });
+    const r1 = await fanOut(depsFromApp(app), parent1.id, { tasks: [{ summary: "A" }] });
+    const r2 = await fanOut(depsFromApp(app), parent2.id, { tasks: [{ summary: "B" }] });
 
     const child1 = await app.sessions.get(r1.childIds![0])!;
     const child2 = await app.sessions.get(r2.childIds![0])!;
@@ -215,7 +216,7 @@ describe("sub-agent fan-out", async () => {
 describe("checkAutoJoin", async () => {
   it("returns false when child has no parent", async () => {
     const session = await app.sessions.create({ summary: "orphan", flow: "bare" });
-    const result = await checkAutoJoin(app, session.id);
+    const result = await checkAutoJoin(depsFromApp(app), session.id);
     expect(result).toBe(false);
   });
 
@@ -223,7 +224,7 @@ describe("checkAutoJoin", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "child" }],
     });
 
@@ -231,7 +232,7 @@ describe("checkAutoJoin", async () => {
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, status: "running" });
     await app.sessions.update(result.childIds![0], { status: "completed" });
 
-    const joined = await checkAutoJoin(app, result.childIds![0]);
+    const joined = await checkAutoJoin(depsFromApp(app), result.childIds![0]);
     expect(joined).toBe(false);
   });
 
@@ -239,14 +240,14 @@ describe("checkAutoJoin", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }, { summary: "B" }],
     });
 
     // Only complete first child
     await app.sessions.update(result.childIds![0], { status: "completed" });
 
-    const joined = await checkAutoJoin(app, result.childIds![0]);
+    const joined = await checkAutoJoin(depsFromApp(app), result.childIds![0]);
     expect(joined).toBe(false);
 
     // Parent still waiting
@@ -258,14 +259,14 @@ describe("checkAutoJoin", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }, { summary: "B" }],
     });
 
     await app.sessions.update(result.childIds![0], { status: "completed" });
     await app.sessions.update(result.childIds![1], { status: "completed" });
 
-    const joined = await checkAutoJoin(app, result.childIds![1]);
+    const joined = await checkAutoJoin(depsFromApp(app), result.childIds![1]);
     expect(joined).toBe(true);
 
     const parentState = await app.sessions.get(parent.id)!;
@@ -277,13 +278,13 @@ describe("checkAutoJoin", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }],
     });
 
     await app.sessions.update(result.childIds![0], { status: "failed" });
 
-    const joined = await checkAutoJoin(app, result.childIds![0]);
+    const joined = await checkAutoJoin(depsFromApp(app), result.childIds![0]);
     expect(joined).toBe(true);
   });
 
@@ -291,12 +292,12 @@ describe("checkAutoJoin", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }],
     });
 
     await app.sessions.update(result.childIds![0], { status: "completed" });
-    await checkAutoJoin(app, result.childIds![0]);
+    await checkAutoJoin(depsFromApp(app), result.childIds![0]);
 
     const events = await app.events.list(parent.id);
     const joinEvent = events.find((e) => e.type === "auto_join");
@@ -309,14 +310,14 @@ describe("checkAutoJoin", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "pass" }, { summary: "fail" }],
     });
 
     await app.sessions.update(result.childIds![0], { status: "completed" });
     await app.sessions.update(result.childIds![1], { status: "failed" });
 
-    await checkAutoJoin(app, result.childIds![0]);
+    await checkAutoJoin(depsFromApp(app), result.childIds![0]);
 
     const events = await app.events.list(parent.id);
     const failEvent = events.find((e) => e.type === "fan_out_partial_failure");
@@ -326,7 +327,7 @@ describe("checkAutoJoin", async () => {
   });
 
   it("returns false for nonexistent session", async () => {
-    const result = await checkAutoJoin(app, "s-nonexistent");
+    const result = await checkAutoJoin(depsFromApp(app), "s-nonexistent");
     expect(result).toBe(false);
   });
 });
@@ -336,14 +337,14 @@ describe("joinFork", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }, { summary: "B" }],
     });
 
     await app.sessions.update(result.childIds![0], { status: "completed" });
     await app.sessions.update(result.childIds![1], { status: "completed" });
 
-    const joinResult = await joinFork(app, parent.id);
+    const joinResult = await joinFork(depsFromApp(app), parent.id);
     expect(joinResult.ok).toBe(true);
   });
 
@@ -351,14 +352,14 @@ describe("joinFork", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }, { summary: "B" }],
     });
 
     await app.sessions.update(result.childIds![0], { status: "completed" });
     // Leave second child as ready
 
-    const joinResult = await joinFork(app, parent.id);
+    const joinResult = await joinFork(depsFromApp(app), parent.id);
     expect(joinResult.ok).toBe(false);
     expect(joinResult.message).toContain("not done");
   });
@@ -367,19 +368,19 @@ describe("joinFork", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    await fanOut(app, parent.id, {
+    await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }, { summary: "B" }],
     });
 
     // Don't complete any children
-    const joinResult = await joinFork(app, parent.id, true);
+    const joinResult = await joinFork(depsFromApp(app), parent.id, true);
     expect(joinResult.ok).toBe(true);
   });
 
   it("fails when no children exist", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
 
-    const joinResult = await joinFork(app, parent.id);
+    const joinResult = await joinFork(depsFromApp(app), parent.id);
     expect(joinResult.ok).toBe(false);
     expect(joinResult.message).toContain("No children");
   });
@@ -388,7 +389,7 @@ describe("joinFork", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }, { summary: "B" }],
     });
 
@@ -396,7 +397,7 @@ describe("joinFork", async () => {
     await app.sessions.update(result.childIds![1], { status: "failed" });
 
     // joinFork only considers "completed" as done, so failed child blocks
-    const joinResult = await joinFork(app, parent.id);
+    const joinResult = await joinFork(depsFromApp(app), parent.id);
     expect(joinResult.ok).toBe(false);
     expect(joinResult.message).toContain("not done");
   });
@@ -405,13 +406,13 @@ describe("joinFork", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }],
     });
 
     await app.sessions.update(result.childIds![0], { status: "failed" });
 
-    const joinResult = await joinFork(app, parent.id, true);
+    const joinResult = await joinFork(depsFromApp(app), parent.id, true);
     expect(joinResult.ok).toBe(true);
   });
 
@@ -419,7 +420,7 @@ describe("joinFork", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    await fanOut(app, parent.id, {
+    await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }],
     });
 
@@ -429,7 +430,7 @@ describe("joinFork", async () => {
 
     const children = await app.sessions.getChildren(parent.id);
     await app.sessions.update(children[0].id, { status: "completed" });
-    await joinFork(app, parent.id);
+    await joinFork(depsFromApp(app), parent.id);
 
     parentState = await app.sessions.get(parent.id)!;
     expect(parentState.fork_group).toBeNull();
@@ -441,7 +442,7 @@ describe("spawnSubagent", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await spawnSubagent(app, parent.id, { task: "Do subtask" });
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "Do subtask" });
     expect(result.ok).toBe(true);
     expect(result.sessionId).toBeTruthy();
 
@@ -459,7 +460,7 @@ describe("spawnSubagent", async () => {
       workdir: "/home/ubuntu/repo",
     });
 
-    const result = await spawnSubagent(app, parent.id, { task: "subtask" });
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "subtask" });
     const child = await app.sessions.get(result.sessionId!)!;
     expect(child.compute_name).toBe("ec2-box");
     expect(child.workdir).toBe("/home/ubuntu/repo");
@@ -468,7 +469,7 @@ describe("spawnSubagent", async () => {
   it("uses quick flow by default", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
 
-    const result = await spawnSubagent(app, parent.id, { task: "subtask" });
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "subtask" });
     const child = await app.sessions.get(result.sessionId!)!;
     expect(child.flow).toBe("quick");
   });
@@ -477,7 +478,7 @@ describe("spawnSubagent", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { agent: "implementer" });
 
-    const result = await spawnSubagent(app, parent.id, {
+    const result = await spawnSubagent(depsFromApp(app), parent.id, {
       task: "review this",
       agent: "reviewer",
     });
@@ -489,7 +490,7 @@ describe("spawnSubagent", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { agent: "implementer" });
 
-    const result = await spawnSubagent(app, parent.id, { task: "subtask" });
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "subtask" });
     const child = await app.sessions.get(result.sessionId!)!;
     expect(child.agent).toBe("implementer");
   });
@@ -498,7 +499,7 @@ describe("spawnSubagent", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { agent: "implementer" });
 
-    const result = await spawnSubagent(app, parent.id, {
+    const result = await spawnSubagent(depsFromApp(app), parent.id, {
       task: "do thing",
     });
 
@@ -512,7 +513,7 @@ describe("spawnSubagent", async () => {
   it("stores extensions in config", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
 
-    const result = await spawnSubagent(app, parent.id, {
+    const result = await spawnSubagent(depsFromApp(app), parent.id, {
       task: "subtask with MCP",
       extensions: ["slack", "github"],
     });
@@ -523,7 +524,7 @@ describe("spawnSubagent", async () => {
   it("sets subagent flag in config", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
 
-    const result = await spawnSubagent(app, parent.id, { task: "subtask" });
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "subtask" });
     const child = await app.sessions.get(result.sessionId!)!;
     expect(child.config?.subagent).toBe(true);
   });
@@ -531,14 +532,14 @@ describe("spawnSubagent", async () => {
   it("child is in ready state with first stage set", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
 
-    const result = await spawnSubagent(app, parent.id, { task: "subtask" });
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "subtask" });
     const child = await app.sessions.get(result.sessionId!)!;
     expect(child.status).toBe("ready");
     expect(child.stage).toBeTruthy();
   });
 
   it("fails for nonexistent parent", async () => {
-    const result = await spawnSubagent(app, "s-nonexistent", { task: "subtask" });
+    const result = await spawnSubagent(depsFromApp(app), "s-nonexistent", { task: "subtask" });
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -546,7 +547,7 @@ describe("spawnSubagent", async () => {
   it("inherits parent group_name", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare", group_name: "team-a" });
 
-    const result = await spawnSubagent(app, parent.id, { task: "subtask" });
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "subtask" });
     const child = await app.sessions.get(result.sessionId!)!;
     expect(child.group_name).toBe("team-a");
   });
@@ -554,7 +555,7 @@ describe("spawnSubagent", async () => {
   it("overrides group_name when specified", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare", group_name: "team-a" });
 
-    const result = await spawnSubagent(app, parent.id, {
+    const result = await spawnSubagent(depsFromApp(app), parent.id, {
       task: "subtask",
       group_name: "team-b",
     });
@@ -568,7 +569,7 @@ describe("spawnParallelSubagents", async () => {
     const parent = await app.sessions.create({ summary: "parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await spawnParallelSubagents(app, parent.id, [
+    const result = await spawnParallelSubagents(depsFromApp(app), parent.id, [
       { task: "Task 1" },
       { task: "Task 2" },
       { task: "Task 3" },
@@ -592,8 +593,8 @@ describe("spawnParallelSubagents", async () => {
       agent: "implementer",
     });
 
-    const r1 = await spawnSubagent(app, parent.id, { task: "Review", agent: "reviewer" });
-    const r2 = await spawnSubagent(app, parent.id, { task: "Docs" });
+    const r1 = await spawnSubagent(depsFromApp(app), parent.id, { task: "Review", agent: "reviewer" });
+    const r2 = await spawnSubagent(depsFromApp(app), parent.id, { task: "Docs" });
 
     expect(r1.ok).toBe(true);
     expect(r2.ok).toBe(true);

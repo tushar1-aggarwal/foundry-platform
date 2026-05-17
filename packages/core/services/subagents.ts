@@ -6,7 +6,7 @@
  * or specialization.
  */
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import * as flow from "./flow.js";
 import { logWarn } from "../observability/structured-log.js";
 import { markDispatchFailedShared } from "./session-dispatch-listeners.js";
@@ -19,7 +19,7 @@ import { markDispatchFailedShared } from "./session-dispatch-listeners.js";
  * stage) -- dispatch no longer reads a session-level `model_override`.
  */
 export async function spawnSubagent(
-  app: AppContext,
+  deps: OrchestrationDeps,
   parentId: string,
   opts: {
     task: string;
@@ -28,10 +28,10 @@ export async function spawnSubagent(
     extensions?: string[];
   },
 ): Promise<{ ok: boolean; sessionId?: string; message: string }> {
-  const parent = await app.sessions.get(parentId);
+  const parent = await deps.sessions.get(parentId);
   if (!parent) return { ok: false, message: "Parent session not found" };
 
-  const session = await app.sessions.create({
+  const session = await deps.sessions.create({
     summary: opts.task,
     repo: parent.repo || undefined,
     flow: "quick",
@@ -46,20 +46,20 @@ export async function spawnSubagent(
   });
 
   const agentName = opts.agent ?? parent.agent;
-  await app.sessions.update(session.id, { agent: agentName, parent_id: parentId });
+  await deps.sessions.update(session.id, { agent: agentName, parent_id: parentId });
 
   // Set first stage so the subagent is dispatchable
-  const firstStage = flow.getFirstStage(app, "quick");
+  const firstStage = flow.getFirstStage(deps.app!, "quick");
   if (firstStage) {
-    await app.sessions.update(session.id, { stage: firstStage, status: "ready" });
+    await deps.sessions.update(session.id, { stage: firstStage, status: "ready" });
   }
 
-  await app.events.log(session.id, "subagent_spawned", {
+  await deps.events.log(session.id, "subagent_spawned", {
     actor: "system",
     data: { parent_id: parentId, task: opts.task, agent: agentName },
   });
 
-  app.sessionService.emitSessionCreated(session.id);
+  deps.app!.sessionService.emitSessionCreated(session.id);
   return { ok: true, sessionId: session.id, message: `Subagent ${session.id} spawned` };
 }
 
@@ -67,7 +67,7 @@ export async function spawnSubagent(
  * Spawn multiple subagents in parallel and optionally wait for all to complete.
  */
 export async function spawnParallelSubagents(
-  app: AppContext,
+  deps: OrchestrationDeps,
   parentId: string,
   tasks: Array<{
     task: string;
@@ -76,7 +76,7 @@ export async function spawnParallelSubagents(
 ): Promise<{ ok: boolean; sessionIds: string[]; message: string }> {
   const ids: string[] = [];
   for (const t of tasks) {
-    const result = await spawnSubagent(app, parentId, t);
+    const result = await spawnSubagent(deps, parentId, t);
     if (result.ok && result.sessionId) {
       ids.push(result.sessionId);
     }
@@ -90,7 +90,7 @@ export async function spawnParallelSubagents(
   await Promise.allSettled(
     ids.map(async (id) => {
       try {
-        const r = await app.dispatchService.dispatch(id);
+        const r = await deps.app!.dispatchService.dispatch(id);
         if (r && r.ok === false) {
           // Non-throw failure path: pre-fix `{ok:false}` was silently
           // dropped (only thrown errors made it into the catch). Use the
@@ -102,7 +102,7 @@ export async function spawnParallelSubagents(
             childId: id,
             reason,
           });
-          await markDispatchFailedShared(app.sessions, app.events, id, reason);
+          await markDispatchFailedShared(deps.sessions, deps.events, id, reason);
         }
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
@@ -114,7 +114,7 @@ export async function spawnParallelSubagents(
         // Use markDispatchFailedShared so the failure carries the same
         // shape as kickDispatch + handoff -- event row + status=failed
         // (lenient against an already-terminal status).
-        await markDispatchFailedShared(app.sessions, app.events, id, reason);
+        await markDispatchFailedShared(deps.sessions, deps.events, id, reason);
       }
     }),
   );

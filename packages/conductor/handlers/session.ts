@@ -437,7 +437,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/output", async (params, _notify, ctx) => {
     const { sessionId, lines } = extract<SessionOutputParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const output = await getSessionOutput(scoped, sessionId, { lines });
+    const output = await getSessionOutput(depsFromApp(scoped), sessionId, { lines });
     return { output };
   });
 
@@ -456,7 +456,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     // Forensic files live under the daemon's tracks dir (not per-tenant on
     // disk); in hosted mode the tee is skipped so this falls back to the
     // durable blob snapshot. Access control is via the tenant-scoped lookup.
-    const read = await readSessionForensic(scoped, session, "stdio.log", { tail });
+    const read = await readSessionForensic(depsFromApp(scoped), session, "stdio.log", { tail });
     if (read.tooLarge) {
       throw new RpcError(
         `stdio.log is ${read.size} bytes, over the 2MB cap -- pass tail=<N> to read the tail`,
@@ -472,7 +472,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const session = await scoped.sessions.get(sessionId);
     if (!session) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
     const { readSessionForensic, parseJsonl } = await import("../../core/services/session-forensic.js");
-    const read = await readSessionForensic(scoped, session, "transcript.jsonl");
+    const read = await readSessionForensic(depsFromApp(scoped), session, "transcript.jsonl");
     if (read.tooLarge) {
       throw new RpcError(`transcript.jsonl is ${read.size} bytes, over the 2MB cap`, ErrorCodes.INVALID_PARAMS);
     }
@@ -499,14 +499,14 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/join", async (params, _notify, ctx) => {
     const { sessionId, force } = extract<SessionJoinParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await joinFork(scoped, sessionId, force ?? false);
+    const result = await joinFork(depsFromApp(scoped), sessionId, force ?? false);
     return result;
   });
 
   router.handle("session/spawn", async (params, notify, ctx) => {
     const { sessionId, task, agent, group_name } = extract<SessionSpawnParams>(params, ["sessionId", "task"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await spawnSubagent(scoped, sessionId, {
+    const result = await spawnSubagent(depsFromApp(scoped), sessionId, {
       task,
       agent,
       group_name,
@@ -525,7 +525,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       tasks: Array<{ summary: string; agent?: string; flow?: string }>;
     }>(params, ["sessionId", "tasks"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await fanOutChildren(scoped, sessionId, { tasks });
+    const result = await fanOutChildren(depsFromApp(scoped), sessionId, { tasks });
     if (!result.ok) throw new RpcError(result.message ?? "Fan-out failed", SESSION_NOT_FOUND);
     for (const childId of result.childIds ?? []) {
       const session = await scoped.sessions.get(childId);
@@ -549,7 +549,9 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
 
     if (lastSnapshotId && !rewindToStage) {
       const { resumeFromSnapshot } = await import("../../core/services/session-snapshot.js");
-      const snapResult = await resumeFromSnapshot(scoped, sessionId, { snapshotId: lastSnapshotId as string });
+      const snapResult = await resumeFromSnapshot(depsFromApp(scoped), sessionId, {
+        snapshotId: lastSnapshotId as string,
+      });
       if (snapResult.ok) {
         const updated = await scoped.sessions.get(sessionId);
         if (updated) notify("session/updated", { session: updated });
@@ -592,7 +594,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     // support snapshot we transparently fall back to a state-only pause so
     // local sessions keep working the way they did before snapshotting.
     const { pauseWithSnapshot } = await import("../../core/services/session-snapshot.js");
-    const snapResult = await pauseWithSnapshot(scoped, sessionId, { reason });
+    const snapResult = await pauseWithSnapshot(depsFromApp(scoped), sessionId, { reason });
     const session = await scoped.sessions.get(sessionId);
 
     if (snapResult.ok) {
@@ -960,7 +962,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     // below then simply has nothing to tail, which is correct -- there is no
     // local file to follow when the worker pod owns the only live copy.
     const { readSessionForensic } = await import("../../core/services/session-forensic.js");
-    const initial = await readSessionForensic(scoped, session, fileName);
+    const initial = await readSessionForensic(depsFromApp(scoped), session, fileName);
 
     // Track the byte offset after the initial read so we only push new bytes.
     let offset = initial.exists ? initial.size : 0;

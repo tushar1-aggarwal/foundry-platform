@@ -7,7 +7,7 @@
 
 import { randomUUID } from "crypto";
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import * as flow from "./flow.js";
 import { logWarn } from "../observability/structured-log.js";
 import { markDispatchFailedShared } from "./session-dispatch-listeners.js";
@@ -17,7 +17,7 @@ type SessionOpResult = Promise<{ ok: true; sessionId: string } | { ok: false; me
 // ── Fork ────────────────────────────────────────────────────────────────────
 
 export async function fork(
-  app: AppContext,
+  deps: OrchestrationDeps,
   parentId: string,
   task: string,
   opts?: {
@@ -25,13 +25,13 @@ export async function fork(
     dispatch?: boolean;
   },
 ): SessionOpResult {
-  const parent = await app.sessions.get(parentId);
+  const parent = await deps.sessions.get(parentId);
   if (!parent) return { ok: false, message: "Parent not found" };
 
   const forkGroup = parent.fork_group ?? randomUUID().slice(0, 8);
-  if (!parent.fork_group) await app.sessions.update(parentId, { fork_group: forkGroup });
+  if (!parent.fork_group) await deps.sessions.update(parentId, { fork_group: forkGroup });
 
-  const child = await app.sessions.create({
+  const child = await deps.sessions.create({
     ticket: parent.ticket || undefined,
     summary: task,
     repo: parent.repo || undefined,
@@ -40,13 +40,13 @@ export async function fork(
     workdir: parent.workdir || undefined,
   });
 
-  await app.sessions.update(child.id, {
+  await deps.sessions.update(child.id, {
     parent_id: parentId,
     fork_group: forkGroup,
     stage: parent.stage,
     status: "ready",
   });
-  await app.events.log(child.id, "session_forked", {
+  await deps.events.log(child.id, "session_forked", {
     stage: parent.stage,
     actor: "user",
     data: { parent_id: parentId, fork_group: forkGroup, task },
@@ -61,7 +61,7 @@ export async function fork(
     // child sat at status=ready forever. Surface failures via the shared
     // helper so the child row flips to `failed` with the underlying reason.
     try {
-      const r = await app.dispatchService.dispatch(child.id);
+      const r = await deps.app!.dispatchService.dispatch(child.id);
       if (r && r.ok === false) {
         const reason = r.message ?? "child dispatch returned ok:false";
         logWarn(
@@ -73,7 +73,7 @@ export async function fork(
             reason,
           },
         );
-        await markDispatchFailedShared(app.sessions, app.events, child.id, reason);
+        await markDispatchFailedShared(deps.sessions, deps.events, child.id, reason);
         return { ok: false, message: reason };
       }
     } catch (err) {
@@ -83,7 +83,7 @@ export async function fork(
         childId: child.id,
         error: reason,
       });
-      await markDispatchFailedShared(app.sessions, app.events, child.id, reason);
+      await markDispatchFailedShared(deps.sessions, deps.events, child.id, reason);
       return { ok: false, message: reason };
     }
   }
@@ -93,11 +93,11 @@ export async function fork(
 // ── Join ────────────────────────────────────────────────────────────────────
 
 export async function joinFork(
-  app: AppContext,
+  deps: OrchestrationDeps,
   parentId: string,
   force = false,
 ): Promise<{ ok: boolean; message: string }> {
-  const children = await app.sessions.getChildren(parentId);
+  const children = await deps.sessions.getChildren(parentId);
   if (!children.length) return { ok: false, message: "No children" };
 
   const notDone = children.filter((c) => c.status !== "completed");
@@ -105,41 +105,41 @@ export async function joinFork(
     return { ok: false, message: `${notDone.length} children not done` };
   }
 
-  await app.events.log(parentId, "fork_joined", { actor: "user", data: { children: children.length } });
-  await app.sessions.update(parentId, { status: "ready", fork_group: null });
-  return await app.stageAdvance.advance(parentId, true);
+  await deps.events.log(parentId, "fork_joined", { actor: "user", data: { children: children.length } });
+  await deps.sessions.update(parentId, { status: "ready", fork_group: null });
+  return await deps.app!.stageAdvance.advance(parentId, true);
 }
 
 /**
  * Check if a parent session can auto-join after a child completes or fails.
  * Returns true if the parent was advanced (all children are done).
  */
-export async function checkAutoJoin(app: AppContext, childSessionId: string): Promise<boolean> {
-  const child = await app.sessions.get(childSessionId);
+export async function checkAutoJoin(deps: OrchestrationDeps, childSessionId: string): Promise<boolean> {
+  const child = await deps.sessions.get(childSessionId);
   if (!child?.parent_id) return false;
 
-  const parent = await app.sessions.get(child.parent_id);
+  const parent = await deps.sessions.get(child.parent_id);
   if (!parent) return false;
   if (parent.status !== "waiting") return false;
 
-  const children = await app.sessions.getChildren(parent.id);
+  const children = await deps.sessions.getChildren(parent.id);
   const allDone = children.every((c) => c.status === "completed" || c.status === "failed");
   if (!allDone) return false;
 
   const failed = children.filter((c) => c.status === "failed");
   if (failed.length > 0) {
-    await app.events.log(parent.id, "fan_out_partial_failure", {
+    await deps.events.log(parent.id, "fan_out_partial_failure", {
       actor: "system",
       data: { failed: failed.map((f) => f.id), total: children.length },
     });
   }
 
-  await app.events.log(parent.id, "auto_join", {
+  await deps.events.log(parent.id, "auto_join", {
     actor: "system",
     data: { children: children.length, failed: failed.length },
   });
-  await app.sessions.update(parent.id, { status: "ready", fork_group: null });
-  await app.stageAdvance.advance(parent.id, true);
+  await deps.sessions.update(parent.id, { status: "ready", fork_group: null });
+  await deps.app!.stageAdvance.advance(parent.id, true);
   return true;
 }
 
@@ -152,11 +152,11 @@ interface FanOutTask {
 }
 
 export async function fanOut(
-  app: AppContext,
+  deps: OrchestrationDeps,
   parentId: string,
   opts: { tasks: FanOutTask[] },
 ): Promise<{ ok: boolean; childIds?: string[]; message?: string }> {
-  const parent = await app.sessions.get(parentId);
+  const parent = await deps.sessions.get(parentId);
   if (!parent) return { ok: false, message: "Parent session not found" };
   if (opts.tasks.length === 0) return { ok: false, message: "No tasks provided" };
 
@@ -164,7 +164,7 @@ export async function fanOut(
   const childIds: string[] = [];
 
   for (const task of opts.tasks) {
-    const child = await app.sessions.create({
+    const child = await deps.sessions.create({
       summary: task.summary,
       repo: parent.repo || undefined,
       flow: task.flow ?? "bare",
@@ -174,8 +174,8 @@ export async function fanOut(
     });
     // Set first stage so child is dispatchable
     const childFlow = task.flow ?? "bare";
-    const firstStage = flow.getFirstStage(app, childFlow);
-    await app.sessions.update(child.id, {
+    const firstStage = flow.getFirstStage(deps.app!, childFlow);
+    await deps.sessions.update(child.id, {
       parent_id: parentId,
       fork_group: forkGroup,
       agent: task.agent ?? null,
@@ -186,8 +186,8 @@ export async function fanOut(
   }
 
   // Parent waits for children
-  await app.sessions.update(parentId, { status: "waiting", fork_group: forkGroup });
-  await app.events.log(parentId, "fan_out", {
+  await deps.sessions.update(parentId, { status: "waiting", fork_group: forkGroup });
+  await deps.events.log(parentId, "fan_out", {
     actor: "system",
     data: { childCount: childIds.length, forkGroup },
   });

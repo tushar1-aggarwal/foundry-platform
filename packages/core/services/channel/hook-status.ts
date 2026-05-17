@@ -197,7 +197,7 @@ export async function processHookPayload(
       try {
         const { cleanupSession } = await import("../session/cleanup.js");
         const sessionForCleanup = await scoped.sessions.get(sessionId);
-        if (sessionForCleanup) await cleanupSession(scoped, sessionForCleanup);
+        if (sessionForCleanup) await cleanupSession(depsFromApp(scoped), sessionForCleanup);
       } catch (err: any) {
         logDebug("conductor", `session cleanup non-fatal: ${err?.message ?? err}`);
       }

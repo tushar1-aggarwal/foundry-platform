@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
 import { fanOut } from "../services/fork-join.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 beforeAll(async () => {
@@ -21,7 +22,7 @@ describe("fan-out compute inheritance", async () => {
       compute_name: "my-ec2",
     });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "Child A" }, { summary: "Child B" }],
     });
 
@@ -43,7 +44,7 @@ describe("fan-out compute inheritance", async () => {
       repo: "myrepo",
     });
 
-    const result = await fanOut(app, parent.id, { tasks: [{ summary: "Child" }] });
+    const result = await fanOut(depsFromApp(app), parent.id, { tasks: [{ summary: "Child" }] });
     expect(result.ok).toBe(true);
 
     const child = await app.sessions.get(result.childIds![0]);

@@ -11,6 +11,7 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
 import { getOutput } from "../services/session-output.js";
+import { depsFromApp } from "../services/deps.js";
 import { sessionExists, killSession } from "../infra/tmux.js";
 import { snapshotArkTmuxSessions, killNewArkTmuxSessions } from "./test-helpers.js";
 
@@ -165,7 +166,7 @@ describe("core lifecycle: getOutput", async () => {
     await app.dispatchService.dispatch(session.id);
 
     // getOutput should return a string (possibly empty right after dispatch)
-    const output = await getOutput(app, session.id, { lines: 10 });
+    const output = await getOutput(depsFromApp(app), session.id, { lines: 10 });
     expect(typeof output).toBe("string");
 
     await app.sessionTerminator.stop(session.id);
@@ -180,7 +181,7 @@ describe("core lifecycle: getOutput", async () => {
     sessionIds.push(session.id);
 
     // Not dispatched yet, so no tmux session
-    const output = await getOutput(app, session.id);
+    const output = await getOutput(depsFromApp(app), session.id);
     expect(output).toBe("");
   });
 });

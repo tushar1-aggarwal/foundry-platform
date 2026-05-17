@@ -14,6 +14,7 @@ import { join } from "path";
 import { AppContext } from "../app.js";
 import { setApp, clearApp } from "./test-helpers.js";
 import { cleanupSession } from "../services/session/cleanup.js";
+import { depsFromApp } from "../services/deps.js";
 import { claudeAgentExecutor } from "../executors/claude-agent.js";
 import { Router } from "../../conductor/router.js";
 import { registerSessionHandlers } from "../../conductor/handlers/session.js";
@@ -48,7 +49,7 @@ test("cleanupSession removes the worktree and emits session_cleaned", async () =
   expect(existsSync(worktreeDir)).toBe(true);
 
   const freshSession = (await app.sessions.get(session.id))!;
-  await cleanupSession(app, freshSession);
+  await cleanupSession(depsFromApp(app), freshSession);
 
   // Worktree should be gone.
   expect(existsSync(worktreeDir)).toBe(false);
@@ -73,12 +74,12 @@ test("cleanupSession is idempotent (second call is a no-op)", async () => {
   const freshSession = (await app.sessions.get(session.id))!;
 
   // First call -- removes worktree, emits event.
-  await cleanupSession(app, freshSession);
+  await cleanupSession(depsFromApp(app), freshSession);
   const eventsAfterFirst = await app.events.list(session.id, { type: "session_cleaned" });
   expect(eventsAfterFirst.length).toBe(1);
 
   // Second call -- should be a no-op (idempotency guard via session_cleaned event).
-  await cleanupSession(app, freshSession);
+  await cleanupSession(depsFromApp(app), freshSession);
   const eventsAfterSecond = await app.events.list(session.id, { type: "session_cleaned" });
   expect(eventsAfterSecond.length).toBe(1);
 });
@@ -97,7 +98,7 @@ test("cleanupSession survives a missing worktree", async () => {
   const freshSession = (await app.sessions.get(session.id))!;
 
   // Should not throw.
-  await cleanupSession(app, freshSession);
+  await cleanupSession(depsFromApp(app), freshSession);
 
   // Event emitted with worktree_removed = false.
   const events = await app.events.list(session.id, { type: "session_cleaned" });

@@ -1,19 +1,19 @@
 /**
  * Session output and messaging -- capture tmux output, send messages to agents.
  *
- * Extracted from session-orchestration.ts. All functions take app: AppContext as first arg.
+ * Extracted from session-orchestration.ts.
  */
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import { detectInjection } from "../session/prompt-guard.js";
 import { logDebug } from "../observability/structured-log.js";
 
 export async function getOutput(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   opts?: { lines?: number; ansi?: boolean },
 ): Promise<string> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session) return "";
 
   // For running sessions, capture live from tmux via the new ComputeTarget
@@ -21,7 +21,7 @@ export async function getOutput(
   // lookup respects the (name, tenant_id) primary key on the compute table --
   // otherwise two tenants with the same compute name would collide.
   if (session.session_id) {
-    const tenantApp = session.tenant_id ? app.forTenant(session.tenant_id) : app;
+    const tenantApp = session.tenant_id ? deps.app!.forTenant(session.tenant_id) : deps.app!;
     try {
       const { target, compute: computeRow } = await tenantApp.resolveComputeTarget(session);
       if (target && computeRow) {
@@ -49,29 +49,29 @@ export async function getOutput(
   // For completed/stopped sessions (or when live capture returns empty),
   // fall back to the recorded terminal output file.
   const { readRecording } = await import("../recordings.js");
-  return readRecording(app.config.dirs.ark, sessionId) ?? "";
+  return readRecording(deps.config.dirs.ark, sessionId) ?? "";
 }
 
 export async function send(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   message: string,
 ): Promise<{ ok: boolean; message: string }> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session?.session_id) return { ok: false, message: "No active session" };
 
   // Check for prompt injection in user messages
   try {
     const injection = detectInjection(message);
     if (injection.severity === "high") {
-      await app.events.log(sessionId, "prompt_injection_blocked", {
+      await deps.events.log(sessionId, "prompt_injection_blocked", {
         actor: "system",
         data: { patterns: injection.patterns },
       });
       return { ok: false, message: "Message blocked: potential prompt injection detected" };
     }
     if (injection.detected) {
-      await app.events.log(sessionId, "prompt_injection_warning", {
+      await deps.events.log(sessionId, "prompt_injection_warning", {
         actor: "system",
         data: { patterns: injection.patterns, severity: injection.severity },
       });
@@ -81,21 +81,21 @@ export async function send(
   }
 
   // Audit: log user message sent
-  await app.events.log(sessionId, "message_sent", {
+  await deps.events.log(sessionId, "message_sent", {
     actor: "user",
     stage: session.stage ?? undefined,
     data: { length: message.length, preview: message.slice(0, 100) },
   });
 
   // Persist user message to conversation history before sending to agent
-  await app.messages.send(sessionId, "user", message, "text");
+  await deps.messages.send(sessionId, "user", message, "text");
 
   // Runtime polymorphism: each executor owns its own send strategy. We
   // delegate via the registry rather than branching here so adding a new
   // runtime (e.g. opencode, codex) is purely an executor change --
   // session-output stays runtime-agnostic.
   const { resolveSessionExecutor } = await import("../executors/resolve.js");
-  const launchExecutor = await resolveSessionExecutor(app, session);
+  const launchExecutor = await resolveSessionExecutor(deps.app!, session);
   if (!launchExecutor) {
     return {
       ok: false,
@@ -106,7 +106,7 @@ export async function send(
   const executor = getExecutor(launchExecutor);
   if (executor?.sendUserMessage) {
     try {
-      return await executor.sendUserMessage({ app, session, message });
+      return await executor.sendUserMessage({ app: deps.app!, session, message });
     } catch (e: any) {
       return { ok: false, message: `executor send failed: ${e?.message ?? e}` };
     }

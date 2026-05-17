@@ -29,7 +29,7 @@
  *   - `none` carries a `reason` string. Both surfaces show it.
  */
 
-import type { AppContext } from "../../app.js";
+import type { OrchestrationDeps } from "../deps.js";
 import type { Session } from "../../../types/index.js";
 import { join } from "path";
 
@@ -78,20 +78,20 @@ export type AttachPlan =
  *   2. session.agent's runtime field -- legacy fallback for older rows.
  */
 function resolveActiveRuntime(
-  app: AppContext,
+  deps: OrchestrationDeps,
   session: Pick<Session, "config" | "agent">,
 ): { interactive?: boolean } | null {
   const cfg = session.config ?? null;
   const launchExecutor = (cfg as { launch_executor?: string } | null)?.launch_executor;
   if (launchExecutor) {
-    const r = app.runtimes.get(launchExecutor);
+    const r = deps.runtimes.get(launchExecutor);
     if (r) return r;
   }
   if (session.agent) {
-    const agent = app.agents.get(session.agent);
+    const agent = deps.agents.get(session.agent);
     const runtimeName = (agent as { runtime?: string } | undefined)?.runtime;
     if (runtimeName) {
-      const r = app.runtimes.get(runtimeName);
+      const r = deps.runtimes.get(runtimeName);
       if (r) return r;
     }
   }
@@ -101,7 +101,7 @@ function resolveActiveRuntime(
 const TERMINAL_STATUSES = new Set<Session["status"]>(["completed", "failed", "archived"]);
 
 export class SessionAttachService {
-  constructor(private readonly app: AppContext) {}
+  constructor(private readonly deps: OrchestrationDeps) {}
 
   /**
    * Compute the AttachPlan for a session. Single decision point; no
@@ -121,9 +121,9 @@ export class SessionAttachService {
       };
     }
 
-    const runtime = resolveActiveRuntime(this.app, session);
+    const runtime = resolveActiveRuntime(this.deps, session);
     if (runtime?.interactive === false) {
-      const tracksDir = this.app.config.dirs.tracks;
+      const tracksDir = this.deps.config.dirs.tracks;
       return {
         mode: "tail",
         transcriptPath: join(tracksDir, session.id, "transcript.jsonl"),
@@ -143,9 +143,9 @@ export class SessionAttachService {
 
   private async resolveTransportCommand(session: Session): Promise<string> {
     if (session.compute_name) {
-      const compute = await this.app.computes.get(session.compute_name);
+      const compute = await this.deps.computes.get(session.compute_name);
       if (compute) {
-        const computeImpl = this.app.getCompute(compute.compute_kind);
+        const computeImpl = this.deps.app!.getCompute(compute.compute_kind);
         const handle = computeImpl?.attachExistingHandle?.({
           name: compute.name,
           status: compute.status,
