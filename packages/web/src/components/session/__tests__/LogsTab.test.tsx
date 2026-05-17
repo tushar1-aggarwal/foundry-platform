@@ -3,8 +3,10 @@
  *
  * bun:test has no DOM, so we render via `react-dom/server` -- same strategy
  * as `IntegrationsPage.test.tsx`. The react-query cache is pre-seeded with
- * the exact `["session-stdio", id, tail]` key the component uses so SSR
- * returns populated markup instead of the loading / empty state.
+ * the exact `["session-logs", id, source, tailToken]` key the multi-source
+ * viewer uses (default source = "stdio"), seeded with the queryFn's actual
+ * return shape (a `string[]` of lines), so SSR returns populated markup
+ * instead of the loading / empty state.
  *
  * Uses `MockTransport` too so the refetchInterval path still has a handler
  * registered even though SSR never fires it.
@@ -20,12 +22,11 @@ import { LogsTab } from "../tabs/LogsTab.js";
 
 let mock: MockTransport;
 
-function freshClient(
-  seed: { content: string; size: number; exists: boolean },
-  tail: number | "all" = 500,
-): QueryClient {
+function freshClient(content: string, tail: number | "all" = 500): QueryClient {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnMount: false } } });
-  qc.setQueryData(["session-stdio", "s-1", tail], seed);
+  // Default source is "stdio"; the queryFn returns the split lines, so seed
+  // the cache with that shape under the new multi-source key.
+  qc.setQueryData(["session-logs", "s-1", "stdio", tail], content.split("\n"));
   return qc;
 }
 
@@ -45,10 +46,7 @@ function render(opts: {
   status?: string;
   tail?: number | "all";
 }): string {
-  const qc = freshClient(
-    { content: opts.content, size: opts.size ?? opts.content.length, exists: opts.exists ?? true },
-    opts.tail ?? 500,
-  );
+  const qc = freshClient(opts.content, opts.tail ?? 500);
   return renderToString(
     React.createElement(
       TransportProvider,
@@ -89,11 +87,20 @@ describe("LogsTab", () => {
     expect(html).toContain("text-[var(--fg-muted)]");
   });
 
-  test("shows the 'No logs yet' empty state when the file is missing and surfaces the status", () => {
+  test("shows a source-aware empty state when there is no output, and surfaces the status", () => {
     const html = render({ content: "", exists: false, size: 0, status: "running" });
     expect(html).toContain('data-testid="logs-empty"');
-    expect(html).toContain("No logs yet");
+    // Multi-source: the empty text names the active source (default stdio).
+    expect(html).toContain("No agent stdio output");
     expect(html).toMatch(/status ·.*running/);
+  });
+
+  test("renders the multi-source switcher with all durable sources", () => {
+    const html = render({ content: "x" });
+    expect(html).toContain('data-testid="logs-source-switcher"');
+    for (const s of ["stdio", "transcript", "pipeline", "conductor-daemon", "temporal-worker"]) {
+      expect(html).toContain(`data-testid="logs-source-${s}"`);
+    }
   });
 
   test("shows the live indicator when the session is still running", () => {

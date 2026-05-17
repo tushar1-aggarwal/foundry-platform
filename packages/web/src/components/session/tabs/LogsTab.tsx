@@ -200,7 +200,7 @@ export function LogsTab({ sessionId, status }: LogsTabProps) {
 
       {!query.isError && lines.length === 0 && (
         <div className="panel-card-empty" data-testid="logs-empty">
-          <div>No {sourceLabel.toLowerCase()} output</div>
+          <div>{`No ${sourceLabel.toLowerCase()} output`}</div>
           {status && <div className="panel-card-empty-meta">status · {status}</div>}
         </div>
       )}
