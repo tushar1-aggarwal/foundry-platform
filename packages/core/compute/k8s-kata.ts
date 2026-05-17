@@ -2,20 +2,19 @@
  * KataCompute -- k8s pod runtime with Kata Containers (microVM isolation).
  *
  * Inherits the full K8sCompute lifecycle but flips two things:
- *   1. Capabilities -- `snapshot: true` and `networkIsolation: true`
- *      (Kata gives us a microVM per pod; Firecracker-class snapshotting
- *      is achievable, but the wiring itself is not yet done).
+ *   1. Capabilities -- `networkIsolation: true` (Kata gives us a microVM
+ *      per pod). `snapshot` stays `false`: Firecracker-class snapshotting
+ *      is achievable but unwired, and a capability flag that says `true`
+ *      while `snapshot`/`restore` only throw is a latent dispatch bug.
  *   2. Pod spec -- every pod is annotated with `runtimeClassName: kata`
  *      (or the override from `ProvisionOpts.config.runtimeClassName`).
  *
- * `snapshot` and `restore` still throw `NotSupportedError`; a follow-up PR
- * replaces them with real impls. Gating the capability flag already lets
- * the registry treat Kata as a snapshot-capable backend without forcing
- * callers to special-case the in-progress state.
+ * `snapshot` / `restore` are inherited from K8sCompute (they throw
+ * `NotSupportedError`, consistent with `capabilities.snapshot === false`).
+ * A follow-up PR can flip the flag and override the methods together.
  */
 
-import type { ComputeCapabilities, ComputeHandle, ComputeKind, Snapshot } from "./types.js";
-import { NotSupportedError } from "./types.js";
+import type { ComputeCapabilities, ComputeKind } from "./types.js";
 import { K8sCompute, type K8sComputeConfig, type K8sHandleMeta } from "./k8s.js";
 
 /** Default Kata runtime class. Overridable via `ProvisionOpts.config.runtimeClassName`. */
@@ -24,7 +23,7 @@ export const DEFAULT_KATA_RUNTIME_CLASS = "kata";
 export class KataCompute extends K8sCompute {
   readonly kind: ComputeKind = "k8s-kata";
   readonly capabilities: ComputeCapabilities = {
-    snapshot: true,
+    snapshot: false,
     pool: true,
     networkIsolation: true,
     provisionLatency: "seconds",
@@ -45,17 +44,5 @@ export class KataCompute extends K8sCompute {
 
   protected buildHandleMeta(base: K8sHandleMeta, cfg: K8sComputeConfig): K8sHandleMeta {
     return { ...base, runtimeClassName: cfg.runtimeClassName ?? DEFAULT_KATA_RUNTIME_CLASS };
-  }
-
-  // A follow-up PR replaces these with real snapshot/restore against the
-  // Kata runtime. Capability flag is `true` so the registry routes through
-  // us, but we fail loudly until that work lands.
-
-  async snapshot(_h: ComputeHandle): Promise<Snapshot> {
-    throw new NotSupportedError(this.kind, "snapshot");
-  }
-
-  async restore(_s: Snapshot): Promise<ComputeHandle> {
-    throw new NotSupportedError(this.kind, "restore");
   }
 }

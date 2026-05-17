@@ -29,29 +29,24 @@
  * so existing tests can exercise snapshot() -> restore() today.
  */
 
-import { DEFAULT_CONDUCTOR_URL } from "../../constants.js";
 import type { AppContext } from "../../app.js";
 import type { Session } from "../../../types/session.js";
 import { ArkdClient } from "../../../arkd/client/index.js";
 import { logInfo } from "../../observability/structured-log.js";
 import { attachComputeMethods, rehydrateArkdBackedHandle, type ArkdClientFactory } from "../handle-helpers.js";
 import type {
-  Compute,
   ComputeCapabilities,
   ComputeHandle,
   ComputeKind,
   EnsureReachableOpts,
-  FlushPlacementOpts,
   MethodedComputeHandle,
   PersistedComputeHandleState,
-  PrepareWorkspaceOpts,
   ProvisionOpts,
   Snapshot,
 } from "../types.js";
 // ^ compute/types.ts -- the Compute/Isolation abstractions.
 import { NotSupportedError } from "../types.js";
-import { cloneWorkspaceViaArkd } from "../workspace-clone.js";
-import { resolveAgentIdentityForRemoteCompute } from "../git-identity.js";
+import { RemoteArkdCompute } from "../remote-arkd-compute.js";
 import { provisionStep } from "../../services/provisioning-steps.js";
 import { FirecrackerPlacementCtx } from "./placement-ctx.js";
 import type { PlacementCtx } from "../../secrets/placement-types.js";
@@ -118,7 +113,7 @@ export interface FirecrackerMeta {
   arkdUrl: string;
 }
 
-export class FirecrackerCompute implements Compute {
+export class FirecrackerCompute extends RemoteArkdCompute {
   readonly kind: ComputeKind = "firecracker";
   readonly capabilities: ComputeCapabilities = {
     snapshot: true,
@@ -141,10 +136,8 @@ export class FirecrackerCompute implements Compute {
   private vms = new Map<string, FirecrackerVm>();
   private clientFactory: ArkdClientFactory = (url) => new ArkdClient(url);
 
-  constructor(
-    private readonly app: AppContext,
-    deps?: Partial<FirecrackerComputeDeps>,
-  ) {
+  constructor(app: AppContext, deps?: Partial<FirecrackerComputeDeps>) {
+    super(app);
     this.deps = deps ? { ...productionDeps, ...deps } : productionDeps;
   }
 
@@ -344,81 +337,26 @@ export class FirecrackerCompute implements Compute {
     return readMeta(h).arkdUrl;
   }
 
-  // ── resolveWorkdir ───────────────────────────────────────────────────────
+  // ── RemoteArkdCompute hooks ──────────────────────────────────────────────
   //
   // Mirror the EC2 path shape inside the microVM:
   //   `${guestHome}/Projects/<sessionId>/<repoBasename>`
   // The VM rootfs ships with /home/ubuntu by default; override via
-  // `handle.meta.firecracker.guestHome` when a custom rootfs uses a
-  // different user. Returns null when neither `session.config.remoteRepo`
-  // nor `session.repo` is set so the caller falls back to `session.workdir`.
+  // `handle.meta.firecracker.guestHome` for a custom rootfs user.
 
-  resolveWorkdir(h: ComputeHandle, session: Session): string | null {
-    const cloneSource = (session.config as { remoteRepo?: string } | null | undefined)?.remoteRepo ?? session.repo;
-    if (!cloneSource) return null;
-    const repoBasename =
-      cloneSource
-        .split("/")
-        .pop()
-        ?.replace(/\.git$/, "") ?? "project";
+  protected workdirRoot(h: ComputeHandle, _session: Session): string {
     const guestHome = (h.meta.firecracker as { guestHome?: string } | undefined)?.guestHome ?? "/home/ubuntu";
-    return `${guestHome}/Projects/${session.id}/${repoBasename}`;
+    return `${guestHome}/Projects`;
   }
 
-  // ── prepareWorkspace ─────────────────────────────────────────────────────
-  //
-  // mkdir + git clone inside the microVM via arkd HTTP. Routes through
-  // `getArkdUrl(h)` (i.e. the host-reachable `http://<guestIp>:19300`)
-  // so all FS ops happen guest-side -- no scp / vsock dance at this
-  // layer.
-  //
-  // Returns silently on bare-worktree dispatch (either source or
-  // remoteWorkdir null). Mirrors EC2 / K8s.
-  //
-  // Ordering invariant: `ensureReachable` must have run on `h` first
-  // so the bridge + arkd readiness probe pass before we ask arkd to
-  // run mkdir/git clone. The dispatcher's `runTargetLifecycle`
-  // enforces this.
-
-  /**
-   * Test-only: swap the helper that performs `mkdir -p` + `git clone`
-   * via arkd. Default is the production `cloneWorkspaceViaArkd`.
-   */
-  setCloneHelperForTesting(fn: typeof cloneWorkspaceViaArkd): void {
-    this.cloneHelper = fn;
+  protected arkdPort(): number {
+    return GUEST_ARKD_PORT;
   }
 
-  private cloneHelper: typeof cloneWorkspaceViaArkd = cloneWorkspaceViaArkd;
-
-  async prepareWorkspace(h: ComputeHandle, opts: PrepareWorkspaceOpts): Promise<void> {
-    if (!opts.source || !opts.remoteWorkdir) return;
-    const arkdUrl = this.getArkdUrl(h);
-    const arkdToken = process.env.ARK_ARKD_TOKEN ?? null;
-    const branch = opts.branch ?? `ark-${opts.sessionId}`;
-    const identity = await resolveAgentIdentityForRemoteCompute(this.app, this.app.tenantId ?? "default");
-    await this.cloneHelper({
-      arkdUrl,
-      arkdToken,
-      source: opts.source,
-      remoteWorkdir: opts.remoteWorkdir,
-      branch,
-      authorName: identity.name,
-      authorEmail: identity.email,
-    });
-    await this.app.sessions.update(opts.sessionId, { workdir: opts.remoteWorkdir, branch });
+  // The microVM rootfs ships `ark` at `/usr/local/bin/ark`.
+  protected channelBinaryPath(): string {
+    return "/usr/local/bin/ark";
   }
-
-  // ── flushPlacement ──────────────────────────────────────────────────────
-  //
-  // Replay queued typed-secret placement ops onto a `FirecrackerPlacementCtx`.
-  //
-  // Today's `FirecrackerPlacementCtx` is a `NoopPlacementCtx` subclass
-  // (Phase 2 -- file-typed secrets are dropped with a debug log). When that's
-  // swapped for a real impl in Phase 3 (likely SSH into the microVM on its
-  // loopback / TAP-bridge IP), nothing here needs to change: the queue
-  // contract and the PlacementCtx interface stay stable.
-  //
-  // No-op when the deferred queue is empty (env-only sessions).
 
   /**
    * Test-only: swap the FirecrackerPlacementCtx factory so unit tests can
@@ -432,11 +370,9 @@ export class FirecrackerCompute implements Compute {
   private placementCtxFactory: (deps: { vmId: string; guestIp: string }) => PlacementCtx = () =>
     new FirecrackerPlacementCtx();
 
-  async flushPlacement(h: ComputeHandle, opts: FlushPlacementOpts): Promise<void> {
-    if (!opts.placement.hasDeferred()) return;
+  protected placementCtxFor(h: ComputeHandle): PlacementCtx {
     const meta = readMeta(h);
-    const ctx = this.placementCtxFactory({ vmId: meta.vmId, guestIp: meta.guestIp });
-    await opts.placement.flush(ctx);
+    return this.placementCtxFactory({ vmId: meta.vmId, guestIp: meta.guestIp });
   }
 
   // ── ensureReachable ──────────────────────────────────────────────────────
@@ -594,34 +530,9 @@ export class FirecrackerCompute implements Compute {
     };
   }
 
-  // ── buildChannelConfig ──────────────────────────────────────────────────
-  //
-  // The microVM's rootfs ships `ark` at `/usr/local/bin/ark`. arkd inside
-  // the guest listens on `GUEST_ARKD_PORT` and the agent reaches it via
-  // localhost (loopback inside the VM).
-
-  buildChannelConfig(
-    sessionId: string,
-    stage: string,
-    channelPort: number,
-    opts?: { conductorUrl?: string },
-  ): Record<string, unknown> {
-    return {
-      command: "/usr/local/bin/ark",
-      args: ["channel"],
-      env: {
-        ARK_SESSION_ID: sessionId,
-        ARK_STAGE: stage,
-        ARK_CHANNEL_PORT: String(channelPort),
-        ARK_CONDUCTOR_URL: opts?.conductorUrl ?? DEFAULT_CONDUCTOR_URL,
-        ARK_ARKD_URL: `http://localhost:${GUEST_ARKD_PORT}`,
-      },
-    };
-  }
-
-  buildLaunchEnv(_session: Session): Record<string, string> {
-    return {};
-  }
+  // buildChannelConfig / buildLaunchEnv / resolveWorkdir / prepareWorkspace /
+  // flushPlacement are inherited from RemoteArkdCompute (parameterized via
+  // workdirRoot / placementCtxFor / channelBinaryPath / arkdPort hooks).
 
   // ── getAttachCommand ────────────────────────────────────────────────────
   //

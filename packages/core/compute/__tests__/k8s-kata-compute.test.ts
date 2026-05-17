@@ -3,7 +3,9 @@
  *
  * KataCompute extends K8sCompute with:
  *   - `kind = "k8s-kata"`
- *   - `capabilities.snapshot` + `capabilities.networkIsolation` flipped to true
+ *   - `capabilities.networkIsolation` flipped to true (microVM per pod).
+ *     `capabilities.snapshot` stays false: snapshot/restore only throw, so
+ *     a `true` flag would be a capability lie the dispatcher acts on.
  *   - pod spec annotated with `runtimeClassName` (default "kata", overridable)
  *
  * These tests verify those three deltas; the full K8sCompute lifecycle is
@@ -106,7 +108,7 @@ describe("KataCompute", async () => {
     const c = new KataCompute(app);
     expect(c.kind).toBe("k8s-kata");
     expect(c.capabilities).toEqual({
-      snapshot: true,
+      snapshot: false,
       pool: true,
       networkIsolation: true,
       provisionLatency: "seconds",

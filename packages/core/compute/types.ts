@@ -372,6 +372,13 @@ export interface Snapshot {
  * Everything else takes a handle previously returned by `provision` (or
  * `restore`). Throw `NotSupportedError` from `snapshot` / `restore` if
  * `capabilities.snapshot === false`.
+ *
+ * Every member except `checkStatus` / `reboot` is required: all impls
+ * (LocalCompute included -- it no-ops the transport/workspace methods
+ * rather than omitting them) supply them, so callers do not null-check.
+ * `checkStatus` / `reboot` are genuine capability variance (EC2 only) and
+ * stay optional; `RemoteCompute` + `isRemoteCompute` narrow to the impls
+ * that have them.
  */
 export interface Compute {
   readonly kind: ComputeKind;
@@ -404,7 +411,7 @@ export interface Compute {
    * while `rehydrateHandle` consumes prior persisted HANDLE STATE that's
    * known to be valid by construction.
    */
-  attachExistingHandle?(row: AttachExistingComputeRow): MethodedComputeHandle | null;
+  attachExistingHandle(row: AttachExistingComputeRow): MethodedComputeHandle | null;
 
   /**
    * Re-attach method closures to a previously-persisted handle state.
@@ -436,11 +443,11 @@ export interface Compute {
    *     pod's mount layout dictates).
    *   - FirecrackerCompute: same shape as EC2 inside the microVM.
    *
-   * Optional: impls that share the conductor's filesystem layout omit.
-   * Callers that get null fall back to `session.workdir` / the conductor-
-   * side path.
+   * Impls that share the conductor's filesystem layout return null on the
+   * bare-worktree path; callers that get null fall back to
+   * `session.workdir` / the conductor-side path.
    */
-  resolveWorkdir?(h: ComputeHandle, session: import("../../types/session.js").Session): string | null;
+  resolveWorkdir(h: ComputeHandle, session: import("../../types/session.js").Session): string | null;
 
   /**
    * Make the compute reachable from the conductor. Idempotent. Called
@@ -456,11 +463,10 @@ export interface Compute {
    *   - FirecrackerCompute: TAP bridge wiring, microVM ssh probe.
    *
    * Implementations should emit `provisioning_step` events for their
-   * internal phases via `provisionStep`.
-   *
-   * Optional: omit on impls that need no transport setup.
+   * internal phases via `provisionStep`. LocalCompute implements this as
+   * the (still required) events-consumer attach, not a bare no-op.
    */
-  ensureReachable?(h: ComputeHandle, opts: EnsureReachableOpts): Promise<void>;
+  ensureReachable(h: ComputeHandle, opts: EnsureReachableOpts): Promise<void>;
 
   /**
    * Set up the per-session workspace on the compute. Idempotent on the
@@ -480,7 +486,7 @@ export interface Compute {
    * live transport. The dispatcher's `runTargetLifecycle` enforces
    * this; ad-hoc callers must do the same.
    */
-  prepareWorkspace?(h: ComputeHandle, opts: PrepareWorkspaceOpts): Promise<void>;
+  prepareWorkspace(h: ComputeHandle, opts: PrepareWorkspaceOpts): Promise<void>;
 
   /**
    * Replay queued typed-secret placement ops onto the compute's medium.
@@ -503,7 +509,7 @@ export interface Compute {
    * kubectl port-forward, microVM bridge) is live; some impls (e.g. EC2)
    * read transport fields from `handle.meta` that ensureReachable populates.
    */
-  flushPlacement?(h: ComputeHandle, opts: FlushPlacementOpts): Promise<void>;
+  flushPlacement(h: ComputeHandle, opts: FlushPlacementOpts): Promise<void>;
 
   /** Snapshot support. Throws `NotSupportedError` if `!capabilities.snapshot`. */
   snapshot(h: ComputeHandle): Promise<Snapshot>;
@@ -534,9 +540,9 @@ export interface Compute {
    * `EC2Compute` populates this today (forwards `CLAUDE_CODE_API_KEY` /
    * `ANTHROPIC_API_KEY` so the worker process can reach Anthropic
    * without re-resolving secrets). All other Computes return an empty
-   * record. Optional so impls without contributions can omit.
+   * record. Impls without contributions return an empty record.
    */
-  buildLaunchEnv?(session: import("../../types/session.js").Session): Record<string, string>;
+  buildLaunchEnv(session: import("../../types/session.js").Session): Record<string, string>;
 
   /**
    * Operator-runnable command to attach a terminal to the agent's pane on
@@ -567,6 +573,30 @@ export interface Compute {
    * omit this method; `compute/reboot` surfaces a clean error.
    */
   reboot?(h: ComputeHandle, opts?: { onLog?: (msg: string) => void }): Promise<void>;
+}
+
+/**
+ * A Compute that lives off-host (EC2 today) and therefore supports the
+ * out-of-band lifecycle probes `checkStatus` / `reboot`. These are genuine
+ * capability variance -- only EC2 can `DescribeInstances` / `RebootInstances`
+ * -- so they stay optional on `Compute` and required here. Narrow with
+ * `isRemoteCompute(c)` before calling them instead of null-checking each
+ * method individually.
+ */
+export interface RemoteCompute extends Compute {
+  checkStatus(h: ComputeHandle): Promise<string | null>;
+  reboot(h: ComputeHandle, opts?: { onLog?: (msg: string) => void }): Promise<void>;
+}
+
+/**
+ * Type guard: the compute exposes the out-of-band probes. Keyed off
+ * `capabilities.canReboot` (the operator-facing capability that gates the
+ * `compute/reboot` route) plus the presence of both methods, so a
+ * capabilities flag that disagrees with the impl can't slip a half-wired
+ * compute through the guard.
+ */
+export function isRemoteCompute(c: Compute): c is RemoteCompute {
+  return c.capabilities.canReboot && typeof c.reboot === "function" && typeof c.checkStatus === "function";
 }
 
 /**
