@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { AppContext } from "../app.js";
 import { executeAction } from "../services/actions/index.js";
+import { depsFromApp } from "../services/deps.js";
 import { waitFor } from "./test-helpers.js";
 
 let app: AppContext;
@@ -305,7 +306,7 @@ describe("action stage chaining", async () => {
     await app.sessions.update(session.id, { status: "ready", stage: "finish" });
 
     // Call executeAction directly
-    const result = await executeAction(app, session.id, "close");
+    const result = await executeAction(depsFromApp(app), session.id, "close");
 
     expect(result.ok).toBe(true);
     expect(result.message).toContain("close");

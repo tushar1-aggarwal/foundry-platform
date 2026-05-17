@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, existsSync, writeFileSync } from "fs";
 import { join } from "path";
 import { removeSessionWorktree } from "../services/worktree/index.js";
+import { depsFromApp } from "../services/deps.js";
 import { AppContext } from "../app.js";
 import { clearApp, getApp, setApp } from "./test-helpers.js";
 
@@ -70,7 +71,7 @@ describe("removeSessionWorktree()", async () => {
     writeFileSync(join(wtPath, "file.txt"), "content");
     expect(existsSync(wtPath)).toBe(true);
 
-    await removeSessionWorktree(app, session);
+    await removeSessionWorktree(depsFromApp(app), session);
     expect(existsSync(wtPath)).toBe(false);
   });
 
@@ -80,7 +81,7 @@ describe("removeSessionWorktree()", async () => {
 
     expect(existsSync(wtPath)).toBe(false);
     // Should not throw
-    await removeSessionWorktree(app, session);
+    await removeSessionWorktree(depsFromApp(app), session);
     expect(existsSync(wtPath)).toBe(false);
   });
 
@@ -92,7 +93,7 @@ describe("removeSessionWorktree()", async () => {
     writeFileSync(join(wtPath, "src", "deep", "file.ts"), "export {}");
     expect(existsSync(wtPath)).toBe(true);
 
-    await removeSessionWorktree(app, session);
+    await removeSessionWorktree(depsFromApp(app), session);
     expect(existsSync(wtPath)).toBe(false);
   });
 });

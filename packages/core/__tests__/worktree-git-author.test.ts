@@ -27,6 +27,7 @@ import { join } from "path";
 
 import { AppContext } from "../app.js";
 import { setupSessionWorktree } from "../services/worktree/index.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 let originalCwd: string;
@@ -67,7 +68,7 @@ describe("setupSessionWorktree -- git author identity", () => {
     // The parent repo has user.name="Host User" / user.email="host-config@example.com"
     // (set in beforeEach), so those should propagate into the worktree.
     const session = await app.sessions.create({ summary: "git-author cascade", repo: "." });
-    const wt = await setupSessionWorktree(app, session, null);
+    const wt = await setupSessionWorktree(depsFromApp(app), session, null);
 
     expect(readWorktreeIdentity(wt)).toEqual({
       name: "Host User",
@@ -86,7 +87,7 @@ describe("setupSessionWorktree -- git author identity", () => {
     };
 
     const session = await app.sessions.create({ summary: "git-author override", repo: "." });
-    const wt = await setupSessionWorktree(app, session, null);
+    const wt = await setupSessionWorktree(depsFromApp(app), session, null);
 
     expect(readWorktreeIdentity(wt)).toEqual({ name: "Custom Bot", email: "bot@example.org" });
   });
@@ -102,7 +103,7 @@ describe("setupSessionWorktree -- git author identity", () => {
     };
 
     const session = await app.sessions.create({ summary: "git-author placeholder", repo: "." });
-    const wt = await setupSessionWorktree(app, session, null);
+    const wt = await setupSessionWorktree(depsFromApp(app), session, null);
 
     expect(readWorktreeIdentity(wt)).toEqual({
       name: "Host User",

@@ -12,6 +12,7 @@ import { join } from "path";
 import { execFileSync } from "child_process";
 import { AppContext } from "../app.js";
 import { worktreeDiff } from "../services/worktree/git-ops.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 
@@ -62,7 +63,7 @@ describe("worktreeDiff -- default-branch detection", () => {
     });
     await app.sessions.update(session.id, { workdir: repo });
 
-    const result = await worktreeDiff(app, session.id);
+    const result = await worktreeDiff(depsFromApp(app), session.id);
     expect(result.ok).toBe(true);
     expect(result.baseBranch).toBe("master");
     expect(result.filesChanged).toBe(1);
@@ -78,7 +79,7 @@ describe("worktreeDiff -- default-branch detection", () => {
     });
     await app.sessions.update(session.id, { workdir: repo });
 
-    const result = await worktreeDiff(app, session.id);
+    const result = await worktreeDiff(depsFromApp(app), session.id);
     expect(result.ok).toBe(true);
     expect(result.baseBranch).toBe("develop");
     expect(result.filesChanged).toBe(1);
@@ -93,7 +94,7 @@ describe("worktreeDiff -- default-branch detection", () => {
     });
     await app.sessions.update(session.id, { workdir: repo });
 
-    const result = await worktreeDiff(app, session.id, { base: "master" });
+    const result = await worktreeDiff(depsFromApp(app), session.id, { base: "master" });
     expect(result.baseBranch).toBe("master");
   });
 });

@@ -3,6 +3,7 @@ import { execFile } from "child_process";
 
 import type { ActionHandler } from "./types.js";
 import { createWorktreePR } from "../worktree/index.js";
+import { depsFromApp } from "../deps.js";
 import { logInfo } from "../../observability/structured-log.js";
 
 const execFileAsync = promisify(execFile);
@@ -52,7 +53,7 @@ export const createPrAction: ActionHandler = {
       }
     }
 
-    const result = await createWorktreePR(app, sessionId, { title: session.summary ?? undefined });
+    const result = await createWorktreePR(depsFromApp(app), sessionId, { title: session.summary ?? undefined });
     if (result.ok) {
       // Persist pr_url to the session row. Without this, the next stage
       // (auto_merge) sees an empty pr_url and either stalls or fails late

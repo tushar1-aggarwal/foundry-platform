@@ -2,8 +2,6 @@
  * Worktree git operations -- diff, rebase, finish.
  *
  * Extracted from workspace-service.ts as part of the god-modules split.
- * All functions take app: AppContext as first arg. Pure file move, no
- * behavior change.
  */
 
 import { existsSync, rmSync } from "fs";
@@ -11,7 +9,7 @@ import { join } from "path";
 import { promisify } from "util";
 import { execFile } from "child_process";
 
-import type { AppContext } from "../../app.js";
+import type { OrchestrationDeps } from "../deps.js";
 import { logDebug, logError, logInfo, logWarn } from "../../observability/structured-log.js";
 import { createWorktreePR } from "./pr.js";
 import { effectiveRepo } from "./effective-repo.js";
@@ -57,7 +55,7 @@ async function detectDefaultBranch(repo: string): Promise<string | null> {
  * Used for previewing changes before merge or PR creation.
  */
 export async function worktreeDiff(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   opts?: {
     base?: string;
@@ -74,7 +72,7 @@ export async function worktreeDiff(
   modifiedSinceReview: string[];
   message?: string;
 }> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session)
     return {
       ok: false,
@@ -106,7 +104,7 @@ export async function worktreeDiff(
     };
 
   // Determine the worktree path and branch
-  const wtDir = join(app.config.dirs.worktrees, sessionId);
+  const wtDir = join(deps.config.dirs.worktrees, sessionId);
   let branch = session.branch;
   if (!branch && existsSync(wtDir)) {
     try {
@@ -191,7 +189,7 @@ export async function worktreeDiff(
       }
 
       // Compare against previously reviewed hashes
-      const prevSessionForReview = await app.sessions.get(sessionId);
+      const prevSessionForReview = await deps.sessions.get(sessionId);
       const prevReviewed = prevSessionForReview?.config?.reviewed_files as Record<string, string> | undefined;
       if (prevReviewed) {
         for (const file of files) {
@@ -206,7 +204,7 @@ export async function worktreeDiff(
       // next worktreeDiff would read stale hashes and mis-report
       // modifiedSinceReview. Bun resolves synchronously today but that's
       // incidental.
-      await app.sessions.mergeConfig(sessionId, { reviewed_files: fileHashes });
+      await deps.sessions.mergeConfig(sessionId, { reviewed_files: fileHashes });
     } catch {
       logDebug("session", "re-review tracking is best-effort");
     }
@@ -249,13 +247,13 @@ export async function worktreeDiff(
  * local sessions it falls back to the existing `execFileAsync` path.
  */
 export async function rebaseOntoBase(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   opts?: {
     base?: string;
   },
 ): Promise<{ ok: boolean; message: string }> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session) return { ok: false, message: `Session ${sessionId} not found` };
 
   const repo = effectiveRepo(session);
@@ -263,7 +261,7 @@ export async function rebaseOntoBase(
 
   // Local-side cwd for the local-dispatch path. The remote dispatcher
   // (runGit) ignores this and uses the provider's resolved remote workdir.
-  const wtDir = join(app.config.dirs.worktrees, sessionId);
+  const wtDir = join(deps.config.dirs.worktrees, sessionId);
   const localCwd = existsSync(wtDir) ? wtDir : repo;
   const base = opts?.base ?? DEFAULT_BASE_BRANCH;
 
@@ -272,12 +270,12 @@ export async function rebaseOntoBase(
 
   try {
     // Fetch latest from origin so rebase target is up to date
-    await runGit(app, session, ["fetch", "origin", base], { timeout: 30_000, localCwd });
+    await runGit(deps, session, ["fetch", "origin", base], { timeout: 30_000, localCwd });
 
     // Rebase onto origin/<base>
-    await runGit(app, session, ["rebase", `origin/${base}`], { timeout: 60_000, localCwd });
+    await runGit(deps, session, ["rebase", `origin/${base}`], { timeout: 60_000, localCwd });
 
-    await app.events.log(sessionId, "rebase_completed", {
+    await deps.events.log(sessionId, "rebase_completed", {
       stage: session.stage ?? undefined,
       actor: "system",
       data: { base },
@@ -289,7 +287,7 @@ export async function rebaseOntoBase(
     // same dispatcher so the abort lands on the same machine the rebase
     // was running on.
     try {
-      await runGit(app, session, ["rebase", "--abort"], { timeout: 15_000, localCwd });
+      await runGit(deps, session, ["rebase", "--abort"], { timeout: 15_000, localCwd });
     } catch {
       logDebug("session", "already clean");
     }
@@ -309,7 +307,7 @@ export async function rebaseOntoBase(
  */
 
 export async function finishWorktree(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   opts?: {
     into?: string;
@@ -319,7 +317,7 @@ export async function finishWorktree(
     force?: boolean;
   },
 ): Promise<{ ok: boolean; message: string }> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session) return { ok: false, message: `Session ${sessionId} not found` };
 
   const workdir = session.workdir;
@@ -332,14 +330,14 @@ export async function finishWorktree(
 
   // Verify before finishing (unless force)
   if (!opts?.force) {
-    const verify = await app.sessionReviewer.runVerification(sessionId);
+    const verify = await deps.app!.sessionReviewer.runVerification(sessionId);
     if (!verify.ok) {
       return { ok: false, message: `Cannot finish: verification failed:\n${verify.message}` };
     }
   }
 
   // Determine the worktree path and branch
-  const wtDir = join(app.config.dirs.worktrees, sessionId);
+  const wtDir = join(deps.config.dirs.worktrees, sessionId);
   const isWorktree = existsSync(wtDir);
 
   // Remote-repo mode: session.repo is the URL basename, not a local path,
@@ -369,12 +367,12 @@ export async function finishWorktree(
 
   // 1. Stop the session if running
   if (!["completed", "failed", "stopped", "pending"].includes(session.status)) {
-    await app.sessionTerminator.stop(sessionId);
+    await deps.app!.sessionTerminator.stop(sessionId);
   }
 
   // 1b. Create PR instead of merging locally if requested
   if (opts?.createPR) {
-    const prResult = await createWorktreePR(app, sessionId, {
+    const prResult = await createWorktreePR(deps, sessionId, {
       base: targetBranch,
       title: session.summary ?? undefined,
     });
@@ -393,8 +391,8 @@ export async function finishWorktree(
         logError("session", `finishWorktree: remove worktree failed: ${e?.message ?? e}`);
       }
     }
-    await app.sessionTerminator.deleteSession(sessionId);
-    await app.events.log(sessionId, "worktree_finished", {
+    await deps.app!.sessionTerminator.deleteSession(sessionId);
+    await deps.events.log(sessionId, "worktree_finished", {
       actor: "user",
       data: { branch, targetBranch, merged: false, pr: true },
     });
@@ -463,10 +461,10 @@ export async function finishWorktree(
   }
 
   // 5. Delete the session
-  await app.sessionTerminator.deleteSession(sessionId);
+  await deps.app!.sessionTerminator.deleteSession(sessionId);
 
   const mergeMsg = opts?.noMerge ? "skipped merge" : `merged ${branch} -> ${targetBranch}`;
-  await app.events.log(sessionId, "worktree_finished", {
+  await deps.events.log(sessionId, "worktree_finished", {
     actor: "user",
     data: { branch, targetBranch, merged: !opts?.noMerge },
   });

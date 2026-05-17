@@ -21,6 +21,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { AppContext } from "../../app.js";
 import { executeAction } from "../actions/index.js";
+import { depsFromApp } from "../deps.js";
 
 let app: AppContext;
 
@@ -191,20 +192,20 @@ describe("executeAction() idempotency", async () => {
     await app.sessions.update(session.id, { status: "ready", stage: "finish" });
 
     const key = "exec-key-A";
-    const first = await executeAction(app, session.id, "close", { idempotencyKey: key });
+    const first = await executeAction(depsFromApp(app), session.id, "close", { idempotencyKey: key });
     expect(first.ok).toBe(true);
     expect(await countEvents(session.id, "action_executed")).toBe(1);
     expect(await countLedgerRows(session.id, "action:close_ticket")).toBe(1);
 
     // Replay -- body MUST NOT run; no second event; ledger unchanged.
-    const second = await executeAction(app, session.id, "close", { idempotencyKey: key });
+    const second = await executeAction(depsFromApp(app), session.id, "close", { idempotencyKey: key });
     expect(second).toEqual(first);
     expect(await countEvents(session.id, "action_executed")).toBe(1);
     expect(await countLedgerRows(session.id, "action:close_ticket")).toBe(1);
 
     // Alias `close` and canonical `close_ticket` share ONE ledger bucket
     // because the dispatcher keys on the canonical name.
-    const third = await executeAction(app, session.id, "close_ticket", { idempotencyKey: key });
+    const third = await executeAction(depsFromApp(app), session.id, "close_ticket", { idempotencyKey: key });
     expect(third).toEqual(first);
     expect(await countEvents(session.id, "action_executed")).toBe(1);
     expect(await countLedgerRows(session.id, "action:close_ticket")).toBe(1);
@@ -214,15 +215,15 @@ describe("executeAction() idempotency", async () => {
     const session = await app.sessions.create({ summary: "exec-nokey", flow: "default" });
     await app.sessions.update(session.id, { status: "ready", stage: "finish" });
 
-    await executeAction(app, session.id, "close");
-    await executeAction(app, session.id, "close");
+    await executeAction(depsFromApp(app), session.id, "close");
+    await executeAction(depsFromApp(app), session.id, "close");
     expect(await countEvents(session.id, "action_executed")).toBe(2);
     expect(await countLedgerRows(session.id, "action:close_ticket")).toBe(0);
   });
 
   it("unknown action short-circuits before the ledger (no row written even with key)", async () => {
     const session = await app.sessions.create({ summary: "exec-unknown", flow: "default" });
-    const res = await executeAction(app, session.id, "does-not-exist", { idempotencyKey: "k" });
+    const res = await executeAction(depsFromApp(app), session.id, "does-not-exist", { idempotencyKey: "k" });
     expect(res.ok).toBe(true);
     expect(res.message).toContain("unknown");
     expect(await countLedgerRows(session.id, "action:does-not-exist")).toBe(0);

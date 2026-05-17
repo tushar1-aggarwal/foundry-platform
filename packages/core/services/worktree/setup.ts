@@ -2,8 +2,6 @@
  * Worktree setup -- git worktree create/copy/cleanup.
  *
  * Extracted from workspace-service.ts as part of the god-modules split.
- * All functions take app: AppContext as first arg. Pure file move, no
- * behavior change.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from "fs";
@@ -11,7 +9,7 @@ import { basename, dirname, join, resolve } from "path";
 import { promisify } from "util";
 import { execFile } from "child_process";
 
-import type { AppContext } from "../../app.js";
+import type { OrchestrationDeps } from "../deps.js";
 import { isRepoUrl } from "../../repo-url.js";
 import type { Session, Compute } from "../../../types/index.js";
 import * as claude from "../../claude/claude.js";
@@ -52,7 +50,7 @@ export function safeAttachmentName(raw: string): string {
 
 /** Setup git worktree + Claude trust for the session working directory. */
 export async function setupSessionWorktree(
-  app: AppContext,
+  deps: OrchestrationDeps,
   session: Session,
   compute: Compute | null,
   onLog?: (msg: string) => void,
@@ -90,7 +88,7 @@ export async function setupSessionWorktree(
 
   // Capability lives on `Compute.capabilities.supportsWorktree`; read off
   // the registered Compute keyed by the row's `compute_kind`.
-  const computeImpl = compute ? app.getCompute(compute.compute_kind) : app.getCompute("local");
+  const computeImpl = compute ? deps.app!.getCompute(compute.compute_kind) : deps.app!.getCompute("local");
   const supportsWorktree = computeImpl?.capabilities.supportsWorktree === true;
 
   // Short-circuit for remote computes (K8s, EC2, shared-host EC2, ...). The
@@ -131,7 +129,7 @@ export async function setupSessionWorktree(
   const wantWorktree = supportsWorktree && session.config?.worktree !== false;
   if (wantWorktree && existsSync(join(repoSource, ".git"))) {
     log("Setting up git worktree...");
-    const wt = await setupWorktree(app, repoSource, session.id, session.branch ?? undefined);
+    const wt = await setupWorktree(deps, repoSource, session.id, session.branch ?? undefined);
     if (wt) {
       effectiveWorkdir = wt;
     } else {
@@ -173,7 +171,7 @@ export async function setupSessionWorktree(
   // absolute path. Idempotent: skip the write if the row already matches.
   const persisted = resolve(effectiveWorkdir);
   if (session.workdir !== persisted) {
-    await app.sessions.update(session.id, { workdir: persisted });
+    await deps.sessions.update(session.id, { workdir: persisted });
     (session as { workdir: string | null }).workdir = persisted;
   }
 
@@ -184,7 +182,7 @@ export async function setupSessionWorktree(
   // storage instead of trying to find ephemeral worktree files on the right
   // container. Whichever shape we see, we end with a file at
   // `<workdir>/.ark/attachments/<name>` for the agent to open.
-  await materializeAttachments(app, session, effectiveWorkdir);
+  await materializeAttachments(deps, session, effectiveWorkdir);
 
   return effectiveWorkdir;
 }
@@ -204,7 +202,11 @@ interface AttachmentEntry {
  * row is rewritten to carry locators instead of inline base64; subsequent
  * calls are pure reads.
  */
-export async function materializeAttachments(app: AppContext, session: Session, workdir: string): Promise<void> {
+export async function materializeAttachments(
+  deps: OrchestrationDeps,
+  session: Session,
+  workdir: string,
+): Promise<void> {
   const raw = (session.config as any)?.attachments as AttachmentEntry[] | undefined;
   if (!raw?.length) return;
 
@@ -235,7 +237,7 @@ export async function materializeAttachments(app: AppContext, session: Session, 
     if (locator) {
       // Already uploaded: pull from BlobStore.
       try {
-        const got = await app.blobStore.get(locator, session.tenant_id);
+        const got = await deps.blobStore.get(locator, session.tenant_id);
         bytes = got.bytes;
       } catch (e: any) {
         logWarn("workspace", `failed to fetch attachment ${safeName} for ${session.id}: ${e?.message ?? e}`);
@@ -246,7 +248,7 @@ export async function materializeAttachments(app: AppContext, session: Session, 
       bytes = att.content.startsWith("data:")
         ? Buffer.from(att.content.replace(/^data:[^;]+;base64,/, ""), "base64")
         : Buffer.from(att.content, "utf-8");
-      const meta = await app.blobStore.put(
+      const meta = await deps.blobStore.put(
         { tenantId: session.tenant_id, namespace: "attachments", id: session.id, filename: safeName },
         bytes,
         { contentType: att.type },
@@ -268,19 +270,19 @@ export async function materializeAttachments(app: AppContext, session: Session, 
     // Must await: under Temporal semantics the activity can return before
     // the DB write lands, leaving the next dispatch to read the old inline
     // content. Bun resolves synchronously today but that's incidental.
-    await app.sessions.mergeConfig(session.id, { attachments: rewritten });
+    await deps.sessions.mergeConfig(session.id, { attachments: rewritten });
   }
 }
 
 async function setupWorktree(
-  app: AppContext,
+  deps: OrchestrationDeps,
   repoPath: string,
   sessionId: string,
   branch?: string,
 ): Promise<string | null> {
-  const wtPath = join(app.config.dirs.worktrees, sessionId);
+  const wtPath = join(deps.config.dirs.worktrees, sessionId);
   if (existsSync(join(wtPath, ".git"))) {
-    await applyWorktreeGitIdentity(app, wtPath);
+    await applyWorktreeGitIdentity(deps, wtPath);
     return wtPath;
   }
 
@@ -294,7 +296,7 @@ async function setupWorktree(
       await execFileAsync("git", ["-C", repoPath, "worktree", "add", "-b", branchName, wtPath], {
         encoding: "utf-8",
       });
-      await applyWorktreeGitIdentity(app, wtPath);
+      await applyWorktreeGitIdentity(deps, wtPath);
       return wtPath;
     } catch (e: any) {
       if (!String(e).includes("already exists")) {
@@ -306,7 +308,7 @@ async function setupWorktree(
       await execFileAsync("git", ["-C", repoPath, "worktree", "add", wtPath, branchName], {
         encoding: "utf-8",
       });
-      await applyWorktreeGitIdentity(app, wtPath);
+      await applyWorktreeGitIdentity(deps, wtPath);
       return wtPath;
     } catch (e: any) {
       if (!String(e).includes("already checked out") && !String(e).includes("already exists")) {
@@ -318,7 +320,7 @@ async function setupWorktree(
       await execFileAsync("git", ["-C", repoPath, "worktree", "add", "-b", `ark-${sessionId}`, wtPath], {
         encoding: "utf-8",
       });
-      await applyWorktreeGitIdentity(app, wtPath);
+      await applyWorktreeGitIdentity(deps, wtPath);
       return wtPath;
     } catch (e: any) {
       logError("session", `setupWorktree: all strategies failed for ${sessionId}: ${e?.message ?? e}`);
@@ -378,9 +380,12 @@ async function readGitConfigValue(cwd: string, key: string, scope?: "global"): P
  *   4. Ark's placeholder default -- only when nothing else exists. This is
  *      the BB-Violator-incompatible fallback we want to avoid in practice.
  */
-async function resolveAuthorIdentity(app: AppContext, wtPath: string): Promise<{ name: string; email: string }> {
-  const explicitName = app.config.git?.authorName;
-  const explicitEmail = app.config.git?.authorEmail;
+async function resolveAuthorIdentity(
+  deps: OrchestrationDeps,
+  wtPath: string,
+): Promise<{ name: string; email: string }> {
+  const explicitName = deps.config.git?.authorName;
+  const explicitEmail = deps.config.git?.authorEmail;
   const isPlaceholderName = !explicitName || explicitName === ARK_PLACEHOLDER_NAME;
   const isPlaceholderEmail = !explicitEmail || explicitEmail === ARK_PLACEHOLDER_EMAIL;
 
@@ -419,8 +424,8 @@ async function resolveAuthorIdentity(app: AppContext, wtPath: string): Promise<{
  *
  * Non-fatal: we log and continue if the underlying `git config` writes fail.
  */
-export async function applyWorktreeGitIdentity(app: AppContext, wtPath: string): Promise<void> {
-  const { name, email } = await resolveAuthorIdentity(app, wtPath);
+export async function applyWorktreeGitIdentity(deps: OrchestrationDeps, wtPath: string): Promise<void> {
+  const { name, email } = await resolveAuthorIdentity(deps, wtPath);
   try {
     await execFileAsync("git", ["-C", wtPath, "config", "user.name", name], { encoding: "utf-8" });
     await execFileAsync("git", ["-C", wtPath, "config", "user.email", email], { encoding: "utf-8" });
@@ -485,8 +490,8 @@ export async function runWorktreeSetup(
  * Provider-independent -- called from stop() and deleteSessionAsync() so
  * worktrees are always cleaned up regardless of compute provider availability.
  */
-export async function removeSessionWorktree(app: AppContext, session: Session): Promise<void> {
-  const wtPath = join(app.config.dirs.worktrees, session.id);
+export async function removeSessionWorktree(deps: OrchestrationDeps, session: Session): Promise<void> {
+  const wtPath = join(deps.config.dirs.worktrees, session.id);
   if (!existsSync(wtPath)) return;
 
   // Try git worktree remove first (cleans up .git/worktrees metadata)
@@ -509,11 +514,11 @@ export async function removeSessionWorktree(app: AppContext, session: Session): 
 }
 
 /** Find orphaned worktrees -- worktree dirs with no matching session. */
-export async function findOrphanedWorktrees(app: AppContext): Promise<string[]> {
-  const wtDir = app.config.dirs.worktrees;
+export async function findOrphanedWorktrees(deps: OrchestrationDeps): Promise<string[]> {
+  const wtDir = deps.config.dirs.worktrees;
   if (!existsSync(wtDir)) return [];
 
-  const sessionIds = new Set((await app.sessions.list({ limit: 1000 })).map((s) => s.id));
+  const sessionIds = new Set((await deps.sessions.list({ limit: 1000 })).map((s) => s.id));
   const orphans: string[] = [];
 
   try {
@@ -530,13 +535,13 @@ export async function findOrphanedWorktrees(app: AppContext): Promise<string[]> 
 }
 
 /** Remove orphaned worktrees. Returns count of removed. */
-export async function cleanupWorktrees(app: AppContext): Promise<{ removed: number; errors: string[] }> {
-  const orphans = await findOrphanedWorktrees(app);
+export async function cleanupWorktrees(deps: OrchestrationDeps): Promise<{ removed: number; errors: string[] }> {
+  const orphans = await findOrphanedWorktrees(deps);
   let removed = 0;
   const errors: string[] = [];
 
   for (const id of orphans) {
-    const wtPath = join(app.config.dirs.worktrees, id);
+    const wtPath = join(deps.config.dirs.worktrees, id);
     try {
       // Try git worktree remove first
       await execFileAsync("git", ["worktree", "remove", wtPath, "--force"], {

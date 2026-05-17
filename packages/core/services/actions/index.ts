@@ -10,7 +10,7 @@ import { mergePrAction } from "./merge-pr.js";
 import { autoMergeAction } from "./auto-merge.js";
 import { closeAction } from "./close.js";
 import { flakyPrAction } from "./__tests__/flaky-pr-fixture.js";
-import type { AppContext } from "../../app.js";
+import type { OrchestrationDeps } from "../deps.js";
 import { withIdempotency } from "../idempotency.js";
 
 export type { ActionHandler, ActionOpts, ActionResult } from "./types.js";
@@ -55,19 +55,19 @@ export function listActions(): string[] {
  * themselves stay single-purpose -- the wrapper owns the ledger.
  */
 export async function executeAction(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   action: string,
   opts?: ActionOpts,
 ): Promise<ActionResult> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session) return { ok: false, message: "Session not found" };
 
   const handler = ACTION_INDEX.get(action);
   if (!handler) {
     // Unknown actions short-circuit before the ledger so every retry still
     // logs `action_skipped` with the same payload (cheap, helps debugging).
-    await app.events.log(sessionId, "action_skipped", {
+    await deps.events.log(sessionId, "action_skipped", {
       stage: session.stage ?? undefined,
       actor: "system",
       data: { action, reason: "unknown action type" },
@@ -79,8 +79,8 @@ export async function executeAction(
   // rows for the same logical operation.
   const opKind = `action:${handler.name}` as const;
   return withIdempotency(
-    app.db,
+    deps.db,
     { sessionId, stage: session.stage ?? null, opKind, idempotencyKey: opts?.idempotencyKey },
-    () => handler.execute(app, session, action, opts),
+    () => handler.execute(deps.app!, session, action, opts),
   );
 }

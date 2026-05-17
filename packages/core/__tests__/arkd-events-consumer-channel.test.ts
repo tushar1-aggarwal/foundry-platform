@@ -27,6 +27,7 @@ import {
   stopArkdEventsConsumer,
   _resetArkdEventsConsumers,
 } from "../services/channel/arkd-events-consumer.js";
+import { depsFromApp } from "../services/deps.js";
 import { allocatePort } from "../config/port-allocator.js";
 import { SUBSCRIBED_ACK } from "../../arkd/common/index.js";
 
@@ -121,7 +122,7 @@ describe("arkd-events-consumer: channel-report dispatch", () => {
 
     const stub = startStubArkd(stubPort, [frame]);
     try {
-      startArkdEventsConsumer(app, "stub-compute-1", `http://127.0.0.1:${stubPort}`, null);
+      startArkdEventsConsumer(depsFromApp(app), "stub-compute-1", `http://127.0.0.1:${stubPort}`, null);
 
       const evt = (await waitForEvent(app, session.id, "agent_progress", 5000)) as {
         data?: { message?: string };
@@ -154,7 +155,7 @@ describe("arkd-events-consumer: channel-report dispatch", () => {
 
     const stub = startStubArkd(stubPort, [frame]);
     try {
-      startArkdEventsConsumer(app, "stub-compute-2", `http://127.0.0.1:${stubPort}`, null);
+      startArkdEventsConsumer(depsFromApp(app), "stub-compute-2", `http://127.0.0.1:${stubPort}`, null);
 
       const evt = (await waitForEvent(app, session.id, "agent_error", 5000)) as { data?: { error?: string } } | null;
       expect(evt).not.toBeNull();
@@ -170,7 +171,7 @@ describe("arkd-events-consumer: channel-report dispatch", () => {
     const frame = JSON.stringify({ kind: "future-thing", whatever: 1, ts: new Date().toISOString() });
     const stub = startStubArkd(stubPort, [frame]);
     try {
-      startArkdEventsConsumer(app, "stub-compute-3", `http://127.0.0.1:${stubPort}`, null);
+      startArkdEventsConsumer(depsFromApp(app), "stub-compute-3", `http://127.0.0.1:${stubPort}`, null);
       // Wait long enough for the consumer to connect, receive the frame, and
       // log-and-ignore. An unhandled rejection would fail the test process.
       await new Promise<void>((resolve) => setTimeout(resolve, 500));

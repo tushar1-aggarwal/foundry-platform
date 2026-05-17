@@ -46,7 +46,7 @@ export async function executeActionActivity(input: {
   const idempotencyKey = `${input.sessionId}:${input.stageIdx}:${input.action}`;
 
   try {
-    const result = await executeAction(d.app, input.sessionId, input.action, { idempotencyKey });
+    const result = await executeAction(d, input.sessionId, input.action, { idempotencyKey });
     if (!result.ok) {
       throw dispatchValidationError(`Action '${input.action}' failed: ${result.message}`);
     }

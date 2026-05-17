@@ -42,6 +42,7 @@ import { SessionAttachService } from "../services/session/attach.js";
 import { DispatchService } from "../services/dispatch/index.js";
 import { StageAdvanceService } from "../services/stage-advance/index.js";
 import { executeAction } from "../services/actions/index.js";
+import { depsFromApp } from "../services/deps.js";
 import { getOutput } from "../services/session-output.js";
 import { removeSessionWorktree } from "../services/worktree/index.js";
 import { deletePerSessionCredsSecret, materializeClaudeAuthForDispatch } from "../services/dispatch-claude-auth.js";
@@ -106,7 +107,7 @@ function buildSessionLifecycleDeps(c: SessionLifecycleCradle): SessionLifecycleD
     usageRecorder: c.usageRecorder,
     statusPollers: c.statusPollers,
     dispatch: (id) => c.app.dispatchService.dispatch(id),
-    removeWorktree: (session) => removeSessionWorktree(c.app, session),
+    removeWorktree: (session) => removeSessionWorktree(depsFromApp(c.app), session),
     deleteCredsSecret: (session, compute) => deletePerSessionCredsSecret(c.app, session, compute),
     gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
     resolveComputeTarget: (session) => c.app.resolveComputeTarget(session),
@@ -317,7 +318,7 @@ export function registerServices(
           config: c.config,
           db: c.db,
           dispatch: (id) => c.app.dispatchService.dispatch(id),
-          executeAction: (id, action, opts) => executeAction(c.app, id, action, opts),
+          executeAction: (id, action, opts) => executeAction(depsFromApp(c.app), id, action, opts),
           runVerification: (id) => c.app.sessionReviewer.runVerification(id),
           recordSessionUsage: (session, usage, provider, source) =>
             c.app.sessionCreator.recordUsage(session, usage, provider, source),

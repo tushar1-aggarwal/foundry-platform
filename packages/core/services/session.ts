@@ -445,7 +445,8 @@ export class SessionService {
         const action = flow.getStageAction(this.app, session.flow, session.stage);
         if (action.type !== "action" || !action.action) return;
         const { executeAction } = await import("./actions/index.js");
-        const result = await executeAction(this.app, sessionId, action.action);
+        const { depsFromApp } = await import("./deps.js");
+        const result = await executeAction(depsFromApp(this.app), sessionId, action.action);
         if (!result.ok) {
           // Without flipping status to `failed`, an action stage that errors
           // on resume (`create_pr`, `merge`, ...) emits the dispatch_failed

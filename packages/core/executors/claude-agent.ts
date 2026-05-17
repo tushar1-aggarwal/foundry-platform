@@ -113,7 +113,8 @@ export const claudeAgentExecutor: Executor = {
     });
 
     const { setupSessionWorktree } = await import("../services/worktree/index.js");
-    const effectiveWorkdir = await setupSessionWorktree(app, session, compute, log);
+    const { depsFromApp } = await import("../services/deps.js");
+    const effectiveWorkdir = await setupSessionWorktree(depsFromApp(app), session, compute, log);
 
     // Worker-side paths. We use `/tmp/ark-<sid>` UNIFORMLY -- local and
     // remote both. For local dispatch worker == conductor so /tmp lives on

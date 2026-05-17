@@ -8,7 +8,7 @@
  * (notifications, artifact tracking, auto-PR).
  */
 
-import type { AppContext } from "../../app.js";
+import type { OrchestrationDeps } from "../deps.js";
 import { createWorktreePR } from "../worktree/index.js";
 import { eventBus } from "../../hooks.js";
 import type { OutboundMessage } from "./channel-types.js";
@@ -17,12 +17,12 @@ import { logDebug, logError, logInfo, logWarn } from "../../observability/struct
 import { sendOSNotification } from "../../notify.js";
 import { markDispatchFailedShared } from "../session-dispatch-listeners.js";
 
-export async function handleReport(app: AppContext, sessionId: string, report: OutboundMessage): Promise<void> {
+export async function handleReport(deps: OrchestrationDeps, sessionId: string, report: OutboundMessage): Promise<void> {
   // Decide + persist the mechanical side-effects (events log, message
   // send, session updates, artifact tracking). Returns the decision so
   // this function can still drive cross-cutting concerns (bus emit,
   // retry-dispatch, stage handoff, OS notification, auto-PR).
-  const result = await app.sessionHooks.ingestReport(sessionId, report);
+  const result = await deps.app!.sessionHooks.ingestReport(sessionId, report);
 
   for (const evt of result.busEvents ?? []) {
     eventBus.emit(evt.type, evt.sessionId, evt.data);
@@ -38,7 +38,7 @@ export async function handleReport(app: AppContext, sessionId: string, report: O
     // dispatch wins, fails are not retried, and the workflow short-circuits
     // on the now-failed session. Skipping here keeps Temporal as the sole
     // driver of stage transitions.
-    const sessionForOrch = await app.sessions.get(sessionId);
+    const sessionForOrch = await deps.sessions.get(sessionId);
     if (sessionForOrch?.orchestrator === "temporal") {
       logDebug(
         "conductor",
@@ -46,7 +46,7 @@ export async function handleReport(app: AppContext, sessionId: string, report: O
       );
     } else
       try {
-        const handoff = await app.sessionHooks.mediateStageHandoff(sessionId, {
+        const handoff = await deps.app!.sessionHooks.mediateStageHandoff(sessionId, {
           autoDispatch: result.shouldAutoDispatch,
           source: "channel_report",
           outcome: result.outcome,
@@ -55,7 +55,7 @@ export async function handleReport(app: AppContext, sessionId: string, report: O
           logWarn("conductor", `stage handoff failed for ${sessionId}: ${handoff.message}`);
         }
         if (handoff.blockedByVerification) {
-          const s = await app.sessions.get(sessionId);
+          const s = await deps.sessions.get(sessionId);
           await sendOSNotification(
             "Ark: Verification failed",
             `${s?.summary ?? sessionId} - ${handoff.message.slice(0, 100)}`,
@@ -68,7 +68,7 @@ export async function handleReport(app: AppContext, sessionId: string, report: O
   }
 
   if (result.shouldRetry) {
-    const retryResult = await app.sessionHooks.retryWithContext(sessionId, {
+    const retryResult = await deps.app!.sessionHooks.retryWithContext(sessionId, {
       maxRetries: result.retryMaxRetries,
     });
     if (retryResult.ok) {
@@ -78,26 +78,26 @@ export async function handleReport(app: AppContext, sessionId: string, report: O
       // `{ok:false}` was silently dropped -- the on_failure retry would
       // appear "scheduled" but the session never made progress. Now both
       // throw and ok:false flip the session to failed.
-      app.dispatchService
-        .dispatch(sessionId)
+      deps
+        .app!.dispatchService.dispatch(sessionId)
         .then(async (r) => {
           if (r && r.ok === false) {
             const reason = r.message ?? "on_failure retry returned ok:false";
             logWarn("conductor", `on_failure retry dispatch returned ok:false for ${sessionId}: ${reason}`);
-            await markDispatchFailedShared(app.sessions, app.events, sessionId, reason);
+            await markDispatchFailedShared(deps.sessions, deps.events, sessionId, reason);
           }
         })
         .catch(async (err) => {
           const reason = err instanceof Error ? err.message : String(err);
           logError("conductor", `on_failure retry dispatch failed for ${sessionId}: ${reason}`);
-          await markDispatchFailedShared(app.sessions, app.events, sessionId, reason);
+          await markDispatchFailedShared(deps.sessions, deps.events, sessionId, reason);
         });
       return;
     }
     logWarn("conductor", `on_failure retry exhausted for ${sessionId}: ${retryResult.message}`);
   }
 
-  const finalSession = await app.sessions.get(sessionId);
+  const finalSession = await deps.sessions.get(sessionId);
   if (finalSession && (report.type === "completed" || report.type === "error")) {
     const notifyTitle = report.type === "completed" ? "Stage completed" : "Session failed";
     const notifyBody = `${finalSession.summary ?? sessionId} - ${finalSession.stage ?? ""}`;
@@ -105,14 +105,14 @@ export async function handleReport(app: AppContext, sessionId: string, report: O
   }
 
   if (result.prUrl) {
-    await app.events.log(sessionId, "pr_detected", {
+    await deps.events.log(sessionId, "pr_detected", {
       actor: "agent",
       data: { pr_url: result.prUrl },
     });
   }
 
   if (report.type === "completed" && !result.prUrl) {
-    const s = await app.sessions.get(sessionId);
+    const s = await deps.sessions.get(sessionId);
     if (s && !s.pr_url && s.config?.github_url && s.branch) {
       const { loadRepoConfig } = await import("../../repo-config.js");
       const repoConfig = s.workdir ? loadRepoConfig(s.workdir) : {};
@@ -120,7 +120,7 @@ export async function handleReport(app: AppContext, sessionId: string, report: O
 
       if (autoPR) {
         await safeAsync(`auto-pr: ${sessionId}`, async () => {
-          const prResult = await createWorktreePR(app, sessionId, {
+          const prResult = await createWorktreePR(deps, sessionId, {
             title: s.summary ?? undefined,
           });
           if (prResult.ok && prResult.pr_url) {

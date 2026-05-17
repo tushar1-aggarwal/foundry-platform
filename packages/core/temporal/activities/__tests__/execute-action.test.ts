@@ -8,7 +8,7 @@ import type { OrchestrationDeps } from "../../../services/deps.js";
 import { ACTION_INDEX } from "../../../services/actions/index.js";
 
 function stubDeps(overrides: Partial<OrchestrationDeps> = {}): OrchestrationDeps {
-  return {
+  const base = {
     sessions: { get: async () => ({ id: "s-1", stage: "test", flow: "noop" }) },
     events: { log: async () => {} },
     db: { query: async () => [] },
@@ -27,7 +27,16 @@ function stubDeps(overrides: Partial<OrchestrationDeps> = {}): OrchestrationDeps
     arkDir: "/tmp/test-ark",
     app: undefined,
     ...overrides,
-  } as unknown as OrchestrationDeps;
+  } as any;
+  // Mirror depsFromApp's aliasing invariant: when a test supplies a stub app,
+  // the canonical readers (deps.sessions/events/db) are the same objects as
+  // app.sessions/events/db. executeAction reads the top-level fields.
+  if (base.app) {
+    if (base.app.sessions) base.sessions = base.app.sessions;
+    if (base.app.events) base.events = base.app.events;
+    if (base.app.db) base.db = base.app.db;
+  }
+  return base as unknown as OrchestrationDeps;
 }
 
 describe("executeActionActivity (happy path)", () => {

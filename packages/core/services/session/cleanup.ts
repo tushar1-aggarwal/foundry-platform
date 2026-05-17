@@ -52,7 +52,8 @@ export async function cleanupSession(app: AppContext, session: Session): Promise
   if (worktreePath && existsSync(worktreePath)) {
     try {
       const { removeSessionWorktree } = await import("../worktree/setup.js");
-      await removeSessionWorktree(app, session);
+      const { depsFromApp } = await import("../deps.js");
+      await removeSessionWorktree(depsFromApp(app), session);
       worktreeRemoved = true;
       logDebug("session-cleanup", `session ${sessionId}: worktree removed at ${worktreePath}`);
     } catch (err: any) {

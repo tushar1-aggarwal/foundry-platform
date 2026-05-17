@@ -15,6 +15,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { AppContext } from "../app.js";
 import { rebaseOntoBase } from "../services/worktree/index.js";
+import { depsFromApp } from "../services/deps.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -104,7 +105,7 @@ describe("rebaseOntoBase", async () => {
     const session = await app.sessions.create({ repo: work, workdir: work });
     await app.sessions.update(session.id, { branch: "ark-s-rebase01" });
 
-    const result = await rebaseOntoBase(app, session.id, { base: "main" });
+    const result = await rebaseOntoBase(depsFromApp(app), session.id, { base: "main" });
     expect(result.ok).toBe(true);
     expect(result.message).toContain("origin/main");
 
@@ -135,7 +136,7 @@ describe("rebaseOntoBase", async () => {
     const session = await app.sessions.create({ repo: work, workdir: work });
     await app.sessions.update(session.id, { branch: "ark-s-conflict01" });
 
-    const result = await rebaseOntoBase(app, session.id, { base: "main" });
+    const result = await rebaseOntoBase(depsFromApp(app), session.id, { base: "main" });
     expect(result.ok).toBe(false);
     expect(result.message).toContain("Rebase failed");
 
@@ -145,14 +146,14 @@ describe("rebaseOntoBase", async () => {
   });
 
   it("returns error for missing session", async () => {
-    const result = await rebaseOntoBase(app, "s-nonexistent");
+    const result = await rebaseOntoBase(depsFromApp(app), "s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
 
   it("returns error for session without repo", async () => {
     const session = await app.sessions.create({ summary: "no repo" });
-    const result = await rebaseOntoBase(app, session.id);
+    const result = await rebaseOntoBase(depsFromApp(app), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no repo");
   });
@@ -183,7 +184,7 @@ describe("rebaseOntoBase", async () => {
     commitFile(work, "other.txt", "other", "other commit");
     git(work, "push", "origin", "main");
 
-    const result = await rebaseOntoBase(app, session.id, { base: "main" });
+    const result = await rebaseOntoBase(depsFromApp(app), session.id, { base: "main" });
     expect(result.ok).toBe(true);
 
     // Verify rebase happened in the worktree
@@ -228,7 +229,7 @@ describe("createWorktreePR auto-rebase integration", async () => {
     // createWorktreePR will fail at push (no real remote with gh), but we can
     // verify the commit hasn't changed (no rebase happened)
     const { createWorktreePR } = await import("../services/worktree/index.js");
-    await createWorktreePR(app, session.id, { base: "main" });
+    await createWorktreePR(depsFromApp(app), session.id, { base: "main" });
 
     // PR creation will fail (no gh auth in tests), but rebase should NOT have happened
     const commitAfter = git(work, "rev-parse", "HEAD");
@@ -258,7 +259,7 @@ describe("createWorktreePR auto-rebase integration", async () => {
 
     const { createWorktreePR } = await import("../services/worktree/index.js");
     // Will fail at push/gh but rebase should happen first
-    await createWorktreePR(app, session.id, { base: "main" });
+    await createWorktreePR(depsFromApp(app), session.id, { base: "main" });
 
     const commitAfter = git(work, "rev-parse", "HEAD");
     // Commit should have changed due to rebase

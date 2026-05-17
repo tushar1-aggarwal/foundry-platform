@@ -73,6 +73,7 @@ import { REMOTE_HOME } from "./constants.js";
 import { logDebug, logInfo } from "../../observability/structured-log.js";
 import { provisionStep } from "../../services/provisioning-steps.js";
 import { startArkdEventsConsumer } from "../../services/channel/arkd-events-consumer.js";
+import { depsFromApp } from "../../services/deps.js";
 import { EC2PlacementCtx } from "./placement-ctx.js";
 import type { PlacementCtx } from "../../secrets/placement-types.js";
 
@@ -732,7 +733,7 @@ export class EC2Compute extends RemoteArkdCompute implements RemoteCompute {
         opts.sessionId!,
         "events-consumer-start",
         async () => {
-          startArkdEventsConsumer(opts.app!, h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
+          startArkdEventsConsumer(depsFromApp(opts.app!), h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
         },
         { context: stepCtx },
       );

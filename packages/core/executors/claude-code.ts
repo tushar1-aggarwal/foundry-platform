@@ -158,7 +158,8 @@ export const claudeCodeExecutor: Executor = {
 
     // Setup worktree + trust (dynamic import to avoid circular dependency)
     const { setupSessionWorktree } = await import("../services/worktree/index.js");
-    const effectiveWorkdir = await setupSessionWorktree(app, session, compute, log);
+    const { depsFromApp } = await import("../services/deps.js");
+    const effectiveWorkdir = await setupSessionWorktree(depsFromApp(app), session, compute, log);
 
     // Determine conductor URL based on compute type. Default + remote both
     // use `http://localhost:<port>` -- for remote that resolves on the EC2

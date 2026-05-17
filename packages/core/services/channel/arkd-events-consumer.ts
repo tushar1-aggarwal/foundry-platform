@@ -31,6 +31,8 @@
 
 import type { Session } from "../../../types/index.js";
 import type { AppContext } from "../../app.js";
+import type { OrchestrationDeps } from "../deps.js";
+import { depsFromApp } from "../deps.js";
 import { processHookPayload } from "./hook-status.js";
 import { handleReport } from "./report-pipeline.js";
 import type { OutboundMessage } from "./channel-types.js";
@@ -97,12 +99,13 @@ type NdjsonFrame = NdjsonHookFrame | NdjsonChannelReportFrame | NdjsonChannelRel
  * shared bearer; passed straight through.
  */
 export function startArkdEventsConsumer(
-  app: AppContext,
+  deps: OrchestrationDeps,
   computeName: string,
   arkdUrl: string,
   arkdToken: string | null,
   triggerSessionId?: string,
 ): void {
+  const app = deps.app!;
   const existing = consumers.get(computeName);
   if (existing && !existing.stopped) {
     if (existing.arkdUrl === arkdUrl) {
@@ -326,7 +329,7 @@ async function dispatchFrame(app: AppContext, line: string): Promise<void> {
     const scoped = scopeApp(app, frame.tenantId);
     const report = frame.body as OutboundMessage;
     try {
-      await handleReport(scoped, frame.session, report);
+      await handleReport(depsFromApp(scoped), frame.session, report);
     } catch (err: unknown) {
       const msg = (err as { message?: string })?.message ?? String(err);
       logWarn("conductor", `arkd-events: channel-report dispatch threw for session=${frame.session}: ${msg}`);

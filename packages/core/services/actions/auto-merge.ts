@@ -1,5 +1,6 @@
 import type { ActionHandler } from "./types.js";
 import { mergeWorktreePR } from "../worktree/index.js";
+import { depsFromApp } from "../deps.js";
 
 /**
  * `auto_merge` -- queue the session's PR for merge via `gh pr merge --auto`.
@@ -22,7 +23,7 @@ export const autoMergeAction: ActionHandler = {
         message: "auto_merge: session has no PR URL -- create_pr did not produce one",
       };
     }
-    const result = await mergeWorktreePR(app, sessionId);
+    const result = await mergeWorktreePR(depsFromApp(app), sessionId);
     if (!result.ok) return result;
 
     await app.events.log(sessionId, "action_executed", {

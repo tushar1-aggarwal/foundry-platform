@@ -21,6 +21,7 @@ import type { AppContext } from "../../app.js";
 import type { Session } from "../../../types/index.js";
 import type { OutboundMessage } from "./channel-types.js";
 import { handleReport } from "./report-pipeline.js";
+import { depsFromApp } from "../deps.js";
 import { eventBus } from "../../hooks.js";
 import { logDebug, logError, logInfo, logWarn } from "../../observability/structured-log.js";
 import { emitStageSpanEnd, emitSessionSpanEnd, flushSpans } from "../../observability/otlp.js";
@@ -67,7 +68,7 @@ export async function processHookPayload(
         ...(payload.context != null ? { context: payload.context } : {}),
         ...(payload.source ? { source: payload.source } : {}),
       } as unknown as OutboundMessage;
-      await handleReport(scoped, sessionId, report);
+      await handleReport(depsFromApp(scoped), sessionId, report);
       return { mapped: reportType };
     }
   }

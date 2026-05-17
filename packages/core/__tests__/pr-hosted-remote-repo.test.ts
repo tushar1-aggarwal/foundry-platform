@@ -23,6 +23,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
 import { createWorktreePR } from "../services/worktree/pr.js";
 import { rebaseOntoBase } from "../services/worktree/git-ops.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 
@@ -45,7 +46,7 @@ describe("hosted-mode sessions (remoteRepo only, repo column null)", () => {
       config: { remoteRepo: "https://example.invalid/owner/repo.git" },
     });
 
-    const result = await createWorktreePR(app, session.id);
+    const result = await createWorktreePR(depsFromApp(app), session.id);
 
     expect(result.ok).toBe(false); // no remote -> push will fail; that's fine
     expect(result.message).not.toBe("Session has no repo");
@@ -57,7 +58,7 @@ describe("hosted-mode sessions (remoteRepo only, repo column null)", () => {
       config: { remoteRepo: "https://example.invalid/owner/repo.git" },
     });
 
-    const result = await rebaseOntoBase(app, session.id);
+    const result = await rebaseOntoBase(depsFromApp(app), session.id);
 
     expect(result.ok).toBe(false); // fetch will fail against the bogus URL; fine
     expect(result.message).not.toBe("Session has no repo");

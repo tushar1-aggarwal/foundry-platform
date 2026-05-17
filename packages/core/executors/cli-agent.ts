@@ -40,9 +40,10 @@ export const cliAgentExecutor: Executor = {
     let effectiveWorkdir = workdir;
     try {
       const { setupSessionWorktree } = await import("../services/worktree/index.js");
+      const { depsFromApp } = await import("../services/deps.js");
       const session = await app.sessions.get(sessionId);
       if (session) {
-        const result = await setupSessionWorktree(app, session, null, null, log);
+        const result = await setupSessionWorktree(depsFromApp(app), session, null, null, log);
         if (result) effectiveWorkdir = result;
       }
     } catch {

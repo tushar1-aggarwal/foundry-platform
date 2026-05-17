@@ -19,12 +19,28 @@ describe("Compute.ensureReachable", () => {
     // drained and re-emitted as session events. The startArkdEventsConsumer
     // call is idempotent per-compute.
     //
-    // We pass a minimal AppContext-shaped stub that exposes only the
-    // fields ensureReachable touches (config.ports.arkd for getArkdUrl
-    // and the `app` argument's identity for the consumer registry).
-    const stubApp = { config: { ports: { arkd: 19300 } } } as unknown as Parameters<
-      typeof LocalCompute.prototype.constructor
-    >[0];
+    // We pass a minimal AppContext-shaped stub that exposes the fields
+    // ensureReachable touches: config.ports.arkd for getArkdUrl, the `app`
+    // identity for the consumer registry, and the surface depsFromApp reads
+    // when deriving OrchestrationDeps for startArkdEventsConsumer.
+    const stubApp = {
+      config: { ports: { arkd: 19300 } },
+      sessions: {},
+      events: {},
+      messages: {},
+      blobStore: {},
+      flows: {},
+      computes: {},
+      agents: {},
+      runtimes: {},
+      pluginRegistry: {},
+      flowStates: {},
+      statusPollers: {},
+      db: {},
+      arkDir: "/tmp/test-ark",
+      tenantId: "default",
+      mode: { secrets: {} },
+    } as unknown as Parameters<typeof LocalCompute.prototype.constructor>[0];
     const c = new LocalCompute(stubApp);
     if (c.ensureReachable) {
       await c.ensureReachable(

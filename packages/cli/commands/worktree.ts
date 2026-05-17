@@ -3,6 +3,7 @@ import chalk from "chalk";
 import { join } from "path";
 import { existsSync } from "fs";
 import { findOrphanedWorktrees, cleanupWorktrees } from "../../core/services/worktree/index.js";
+import { depsFromApp } from "../../core/services/deps.js";
 import { getArkClient, getInProcessApp } from "../app-client.js";
 
 export function registerWorktreeCommands(program: Command) {
@@ -103,7 +104,8 @@ export function registerWorktreeCommands(program: Command) {
     .option("--dry-run", "Only show what would be removed")
     .action(async (opts) => {
       const app = await getInProcessApp();
-      const orphans = await findOrphanedWorktrees(app);
+      const deps = depsFromApp(app);
+      const orphans = await findOrphanedWorktrees(deps);
       if (orphans.length === 0) {
         console.log(chalk.dim("No orphaned worktrees found"));
         return;
@@ -111,7 +113,7 @@ export function registerWorktreeCommands(program: Command) {
       console.log(chalk.yellow(`Found ${orphans.length} orphaned worktrees:`));
       for (const id of orphans) console.log(`  ${id}`);
       if (opts.dryRun) return;
-      const result = await cleanupWorktrees(app);
+      const result = await cleanupWorktrees(deps);
       console.log(chalk.green(`Removed: ${result.removed}`));
       if (result.errors.length) {
         console.log(chalk.red(`Errors: ${result.errors.length}`));

@@ -260,7 +260,8 @@ export function buildDispatchDeps(orchDeps: OrchestrationDeps): TemporalDispatch
     // session-workflow loop drives stage advancement itself, so a stage's
     // post-action handoff has nothing to do.
     mediateStageHandoff: async (_sessionId, _opts) => undefined,
-    executeAction: (sessionId, action) => executeAction(buildAppShim(orchDeps), sessionId, action),
+    executeAction: (sessionId, action) =>
+      executeAction({ ...orchDeps, app: buildAppShim(orchDeps) }, sessionId, action),
     dispatchChild: (_childId) => notPortedYet("dispatchChild", NOT_PORTED_GUIDANCE.dispatchChild),
     fork: (_parentId, _task, _opts) => notPortedYet("fork", NOT_PORTED_GUIDANCE.fork),
 

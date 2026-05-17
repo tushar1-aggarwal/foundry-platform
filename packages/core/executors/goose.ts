@@ -121,7 +121,8 @@ export const gooseExecutor: Executor = {
     // clear "no compute resolved" error instead of defaulting to LocalCompute.
     const { target, compute } = await app.resolveComputeTarget(session);
     const { setupSessionWorktree } = await import("../services/worktree/index.js");
-    const effectiveWorkdir = await setupSessionWorktree(app, session, compute, log);
+    const { depsFromApp } = await import("../services/deps.js");
+    const effectiveWorkdir = await setupSessionWorktree(depsFromApp(app), session, compute, log);
 
     // Conductor URL (devcontainer vs host). Auto-detect a devcontainer by
     // file presence: if `.devcontainer/devcontainer.json` (or top-level

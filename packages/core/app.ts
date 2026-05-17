@@ -460,7 +460,8 @@ export class AppContext {
         const arkdUrl = computeImpl.getArkdUrl(handle);
         if (!arkdUrl) continue;
         const { startArkdEventsConsumer } = await import("./services/channel/arkd-events-consumer.js");
-        startArkdEventsConsumer(tenantApp, computeName, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
+        const { depsFromApp } = await import("./services/deps.js");
+        startArkdEventsConsumer(depsFromApp(tenantApp), computeName, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
         consumers++;
       } catch (err: any) {
         lw("boot", `rehydrate consumer failed for ${computeName}: ${err?.message ?? err}`);

@@ -9,6 +9,7 @@ import { join } from "path";
 import { withTestContext } from "./test-helpers.js";
 import { worktreeDiff, createWorktreePR, mergeWorktreePR } from "../services/worktree/index.js";
 import { executeAction } from "../services/actions/index.js";
+import { depsFromApp } from "../services/deps.js";
 import { getStageDefinition } from "../services/flow.js";
 import { loadRepoConfig } from "../repo-config.js";
 import { getApp } from "./test-helpers.js";
@@ -51,7 +52,7 @@ describe("interrupt(getApp())", async () => {
 
 describe("worktreeDiff(getApp())", async () => {
   it("returns error for non-existent session", async () => {
-    const result = await worktreeDiff(getApp(), "s-nonexistent");
+    const result = await worktreeDiff(depsFromApp(getApp()), "s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -60,7 +61,7 @@ describe("worktreeDiff(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "diff-no-workdir" });
     // No workdir or repo set
 
-    const result = await worktreeDiff(getApp(), session.id);
+    const result = await worktreeDiff(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("No workdir or repo");
   });
@@ -72,7 +73,7 @@ describe("worktreeDiff(getApp())", async () => {
       repo: "/tmp/nonexistent-repo",
     });
 
-    const result = await worktreeDiff(getApp(), session.id);
+    const result = await worktreeDiff(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("Cannot determine branch");
   });
@@ -82,13 +83,13 @@ describe("worktreeDiff(getApp())", async () => {
 
 describe("worktreeDiff re-review flagging", async () => {
   it("returns empty modifiedSinceReview for non-existent session", async () => {
-    const result = await worktreeDiff(getApp(), "s-nonexistent");
+    const result = await worktreeDiff(depsFromApp(getApp()), "s-nonexistent");
     expect(result.modifiedSinceReview).toEqual([]);
   });
 
   it("returns modifiedSinceReview in the result shape", async () => {
     const session = await getApp().sessions.create({ summary: "re-review-test" });
-    const result = await worktreeDiff(getApp(), session.id);
+    const result = await worktreeDiff(depsFromApp(getApp()), session.id);
     expect(Array.isArray(result.modifiedSinceReview)).toBe(true);
   });
 });
@@ -97,7 +98,7 @@ describe("worktreeDiff re-review flagging", async () => {
 
 describe("createWorktreePR(getApp())", async () => {
   it("returns error for non-existent session", async () => {
-    const result = await createWorktreePR(getApp(), "s-nonexistent");
+    const result = await createWorktreePR(depsFromApp(getApp()), "s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -106,7 +107,7 @@ describe("createWorktreePR(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "pr-no-repo" });
     // No repo set
 
-    const result = await createWorktreePR(getApp(), session.id);
+    const result = await createWorktreePR(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no repo");
   });
@@ -115,7 +116,7 @@ describe("createWorktreePR(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "pr-no-branch" });
     await getApp().sessions.update(session.id, { repo: "/tmp/nonexistent-repo" });
 
-    const result = await createWorktreePR(getApp(), session.id);
+    const result = await createWorktreePR(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("Cannot determine worktree branch");
   });
@@ -129,14 +130,14 @@ describe("createWorktreePR(getApp())", async () => {
 
 describe("mergeWorktreePR(getApp())", async () => {
   it("returns error for non-existent session", async () => {
-    const result = await mergeWorktreePR(getApp(), "s-nonexistent");
+    const result = await mergeWorktreePR(depsFromApp(getApp()), "s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
 
   it("returns error when session has no PR URL", async () => {
     const session = await getApp().sessions.create({ summary: "merge-no-pr" });
-    const result = await mergeWorktreePR(getApp(), session.id);
+    const result = await mergeWorktreePR(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no PR URL");
   });
@@ -144,7 +145,7 @@ describe("mergeWorktreePR(getApp())", async () => {
   it("returns error when session has no repo", async () => {
     const session = await getApp().sessions.create({ summary: "merge-no-repo" });
     await getApp().sessions.update(session.id, { pr_url: "https://github.com/org/repo/pull/1" });
-    const result = await mergeWorktreePR(getApp(), session.id);
+    const result = await mergeWorktreePR(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no repo");
   });
@@ -163,13 +164,13 @@ describe("executeAction auto_merge", async () => {
   it("returns error when session has no PR URL", async () => {
     const session = await getApp().sessions.create({ summary: "auto-merge-no-pr", flow: "autonomous-sdlc" });
     await getApp().sessions.update(session.id, { stage: "merge" });
-    const result = await executeAction(getApp(), session.id, "auto_merge");
+    const result = await executeAction(depsFromApp(getApp()), session.id, "auto_merge");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no PR URL");
   });
 
   it("returns error for non-existent session", async () => {
-    const result = await executeAction(getApp(), "s-nonexistent", "auto_merge");
+    const result = await executeAction(depsFromApp(getApp()), "s-nonexistent", "auto_merge");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -180,7 +181,7 @@ describe("executeAction auto_merge", async () => {
       stage: "merge",
       pr_url: "https://github.com/org/repo/pull/1",
     });
-    const result = await executeAction(getApp(), session.id, "auto_merge");
+    const result = await executeAction(depsFromApp(getApp()), session.id, "auto_merge");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no repo");
   });
@@ -193,7 +194,7 @@ describe("executeAction auto_merge", async () => {
       status: "running",
       pr_url: "https://github.com/org/repo/pull/1",
     });
-    const result = await executeAction(getApp(), session.id, "auto_merge");
+    const result = await executeAction(depsFromApp(getApp()), session.id, "auto_merge");
     expect(result.ok).toBe(false);
     // Session should NOT have been advanced or set to waiting
     const updated = (await getApp().sessions.get(session.id))!;

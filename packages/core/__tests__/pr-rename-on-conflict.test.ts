@@ -22,6 +22,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { AppContext } from "../app.js";
 import { createWorktreePR } from "../services/worktree/index.js";
+import { depsFromApp } from "../services/deps.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
@@ -112,7 +113,7 @@ describe("createWorktreePR -- branch rename on non-fast-forward", () => {
     const wtDir = carveSessionWorktree(work, session.id, branch, "session-a");
     await app.sessions.update(session.id, { workdir: wtDir });
 
-    const result = await createWorktreePR(app, session.id);
+    const result = await createWorktreePR(depsFromApp(app), session.id);
 
     // Push retry must have landed. Independent of PR-create outcome (no
     // GitHub host in this unit test):
@@ -163,7 +164,7 @@ describe("createWorktreePR -- branch rename on non-fast-forward", () => {
     await app.sessions.update(sessionId, { workdir: wtDir });
 
     void origin; // silence unused
-    const result = await createWorktreePR(app, sessionId);
+    const result = await createWorktreePR(depsFromApp(app), sessionId);
 
     // Already-suffixed branch must NOT be re-renamed. Push fails, original
     // git error surfaces.

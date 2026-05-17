@@ -17,6 +17,7 @@ import { asValue } from "awilix";
 import { AppContext } from "../app.js";
 import { fork } from "../services/fork-join.js";
 import { spawnParallelSubagents } from "../services/subagents.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 
@@ -187,7 +188,7 @@ describe("Pass 3 #11: dispatch failure surfacing at the three call sites", () =>
       });
 
       const { handleReport } = await import("../services/channel/report-pipeline.js");
-      await handleReport(app, session.id, {
+      await handleReport(depsFromApp(app), session.id, {
         type: "error",
         sessionId: session.id,
         stage: "implement",
@@ -249,7 +250,7 @@ describe("Pass 3 #11: dispatch failure surfacing at the three call sites", () =>
       });
 
       const { handleReport } = await import("../services/channel/report-pipeline.js");
-      await handleReport(app, session.id, {
+      await handleReport(depsFromApp(app), session.id, {
         type: "error",
         sessionId: session.id,
         stage: "implement",

@@ -10,6 +10,7 @@ import { eventBus } from "../../core/hooks.js";
 import { isRepoUrl } from "../../core/repo-url.js";
 import { getOutput as getSessionOutput } from "../../core/services/session-output.js";
 import { worktreeDiff, finishWorktree, createWorktreePR } from "../../core/services/worktree/index.js";
+import { depsFromApp } from "../../core/services/deps.js";
 import { joinFork, fanOut as fanOutChildren } from "../../core/services/fork-join.js";
 import { spawnSubagent } from "../../core/services/subagents.js";
 import type {
@@ -697,7 +698,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("worktree/diff", async (params, _notify, ctx) => {
     const { sessionId, base } = extract<{ sessionId: string; base?: string }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    return worktreeDiff(scoped, sessionId, { base });
+    return worktreeDiff(depsFromApp(scoped), sessionId, { base });
   });
 
   router.handle("worktree/create-pr", async (params, notify, ctx) => {
@@ -709,7 +710,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       draft?: boolean;
     }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await createWorktreePR(scoped, sessionId, { title, body, base, draft });
+    const result = await createWorktreePR(depsFromApp(scoped), sessionId, { title, body, base, draft });
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -718,7 +719,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("worktree/finish", async (params, _notify, ctx) => {
     const { sessionId, noMerge, createPR } = extract<WorktreeFinishParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await finishWorktree(scoped, sessionId, {
+    const result = await finishWorktree(depsFromApp(scoped), sessionId, {
       noMerge: noMerge ?? false,
       createPR: createPR ?? false,
     });
