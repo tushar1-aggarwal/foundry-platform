@@ -20,6 +20,7 @@ import { execFile } from "child_process";
 import { logWarn } from "../../observability/structured-log.js";
 import { detectInjection } from "../../session/prompt-guard.js";
 import { buildAuthedHttpsUrl } from "../git/auth-url.js";
+import { depsFromApp } from "../deps.js";
 import { isRepoUrl } from "../../repo-url.js";
 import type { DispatchDeps, DispatchResult } from "./types.js";
 import type { Session } from "../../../types/index.js";
@@ -207,7 +208,7 @@ export async function cloneRemoteRepoIfNeeded(
     // Inject tenant-scoped basic-auth creds (BITBUCKET_TOKEN/USERNAME,
     // GITHUB_TOKEN) into the URL for hosts we know how to authenticate.
     // Non-https URLs and unknown hosts pass through unchanged.
-    const clonedUrl = await buildAuthedHttpsUrl(deps.getApp(), session, remoteUrl);
+    const clonedUrl = await buildAuthedHttpsUrl(depsFromApp(deps.getApp()), session, remoteUrl);
     await execFileAsync("git", ["clone", "--depth", "1", clonedUrl, tmpDir], { timeout: 120_000 });
     // Update BOTH workdir and repo so setupSessionWorktree's later
     // `resolve(session.repo)` lands on the cloned dir (a real local git

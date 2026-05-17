@@ -223,8 +223,8 @@ export function buildDispatchDeps(orchDeps: OrchestrationDeps): TemporalDispatch
       return { type: "unknown", on_failure: stage.on_failure, optional: stage.optional };
     },
     // ── Phase 3.5 ports: helpers via AppContext shim from OrchestrationDeps ──
-    buildTask: (session, stage, agentName) => buildTaskWithHandoff(buildAppShim(orchDeps), session, stage, agentName),
-    extractSubtasks: (session) => extractSubtasks(buildAppShim(orchDeps), session),
+    buildTask: (session, stage, agentName) => buildTaskWithHandoff(orchDeps, session, stage, agentName),
+    extractSubtasks: (session) => extractSubtasks(orchDeps, session),
     resolveAgent: (agentName, sessionVars, opts) =>
       resolveAgentWithRuntime(buildAppShim(orchDeps), agentName, sessionVars, opts),
     buildClaudeArgs: (agent, opts) =>

@@ -603,7 +603,7 @@ export class EC2Compute extends RemoteArkdCompute implements RemoteCompute {
     // session stuck at "ensure-reachable failed".
     if (useStep) {
       await provisionStep(
-        opts.app!,
+        depsFromApp(opts.app!),
         opts.sessionId!,
         "connectivity-check",
         async () => {
@@ -657,7 +657,7 @@ export class EC2Compute extends RemoteArkdCompute implements RemoteCompute {
     };
 
     const tunnel = useStep
-      ? await provisionStep(opts.app!, opts.sessionId!, "forward-tunnel", tunnelFn, { context: stepCtx })
+      ? await provisionStep(depsFromApp(opts.app!), opts.sessionId!, "forward-tunnel", tunnelFn, { context: stepCtx })
       : await tunnelFn();
 
     // Persist the port + pid before the health probe so a probe failure
@@ -718,7 +718,7 @@ export class EC2Compute extends RemoteArkdCompute implements RemoteCompute {
       }
     };
     if (useStep) {
-      await provisionStep(opts.app!, opts.sessionId!, "arkd-probe", probeFn, {
+      await provisionStep(depsFromApp(opts.app!), opts.sessionId!, "arkd-probe", probeFn, {
         context: { ...stepCtx, localPort: tunnel.localPort },
       });
     } else {
@@ -729,7 +729,7 @@ export class EC2Compute extends RemoteArkdCompute implements RemoteCompute {
     // for the same compute is a no-op inside startArkdEventsConsumer.
     if (useStep) {
       await provisionStep(
-        opts.app!,
+        depsFromApp(opts.app!),
         opts.sessionId!,
         "events-consumer-start",
         async () => {

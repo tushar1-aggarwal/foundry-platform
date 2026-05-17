@@ -13,6 +13,7 @@
 
 import type { AppContext } from "../app.js";
 import { startPollers } from "../services/pollers.js";
+import { depsFromApp } from "../services/deps.js";
 
 export class ServerPollers {
   private timers: Array<ReturnType<typeof setInterval>> = [];
@@ -27,7 +28,7 @@ export class ServerPollers {
     // Issue label / auto-dispatch are CLI-level options (passed via conductor
     // start in the old model). They can be surfaced in AppConfig in a
     // follow-up; for now we start the schedule + PR pollers unconditionally.
-    this.timers = startPollers(this.app, {});
+    this.timers = startPollers(depsFromApp(this.app), {});
   }
 
   stop(): void {

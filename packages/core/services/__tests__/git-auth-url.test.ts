@@ -8,6 +8,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { AppContext } from "../../app.js";
+import { depsFromApp } from "../deps.js";
 import { setApp, clearApp } from "../../__tests__/test-helpers.js";
 import { buildAuthedHttpsUrl } from "../git/auth-url.js";
 import type { Session } from "../../../types/index.js";
@@ -42,7 +43,7 @@ const stubSession = (): Session => ({ tenant_id: TENANT, id: "s-1" }) as unknown
 describe("buildAuthedHttpsUrl", () => {
   it("rewrites github.com URLs with x-access-token when GITHUB_TOKEN is set", async () => {
     await app.secrets.set(TENANT, "GITHUB_TOKEN", "ghp_abc123", { type: "env-var" });
-    const result = await buildAuthedHttpsUrl(app, stubSession(), "https://github.com/owner/repo.git");
+    const result = await buildAuthedHttpsUrl(depsFromApp(app), stubSession(), "https://github.com/owner/repo.git");
     expect(result).toBe("https://x-access-token:ghp_abc123@github.com/owner/repo.git");
   });
 
@@ -53,37 +54,37 @@ describe("buildAuthedHttpsUrl", () => {
     // for this token flavour.
     await app.secrets.set(TENANT, "BITBUCKET_TOKEN", "ATATT_xyz", { type: "env-var" });
     await app.secrets.set(TENANT, "BITBUCKET_USERNAME", "user@example.com", { type: "env-var" });
-    const result = await buildAuthedHttpsUrl(app, stubSession(), "https://bitbucket.org/team/repo.git");
+    const result = await buildAuthedHttpsUrl(depsFromApp(app), stubSession(), "https://bitbucket.org/team/repo.git");
     expect(result).toBe("https://x-bitbucket-api-token-auth:ATATT_xyz@bitbucket.org/team/repo.git");
   });
 
   it("rewrites bitbucket.org URLs with <username>:<token> for legacy app passwords (non-ATATT) when BITBUCKET_USERNAME is set", async () => {
     await app.secrets.set(TENANT, "BITBUCKET_TOKEN", "legacy_app_pwd_value", { type: "env-var" });
     await app.secrets.set(TENANT, "BITBUCKET_USERNAME", "bb-user", { type: "env-var" });
-    const result = await buildAuthedHttpsUrl(app, stubSession(), "https://bitbucket.org/team/repo.git");
+    const result = await buildAuthedHttpsUrl(depsFromApp(app), stubSession(), "https://bitbucket.org/team/repo.git");
     expect(result).toBe("https://bb-user:legacy_app_pwd_value@bitbucket.org/team/repo.git");
   });
 
   it("falls back to x-token-auth on bitbucket.org for non-ATATT token when no username is configured (workspace HTTP access token)", async () => {
     await app.secrets.set(TENANT, "BITBUCKET_TOKEN", "workspace_http_token", { type: "env-var" });
-    const result = await buildAuthedHttpsUrl(app, stubSession(), "https://bitbucket.org/team/repo.git");
+    const result = await buildAuthedHttpsUrl(depsFromApp(app), stubSession(), "https://bitbucket.org/team/repo.git");
     expect(result).toBe("https://x-token-auth:workspace_http_token@bitbucket.org/team/repo.git");
   });
 
   it("passes through when no token is configured", async () => {
     const url = "https://bitbucket.org/team/repo.git";
-    expect(await buildAuthedHttpsUrl(app, stubSession(), url)).toBe(url);
+    expect(await buildAuthedHttpsUrl(depsFromApp(app), stubSession(), url)).toBe(url);
   });
 
   it("passes through non-https URLs (ssh, git, http)", async () => {
     await app.secrets.set(TENANT, "GITHUB_TOKEN", "ghp_abc123", { type: "env-var" });
-    expect(await buildAuthedHttpsUrl(app, stubSession(), "git@github.com:owner/repo.git")).toBe(
+    expect(await buildAuthedHttpsUrl(depsFromApp(app), stubSession(), "git@github.com:owner/repo.git")).toBe(
       "git@github.com:owner/repo.git",
     );
-    expect(await buildAuthedHttpsUrl(app, stubSession(), "ssh://git@bitbucket.org/team/repo.git")).toBe(
+    expect(await buildAuthedHttpsUrl(depsFromApp(app), stubSession(), "ssh://git@bitbucket.org/team/repo.git")).toBe(
       "ssh://git@bitbucket.org/team/repo.git",
     );
-    expect(await buildAuthedHttpsUrl(app, stubSession(), "http://github.com/owner/repo.git")).toBe(
+    expect(await buildAuthedHttpsUrl(depsFromApp(app), stubSession(), "http://github.com/owner/repo.git")).toBe(
       "http://github.com/owner/repo.git",
     );
   });
@@ -91,6 +92,6 @@ describe("buildAuthedHttpsUrl", () => {
   it("passes through unknown hosts even with tokens configured", async () => {
     await app.secrets.set(TENANT, "GITHUB_TOKEN", "ghp_abc123", { type: "env-var" });
     const url = "https://gitlab.com/group/repo.git";
-    expect(await buildAuthedHttpsUrl(app, stubSession(), url)).toBe(url);
+    expect(await buildAuthedHttpsUrl(depsFromApp(app), stubSession(), url)).toBe(url);
   });
 });

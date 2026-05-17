@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { AppContext } from "../../app.js";
 import { garbageCollectComputeIfTemplate } from "../compute-lifecycle.js";
+import { depsFromApp } from "../deps.js";
 
 let app: AppContext;
 
@@ -116,7 +117,7 @@ describe("resolveComputeForStage + template cloning", () => {
     });
     await app.sessions.update(s.id, { status: "completed" });
 
-    const gc = await garbageCollectComputeIfTemplate(app, "k8s-tmpl2-11112222");
+    const gc = await garbageCollectComputeIfTemplate(depsFromApp(app), "k8s-tmpl2-11112222");
     expect(gc).toBe(true);
     expect(await app.computes.get("k8s-tmpl2-11112222")).toBeNull();
 

@@ -11,7 +11,7 @@
  */
 
 import { substituteVars } from "../template.js";
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import { logDebug } from "../observability/structured-log.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -311,9 +311,9 @@ export interface FlowDefinition {
  * the contract tight, we explicitly swallow Promise returns and treat them
  * as "not loaded yet" -- the caller's next tick will see the cached value.
  */
-function loadFlow(app: AppContext, name: string): FlowDefinition | null {
+function loadFlow(deps: OrchestrationDeps, name: string): FlowDefinition | null {
   try {
-    const result = app.flows.get(name);
+    const result = deps.flows.get(name);
     if (result && typeof (result as { then?: unknown }).then === "function") {
       // Hosted DB store cache miss -- Promise return. Fire-and-forget so
       // the cache warms for the next call; for this call there's nothing
@@ -333,26 +333,30 @@ function loadFlow(app: AppContext, name: string): FlowDefinition | null {
   }
 }
 
-export function getStages(app: AppContext, flowName: string): StageDefinition[] {
-  return loadFlow(app, flowName)?.stages ?? [];
+export function getStages(deps: OrchestrationDeps, flowName: string): StageDefinition[] {
+  return loadFlow(deps, flowName)?.stages ?? [];
 }
 
-export function getStage(app: AppContext, flowName: string, stageName: string): StageDefinition | null {
-  return getStages(app, flowName).find((s) => s.name === stageName) ?? null;
+export function getStage(deps: OrchestrationDeps, flowName: string, stageName: string): StageDefinition | null {
+  return getStages(deps, flowName).find((s) => s.name === stageName) ?? null;
 }
 
 /** Alias for getStage - retrieve a single stage definition by flow and stage name. */
-export function getStageDefinition(app: AppContext, flowName: string, stageName: string): StageDefinition | null {
-  return getStage(app, flowName, stageName);
+export function getStageDefinition(
+  deps: OrchestrationDeps,
+  flowName: string,
+  stageName: string,
+): StageDefinition | null {
+  return getStage(deps, flowName, stageName);
 }
 
-export function getFirstStage(app: AppContext, flowName: string): string | null {
-  const stages = getStages(app, flowName);
+export function getFirstStage(deps: OrchestrationDeps, flowName: string): string | null {
+  const stages = getStages(deps, flowName);
   return stages[0]?.name ?? null;
 }
 
-export function getNextStage(app: AppContext, flowName: string, currentStage: string): string | null {
-  const stages = getStages(app, flowName);
+export function getNextStage(deps: OrchestrationDeps, flowName: string, currentStage: string): string | null {
+  const stages = getStages(deps, flowName);
   const idx = stages.findIndex((s) => s.name === currentStage);
   return idx >= 0 && idx + 1 < stages.length ? stages[idx + 1].name : null;
 }
@@ -366,32 +370,32 @@ export function getNextStage(app: AppContext, flowName: string, currentStage: st
  * doesn't match any key.
  */
 export function resolveNextStage(
-  app: AppContext,
+  deps: OrchestrationDeps,
   flowName: string,
   currentStage: string,
   outcome?: string,
 ): string | null {
-  const stage = getStage(app, flowName, currentStage);
+  const stage = getStage(deps, flowName, currentStage);
   if (stage?.on_outcome && outcome) {
     const target = stage.on_outcome[outcome];
     if (target) {
       // Validate that target stage exists in the flow
-      const targetStage = getStage(app, flowName, target);
+      const targetStage = getStage(deps, flowName, target);
       if (targetStage) return target;
     }
   }
-  return getNextStage(app, flowName, currentStage);
+  return getNextStage(deps, flowName, currentStage);
 }
 
 // ── Gate evaluation ─────────────────────────────────────────────────────────
 
 export function evaluateGate(
-  app: AppContext,
+  deps: OrchestrationDeps,
   flowName: string,
   stageName: string,
   session: { error?: string | null },
 ): { canProceed: boolean; reason: string } {
-  const stage = getStage(app, flowName, stageName);
+  const stage = getStage(deps, flowName, stageName);
   if (!stage) return { canProceed: false, reason: `Stage '${stageName}' not found` };
 
   // Default to "auto" when the YAML omits `gate:`. The previous strict default
@@ -435,8 +439,8 @@ export interface StageAction {
   optional?: boolean;
 }
 
-export function getStageAction(app: AppContext, flowName: string, stageName: string): StageAction {
-  const stage = getStage(app, flowName, stageName);
+export function getStageAction(deps: OrchestrationDeps, flowName: string, stageName: string): StageAction {
+  const stage = getStage(deps, flowName, stageName);
   if (!stage) return { type: "unknown" };
 
   if (stage.for_each !== undefined) {
@@ -690,8 +694,12 @@ export function getReadyStages(stages: StageDefinition[], completedStages: strin
 // ── Template substitution ────────────────────────────────────────────────────
 
 /** Resolve a flow by rendering {{ var }} placeholders in stage fields. */
-export function resolveFlow(app: AppContext, flowName: string, vars: Record<string, string>): FlowDefinition | null {
-  const flow = loadFlow(app, flowName);
+export function resolveFlow(
+  deps: OrchestrationDeps,
+  flowName: string,
+  vars: Record<string, string>,
+): FlowDefinition | null {
+  const flow = loadFlow(deps, flowName);
   if (!flow) return null;
 
   return {

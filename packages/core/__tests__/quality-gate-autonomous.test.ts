@@ -15,6 +15,7 @@ import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { AppContext } from "../app.js";
 import * as flow from "../services/flow.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 
@@ -44,45 +45,45 @@ function createWorkdirWithVerify(scripts: string[]): string {
 
 describe("autonomous-sdlc flow structure", () => {
   it("has a verify stage", () => {
-    const stages = flow.getStages(app, "autonomous-sdlc");
+    const stages = flow.getStages(depsFromApp(app), "autonomous-sdlc");
     const verifyStage = stages.find((s) => s.name === "verify");
     expect(verifyStage).toBeTruthy();
   });
 
   it("verify stage uses the verifier agent", () => {
-    const stage = flow.getStage(app, "autonomous-sdlc", "verify");
+    const stage = flow.getStage(depsFromApp(app), "autonomous-sdlc", "verify");
     expect(stage).toBeTruthy();
     expect(stage!.agent).toBe("verifier");
   });
 
   it("verify stage has auto gate", () => {
-    const stage = flow.getStage(app, "autonomous-sdlc", "verify");
+    const stage = flow.getStage(depsFromApp(app), "autonomous-sdlc", "verify");
     expect(stage!.gate).toBe("auto");
   });
 
   it("verify stage depends on implement", () => {
-    const stage = flow.getStage(app, "autonomous-sdlc", "verify");
+    const stage = flow.getStage(depsFromApp(app), "autonomous-sdlc", "verify");
     expect(stage!.depends_on).toEqual(["implement"]);
   });
 
   it("review stage depends on verify (not implement)", () => {
-    const stage = flow.getStage(app, "autonomous-sdlc", "review");
+    const stage = flow.getStage(depsFromApp(app), "autonomous-sdlc", "review");
     expect(stage!.depends_on).toEqual(["verify"]);
   });
 
   it("stages are ordered: plan -> implement -> verify -> review -> pr -> merge", () => {
-    const stages = flow.getStages(app, "autonomous-sdlc");
+    const stages = flow.getStages(depsFromApp(app), "autonomous-sdlc");
     const names = stages.map((s) => s.name);
     expect(names).toEqual(["plan", "implement", "verify", "review", "pr", "merge"]);
   });
 
   it("verify stage has on_failure retry", () => {
-    const stage = flow.getStage(app, "autonomous-sdlc", "verify");
+    const stage = flow.getStage(depsFromApp(app), "autonomous-sdlc", "verify");
     expect(stage!.on_failure).toBe("retry(2)");
   });
 
   it("verify stage has a task prompt", () => {
-    const stage = flow.getStage(app, "autonomous-sdlc", "verify");
+    const stage = flow.getStage(depsFromApp(app), "autonomous-sdlc", "verify");
     expect(stage!.task).toBeTruthy();
     expect(stage!.task).toContain("verification");
   });
@@ -92,12 +93,12 @@ describe("autonomous-sdlc flow structure", () => {
 
 describe("autonomous-sdlc DAG validation", () => {
   it("DAG is valid (no cycles, all refs exist)", () => {
-    const stages = flow.getStages(app, "autonomous-sdlc");
+    const stages = flow.getStages(depsFromApp(app), "autonomous-sdlc");
     expect(() => flow.validateDAG(stages)).not.toThrow();
   });
 
   it("implement is ready after plan completes", () => {
-    const stages = flow.getStages(app, "autonomous-sdlc");
+    const stages = flow.getStages(depsFromApp(app), "autonomous-sdlc");
     const ready = flow.getReadyStages(stages, ["plan"]);
     const readyNames = ready.map((s) => s.name);
     expect(readyNames).toContain("implement");
@@ -105,7 +106,7 @@ describe("autonomous-sdlc DAG validation", () => {
   });
 
   it("verify is ready after implement completes", () => {
-    const stages = flow.getStages(app, "autonomous-sdlc");
+    const stages = flow.getStages(depsFromApp(app), "autonomous-sdlc");
     const ready = flow.getReadyStages(stages, ["plan", "implement"]);
     const readyNames = ready.map((s) => s.name);
     expect(readyNames).toContain("verify");
@@ -113,14 +114,14 @@ describe("autonomous-sdlc DAG validation", () => {
   });
 
   it("review is ready after verify completes", () => {
-    const stages = flow.getStages(app, "autonomous-sdlc");
+    const stages = flow.getStages(depsFromApp(app), "autonomous-sdlc");
     const ready = flow.getReadyStages(stages, ["plan", "implement", "verify"]);
     const readyNames = ready.map((s) => s.name);
     expect(readyNames).toContain("review");
   });
 
   it("review is NOT ready if only implement completes (verify missing)", () => {
-    const stages = flow.getStages(app, "autonomous-sdlc");
+    const stages = flow.getStages(depsFromApp(app), "autonomous-sdlc");
     const ready = flow.getReadyStages(stages, ["plan", "implement"]);
     const readyNames = ready.map((s) => s.name);
     expect(readyNames).not.toContain("review");
@@ -407,7 +408,7 @@ describe("quality gate observability", async () => {
 
 describe("autonomous flow (single stage, no verify)", async () => {
   it("autonomous flow has no verify stage", () => {
-    const stages = flow.getStages(app, "autonomous");
+    const stages = flow.getStages(depsFromApp(app), "autonomous");
     const verifyStage = stages.find((s) => s.name === "verify");
     expect(verifyStage).toBeFalsy();
   });

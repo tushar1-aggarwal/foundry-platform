@@ -108,8 +108,8 @@ function buildSessionLifecycleDeps(c: SessionLifecycleCradle): SessionLifecycleD
     statusPollers: c.statusPollers,
     dispatch: (id) => c.app.dispatchService.dispatch(id),
     removeWorktree: (session) => removeSessionWorktree(depsFromApp(c.app), session),
-    deleteCredsSecret: (session, compute) => deletePerSessionCredsSecret(c.app, session, compute),
-    gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
+    deleteCredsSecret: (session, compute) => deletePerSessionCredsSecret(depsFromApp(c.app), session, compute),
+    gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(depsFromApp(c.app), computeName ?? null),
     resolveComputeTarget: (session) => c.app.resolveComputeTarget(session),
     advance: (id, force) => c.app.stageAdvance.advance(id, force),
     cleanupSession: async (session) => {
@@ -257,9 +257,10 @@ export function registerServices(
 
           // Flow + task-building callbacks
           ...buildFlowCallbacks(c.app),
-          buildTask: (session, stage, agentName) => buildTaskWithHandoff(c.app, session, stage, agentName),
-          extractSubtasks: (session) => extractSubtasks(c.app, session),
-          materializeClaudeAuth: (session, compute) => materializeClaudeAuthForDispatch(c.app, session, compute),
+          buildTask: (session, stage, agentName) => buildTaskWithHandoff(depsFromApp(c.app), session, stage, agentName),
+          extractSubtasks: (session) => extractSubtasks(depsFromApp(c.app), session),
+          materializeClaudeAuth: (session, compute) =>
+            materializeClaudeAuthForDispatch(depsFromApp(c.app), session, compute),
           resolveAgent: (agentName, sessionVars, opts) =>
             agentRegistry.resolveAgentWithRuntime(c.app, agentName, sessionVars, opts),
           buildClaudeArgs: (agent, opts) =>
@@ -323,8 +324,9 @@ export function registerServices(
           recordSessionUsage: (session, usage, provider, source) =>
             c.app.sessionCreator.recordUsage(session, usage, provider, source),
           sessionClone: (id, newName) => c.app.sessionForker.clone(id, newName),
-          capturePlanMd: (session) => capturePlanMdIfPresent(c.app, session),
-          gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
+          capturePlanMd: (session) => capturePlanMdIfPresent(depsFromApp(c.app), session),
+          gcComputeIfTemplate: (computeName) =>
+            garbageCollectComputeIfTemplate(depsFromApp(c.app), computeName ?? null),
           saveCheckpoint: (sessionId) => saveCheckpoint({ sessions: c.sessions, events: c.events }, sessionId),
           ...buildFlowCallbacks(c.app),
           // Stop the previous stage's poller before sessions.update clears

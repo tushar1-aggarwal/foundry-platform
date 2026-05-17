@@ -419,7 +419,7 @@ export const claudeCodeExecutor: Executor = {
       const { resolveTargetAndHandle } = await import("../services/dispatch/target-resolver.js");
       const { runTargetLifecycle } = await import("../services/dispatch/target-lifecycle.js");
 
-      const { target: lifecycleTarget, handle } = await resolveTargetAndHandle(app, session);
+      const { target: lifecycleTarget, handle } = await resolveTargetAndHandle(depsFromApp(app), session);
       if (!lifecycleTarget || !handle) {
         return { ok: false, handle: "", message: "no compute target resolved for remote dispatch" };
       }
@@ -462,7 +462,7 @@ export const claudeCodeExecutor: Executor = {
       // the in-pod arkd has no git credential helper. `buildAuthedHttpsUrl`
       // returns the URL unchanged for non-https or unknown hosts.
       const rawCloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo ?? null;
-      const cloneSource = rawCloneSource ? await buildAuthedHttpsUrl(app, session, rawCloneSource) : null;
+      const cloneSource = rawCloneSource ? await buildAuthedHttpsUrl(depsFromApp(app), session, rawCloneSource) : null;
 
       log("Launching on remote...");
       // `remoteWorkdir` is null on the no-resolveWorkdir fallback (so

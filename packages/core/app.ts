@@ -234,7 +234,8 @@ export class AppContext {
     void (async () => {
       try {
         const { reconcileOrphanedCredsSecrets } = await import("./services/creds-secret-reconciler.js");
-        await reconcileOrphanedCredsSecrets(this);
+        const { depsFromApp } = await import("./services/deps.js");
+        await reconcileOrphanedCredsSecrets(depsFromApp(this));
       } catch (e: any) {
         const { logWarn } = await import("./observability/structured-log.js");
         logWarn("session", `creds-reconciler: boot invocation failed: ${e?.message ?? e}`);

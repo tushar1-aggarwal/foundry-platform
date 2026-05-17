@@ -49,7 +49,7 @@ export async function spawnSubagent(
   await deps.sessions.update(session.id, { agent: agentName, parent_id: parentId });
 
   // Set first stage so the subagent is dispatchable
-  const firstStage = flow.getFirstStage(deps.app!, "quick");
+  const firstStage = flow.getFirstStage(deps, "quick");
   if (firstStage) {
     await deps.sessions.update(session.id, { stage: firstStage, status: "ready" });
   }

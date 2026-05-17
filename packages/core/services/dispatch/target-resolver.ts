@@ -40,7 +40,7 @@
  * after a multi-stage dispatch read the methodless JSON back out.
  */
 
-import type { AppContext } from "../../app.js";
+import type { OrchestrationDeps } from "../deps.js";
 import type { Session } from "../../../types/index.js";
 import type { ComputeHandle, PersistedComputeHandleState } from "../../compute/types.js";
 import type { ComputeTarget } from "../../compute/compute-target.js";
@@ -52,8 +52,8 @@ export interface ResolvedTarget {
   handle: ComputeHandle | null;
 }
 
-export async function resolveTargetAndHandle(app: AppContext, session: Session): Promise<ResolvedTarget> {
-  const { target, compute } = await app.resolveComputeTarget(session);
+export async function resolveTargetAndHandle(deps: OrchestrationDeps, session: Session): Promise<ResolvedTarget> {
+  const { target, compute } = await deps.app!.resolveComputeTarget(session);
   if (!target) return { target: null, handle: null };
 
   const persistedState = readPersistedHandleState(session);
@@ -78,7 +78,7 @@ export async function resolveTargetAndHandle(app: AppContext, session: Session):
       config: (compute.config as Record<string, unknown> | null) ?? {},
     });
     if (existing) {
-      await persistHandleState(app, session, existing);
+      await persistHandleState(deps, session, existing);
       logInfo(
         "dispatch",
         `attached to existing compute for session ${session.id} (${existing.kind}/${existing.name})`,
@@ -94,7 +94,7 @@ export async function resolveTargetAndHandle(app: AppContext, session: Session):
   // Pool consultation lives inside ComputeTarget.provision -- callers don't
   // need to know whether the compute was pooled or directly provisioned.
   const handle = await provisionStep(
-    app,
+    deps,
     session.id,
     "compute-provision",
     () => target.provision({ config: (compute?.config as Record<string, unknown> | undefined) ?? undefined }),
@@ -102,7 +102,7 @@ export async function resolveTargetAndHandle(app: AppContext, session: Session):
       context: { computeKind: target.compute.kind },
     },
   );
-  await persistHandleState(app, session, handle);
+  await persistHandleState(deps, session, handle);
   logInfo("dispatch", `provisioned new handle for session ${session.id} (${handle.kind}/${handle.name})`, {
     sessionId: session.id,
     computeKind: handle.kind,
@@ -130,13 +130,13 @@ function readPersistedHandleState(session: Session): PersistedComputeHandleState
   return { kind: stored.kind, name: stored.name, meta: (stored.meta as Record<string, unknown> | undefined) ?? {} };
 }
 
-async function persistHandleState(app: AppContext, session: Session, handle: ComputeHandle): Promise<void> {
+async function persistHandleState(deps: OrchestrationDeps, session: Session, handle: ComputeHandle): Promise<void> {
   // Strip method closures before persisting -- they can't survive JSON
   // serialisation, and writing them in just produces undefined fields that
   // confuse later readers. Persist only the data fields; rehydrateHandle
   // re-attaches behaviour on read.
   const state: PersistedComputeHandleState = { kind: handle.kind, name: handle.name, meta: handle.meta };
-  await app.sessions.update(session.id, {
+  await deps.sessions.update(session.id, {
     config: { ...((session.config as object | null) ?? {}), compute_handle: state },
   });
 }

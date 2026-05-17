@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { AppContext } from "../../app.js";
 import { setApp, clearApp } from "../../__tests__/test-helpers.js";
+import { depsFromApp } from "../deps.js";
 import {
   materializeClaudeAuthForDispatch,
   deletePerSessionCredsSecret,
@@ -119,7 +120,7 @@ describe("materializeClaudeAuthForDispatch", () => {
     const api = new StubK8sApi();
     const fetched = await app.sessions.get(session.id);
     const compute = await app.computes.get("k8s-target");
-    const result = await materializeClaudeAuthForDispatch(app, fetched!, compute, {
+    const result = await materializeClaudeAuthForDispatch(depsFromApp(app), fetched!, compute, {
       k8sApiFactory: async () => api,
     });
 
@@ -161,7 +162,7 @@ describe("materializeClaudeAuthForDispatch", () => {
 
     const fetched = await app.sessions.get(session.id);
     const compute = await app.computes.get("k8s-target");
-    const result = await materializeClaudeAuthForDispatch(app, fetched!, compute, {
+    const result = await materializeClaudeAuthForDispatch(depsFromApp(app), fetched!, compute, {
       k8sApiFactory: async () => api,
     });
     expect(result.credsSecretName).toBe(secretName);
@@ -180,7 +181,7 @@ describe("materializeClaudeAuthForDispatch", () => {
     const api = new StubK8sApi();
     const fetched = await app.sessions.get(session.id);
     const compute = await app.computes.get("k8s-target");
-    const result = await materializeClaudeAuthForDispatch(app, fetched!, compute, {
+    const result = await materializeClaudeAuthForDispatch(depsFromApp(app), fetched!, compute, {
       k8sApiFactory: async () => api,
     });
     expect(result.env.ANTHROPIC_API_KEY).toBe("sk-real");
@@ -194,7 +195,7 @@ describe("materializeClaudeAuthForDispatch", () => {
     const api = new StubK8sApi();
     const fetched = await app.sessions.get(session.id);
     const compute = await app.computes.get("k8s-target");
-    const result = await materializeClaudeAuthForDispatch(app, fetched!, compute, {
+    const result = await materializeClaudeAuthForDispatch(depsFromApp(app), fetched!, compute, {
       k8sApiFactory: async () => api,
     });
     expect(result.env).toEqual({});
@@ -221,7 +222,7 @@ describe("materializeClaudeAuthForDispatch", () => {
     const api = new StubK8sApi();
     const fetched = await app.sessions.get(session.id);
     const compute = await app.computes.get("docker-target");
-    const result = await materializeClaudeAuthForDispatch(app, fetched!, compute, {
+    const result = await materializeClaudeAuthForDispatch(depsFromApp(app), fetched!, compute, {
       k8sApiFactory: async () => api,
     });
     expect(result.credsSecretName).toBeNull();
@@ -248,10 +249,10 @@ describe("deletePerSessionCredsSecret", () => {
     const api = new StubK8sApi();
     const fetched = await app.sessions.get(session.id);
     const compute = await app.computes.get("k8s-target");
-    await materializeClaudeAuthForDispatch(app, fetched!, compute, { k8sApiFactory: async () => api });
+    await materializeClaudeAuthForDispatch(depsFromApp(app), fetched!, compute, { k8sApiFactory: async () => api });
 
     const refetched = await app.sessions.get(session.id);
-    await deletePerSessionCredsSecret(app, refetched!, compute, { k8sApiFactory: async () => api });
+    await deletePerSessionCredsSecret(depsFromApp(app), refetched!, compute, { k8sApiFactory: async () => api });
     expect(api.calls.filter((c) => c.op === "delete")).toHaveLength(1);
 
     const afterTeardown = await app.sessions.get(session.id);
@@ -270,7 +271,7 @@ describe("deletePerSessionCredsSecret", () => {
     const compute = await app.computes.get("k8s-target");
     const api = new StubK8sApi();
     // Should not throw.
-    await deletePerSessionCredsSecret(app, fetched!, compute, { k8sApiFactory: async () => api });
+    await deletePerSessionCredsSecret(depsFromApp(app), fetched!, compute, { k8sApiFactory: async () => api });
     // Still cleared the stash.
     const after = await app.sessions.get(session.id);
     expect(after!.config?.creds_secret_name ?? null).toBeNull();
@@ -282,7 +283,7 @@ describe("deletePerSessionCredsSecret", () => {
     const api = new StubK8sApi();
     const fetched = await app.sessions.get(session.id);
     const compute = await app.computes.get("k8s-target");
-    await deletePerSessionCredsSecret(app, fetched!, compute, { k8sApiFactory: async () => api });
+    await deletePerSessionCredsSecret(depsFromApp(app), fetched!, compute, { k8sApiFactory: async () => api });
     expect(api.calls).toHaveLength(0);
   });
 });

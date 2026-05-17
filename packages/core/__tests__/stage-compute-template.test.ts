@@ -17,6 +17,7 @@ import { join } from "path";
 import YAML from "yaml";
 import { AppContext } from "../app.js";
 import { getStage, getStages } from "../services/flow.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 
@@ -60,7 +61,7 @@ describe("StageDefinition compute_template field", () => {
       ],
     });
 
-    const stages = getStages(app, "tmpl-flow");
+    const stages = getStages(depsFromApp(app), "tmpl-flow");
     expect(stages).toHaveLength(2);
     expect(stages[0].compute_template).toBe("fast-docker");
     expect(stages[1].compute_template).toBe("heavy-ec2");
@@ -72,7 +73,7 @@ describe("StageDefinition compute_template field", () => {
       stages: [{ name: "work", agent: "worker", gate: "auto" }],
     });
 
-    const stage = getStage(app, "no-tmpl-flow", "work");
+    const stage = getStage(depsFromApp(app), "no-tmpl-flow", "work");
     expect(stage).not.toBeNull();
     expect(stage!.compute_template).toBeUndefined();
   });
@@ -87,7 +88,7 @@ describe("StageDefinition compute_template field", () => {
       ],
     });
 
-    const stages = getStages(app, "mixed-flow");
+    const stages = getStages(depsFromApp(app), "mixed-flow");
     expect(stages[0].compute_template).toBeUndefined();
     expect(stages[1].compute_template).toBe("gpu-large");
     expect(stages[2].compute_template).toBeUndefined();
@@ -228,7 +229,7 @@ describe("flow with per-stage compute templates", () => {
       ],
     });
 
-    const stage = getStage(app, "full-stage-flow", "impl");
+    const stage = getStage(depsFromApp(app), "full-stage-flow", "impl");
     expect(stage).not.toBeNull();
     expect(stage!.compute_template).toBe("sandbox");
     expect(stage!.model).toBe("opus");

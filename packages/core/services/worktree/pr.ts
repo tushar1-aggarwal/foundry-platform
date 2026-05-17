@@ -438,12 +438,12 @@ export async function createWorktreePR(
     // Raw tokens are also resolved here for log-redaction (`replaceAll`
     // below) and for the REST API path that creates the GitHub PR.
     let originalOriginUrl: string | null = null;
-    const githubToken = await resolveGithubToken(deps.app!, session);
-    const bitbucketToken = await resolveBitbucketToken(deps.app!, session);
+    const githubToken = await resolveGithubToken(deps, session);
+    const bitbucketToken = await resolveBitbucketToken(deps, session);
     if (routing.remote) {
       const probe = await readOriginUrl(deps, session);
       if (probe) {
-        const authedUrl = await buildAuthedHttpsUrl(deps.app!, session, probe);
+        const authedUrl = await buildAuthedHttpsUrl(deps, session, probe);
         if (authedUrl !== probe) {
           originalOriginUrl = probe;
           try {
@@ -592,7 +592,7 @@ export async function createWorktreePR(
       // because it talks to api.github.com over HTTPS instead of shelling
       // `gh` on the worker. Auth is `GITHUB_TOKEN`; the worker doesn't
       // need `gh` installed and we don't depend on stdout parsing.
-      const githubToken = await resolveGithubToken(deps.app!, session);
+      const githubToken = await resolveGithubToken(deps, session);
       const ownerRepo = parseGithubOwnerRepoFromUrl(originUrl);
       if (githubToken && ownerRepo) {
         const restDeps: GithubDeps = { token: githubToken };
@@ -648,8 +648,8 @@ export async function createWorktreePR(
       // path below produces, which leaves no PR until a human clicks
       // through the Bitbucket UI). Auth is HTTP Basic with username:token.
       const [bbToken, bbUser] = await Promise.all([
-        resolveBitbucketToken(deps.app!, session),
-        resolveBitbucketUsername(deps.app!, session),
+        resolveBitbucketToken(deps, session),
+        resolveBitbucketUsername(deps, session),
       ]);
       const wsRepo = parseBitbucketWorkspaceRepoFromUrl(originUrl);
       if (bbToken && bbUser && wsRepo) {
@@ -813,7 +813,7 @@ export async function mergeWorktreePR(
   // authenticated on the worker, surfaces typed errors instead of stdout
   // soup. Falls back to the legacy `gh pr merge` only when no
   // GITHUB_TOKEN is available.
-  const githubToken = await resolveGithubToken(deps.app!, session);
+  const githubToken = await resolveGithubToken(deps, session);
   if (githubToken) {
     const result = await mergePullRequest(
       { pr_url: prUrl, method, delete_branch: deleteAfter },

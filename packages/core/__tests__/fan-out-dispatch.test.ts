@@ -15,7 +15,7 @@ describe("extractSubtasks", async () => {
   it("returns default implementation + tests when no PLAN.md exists", async () => {
     const app = getApp();
     const session = await app.sessions.create({ summary: "Build auth system", flow: "bare" });
-    const subtasks = await extractSubtasks(app, session);
+    const subtasks = await extractSubtasks(depsFromApp(app), session);
 
     expect(subtasks).toHaveLength(2);
     expect(subtasks[0].name).toBe("implementation");
@@ -47,7 +47,7 @@ describe("extractSubtasks", async () => {
       ].join("\n"),
     );
 
-    const subtasks = await extractSubtasks(app, session);
+    const subtasks = await extractSubtasks(depsFromApp(app), session);
     expect(subtasks).toHaveLength(3);
     expect(subtasks[0].name).toBe("step-1");
     expect(subtasks[0].task).toContain("Set up database schema");
@@ -65,7 +65,7 @@ describe("extractSubtasks", async () => {
     mkdirSync(wtDir, { recursive: true });
     writeFileSync(join(wtDir, "PLAN.md"), "# Plan\n\n## Step 1: Fix the bug\nJust do it.\n");
 
-    const subtasks = await extractSubtasks(app, session);
+    const subtasks = await extractSubtasks(depsFromApp(app), session);
     expect(subtasks).toHaveLength(2);
     expect(subtasks[0].name).toBe("implementation");
   });
@@ -73,7 +73,7 @@ describe("extractSubtasks", async () => {
   it("uses 'the task' when session has no summary", async () => {
     const app = getApp();
     const session = await app.sessions.create({ flow: "bare" });
-    const subtasks = await extractSubtasks(app, session);
+    const subtasks = await extractSubtasks(depsFromApp(app), session);
 
     expect(subtasks[0].task).toContain("the task");
   });
@@ -89,7 +89,7 @@ describe("extractSubtasks", async () => {
       ["# Plan", "", "## 1. First thing", "Details.", "", "## 2. Second thing", "More details."].join("\n"),
     );
 
-    const subtasks = await extractSubtasks(app, session);
+    const subtasks = await extractSubtasks(depsFromApp(app), session);
     expect(subtasks).toHaveLength(2);
     expect(subtasks[0].task).toContain("First thing");
     expect(subtasks[1].task).toContain("Second thing");

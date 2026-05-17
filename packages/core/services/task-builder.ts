@@ -1,7 +1,7 @@
 /**
  * Task/prompt construction -- format task headers, build handoff context, extract subtasks.
  *
- * Extracted from session-orchestration.ts. All functions take app: AppContext as first arg.
+ * Extracted from session-orchestration.ts. All functions take OrchestrationDeps as first arg.
  */
 
 import { existsSync } from "fs";
@@ -11,7 +11,7 @@ import { execFile } from "child_process";
 
 const execFileAsync = promisify(execFile);
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import type { Session } from "../../types/index.js";
 import * as agentRegistry from "../agent/agent.js";
 import { buildSessionVars } from "../template.js";
@@ -28,13 +28,18 @@ export function sessionAsVars(session: Session): Record<string, unknown> {
 }
 
 /** Build the task header: agent role, stage description, and reporting instructions. */
-export function formatTaskHeader(app: AppContext, session: Session, stage: string, agentName: string): string[] {
+export function formatTaskHeader(
+  deps: OrchestrationDeps,
+  session: Session,
+  stage: string,
+  agentName: string,
+): string[] {
   const parts: string[] = [];
   const isBare = session.flow === "bare";
 
   // Get resolved stage with substituted variables
   const vars = buildSessionVars(sessionAsVars(session));
-  const resolved = resolveFlow(app, session.flow, vars);
+  const resolved = resolveFlow(deps, session.flow, vars);
   const stageDef = resolved?.stages.find((s) => s.name === stage);
 
   // Every autonomously-dispatched session (including bare) gets an actionable
@@ -61,7 +66,7 @@ export function formatTaskHeader(app: AppContext, session: Session, stage: strin
   // for --runtime overrides) and append its prompt verbatim. Missing YAML =
   // no completion ritual appended.
   const projectRoot = agentRegistry.findProjectRoot(session.workdir || session.repo) ?? undefined;
-  const agent = app.agents.get(agentName, projectRoot);
+  const agent = deps.agents.get(agentName, projectRoot);
   // The runtime override (via `scoping_overrides`) is applied by
   // `applyScopingRuntimeHint` in dispatch-core BEFORE task-builder runs,
   // so `agent.runtime` already reflects any override here. The legacy
@@ -69,7 +74,7 @@ export function formatTaskHeader(app: AppContext, session: Session, stage: strin
   // had -- dropped.
   const effectiveRuntime = agent?.runtime;
   if (effectiveRuntime) {
-    const runtime = app.runtimes.get(effectiveRuntime);
+    const runtime = deps.runtimes.get(effectiveRuntime);
     if (runtime?.task_prompt) {
       parts.push(runtime.task_prompt);
     }
@@ -88,7 +93,7 @@ export function formatTaskHeader(app: AppContext, session: Session, stage: strin
  * dispatch every session row ends up with locators (see
  * `materializeAttachments` in worktree/setup.ts).
  */
-async function renderAttachmentsBlock(app: AppContext, session: Session): Promise<string[]> {
+async function renderAttachmentsBlock(deps: OrchestrationDeps, session: Session): Promise<string[]> {
   const attachments = (session.config as any)?.attachments as
     | Array<{ name: string; content?: string; locator?: string; type?: string }>
     | undefined;
@@ -109,7 +114,7 @@ async function renderAttachmentsBlock(app: AppContext, session: Session): Promis
     let content: string | null = null;
     if (att.locator) {
       try {
-        const got = await app.blobStore.get(att.locator, session.tenant_id);
+        const got = await deps.blobStore.get(att.locator, session.tenant_id);
         content = got.bytes.toString("utf-8");
       } catch (e: any) {
         logWarn("session", `attachment preview fetch failed for ${att.name}: ${e?.message ?? e}`);
@@ -129,11 +134,11 @@ async function renderAttachmentsBlock(app: AppContext, session: Session): Promis
 }
 
 /** Append previous stage context: completed stages, PLAN.md, and recent git log. */
-export async function appendPreviousStageContext(app: AppContext, session: Session): Promise<string[]> {
+export async function appendPreviousStageContext(deps: OrchestrationDeps, session: Session): Promise<string[]> {
   const parts: string[] = [];
 
   // Previous stage context
-  const events = await app.events.list(session.id);
+  const events = await deps.events.list(session.id);
   const completed = events.filter((e) => e.type === "stage_completed");
   if (completed.length) {
     parts.push("\n## Previous stages:");
@@ -144,11 +149,11 @@ export async function appendPreviousStageContext(app: AppContext, session: Sessi
   }
 
   // Attachment preview (fetches from BlobStore for uploaded attachments)
-  parts.push(...(await renderAttachmentsBlock(app, session)));
+  parts.push(...(await renderAttachmentsBlock(deps, session)));
 
   // Check for PLAN.md (BlobStore locator preferred, worktree FS fallback)
-  const wtDir = join(app.config.dirs.worktrees, session.id);
-  const plan = await readPlanMd(app, session);
+  const wtDir = join(deps.config.dirs.worktrees, session.id);
+  const plan = await readPlanMd(deps, session);
   if (plan !== null) {
     const trimmed = plan.length > 3000 ? plan.slice(0, 3000) + "\n... (truncated)" : plan;
     parts.push(`\n## PLAN.md:\n${trimmed}`);
@@ -178,22 +183,22 @@ export async function appendPreviousStageContext(app: AppContext, session: Sessi
 }
 
 export async function buildTaskWithHandoff(
-  app: AppContext,
+  deps: OrchestrationDeps,
   session: Session,
   stage: string,
   agentName: string,
 ): Promise<string> {
-  const header = formatTaskHeader(app, session, stage, agentName);
-  const context = await appendPreviousStageContext(app, session);
+  const header = formatTaskHeader(deps, session, stage, agentName);
+  const context = await appendPreviousStageContext(deps, session);
 
   // Apply message filter if agent config specifies one
   try {
     const projectRoot = agentRegistry.findProjectRoot(session.workdir || session.repo) ?? undefined;
-    const agent = app.agents.get(agentName, projectRoot);
+    const agent = deps.agents.get(agentName, projectRoot);
     if (agent) {
       const mFilter = parseMessageFilter(agent);
       if (mFilter) {
-        const messages = (await app.messages.list(session.id)).map((m) => ({
+        const messages = (await deps.messages.list(session.id)).map((m) => ({
           role: m.role,
           content: m.content,
           timestamp: m.created_at,
@@ -214,9 +219,12 @@ export async function buildTaskWithHandoff(
   return [...header, ...context].join("\n");
 }
 
-export async function extractSubtasks(app: AppContext, session: Session): Promise<{ name: string; task: string }[]> {
+export async function extractSubtasks(
+  deps: OrchestrationDeps,
+  session: Session,
+): Promise<{ name: string; task: string }[]> {
   // PLAN.md fallback: BlobStore locator first, then worktree FS
-  const plan = await readPlanMd(app, session);
+  const plan = await readPlanMd(deps, session);
   if (plan) {
     const steps = [...plan.matchAll(/^##\s+(?:Step\s+)?(\d+)[.:]\s*(.+)/gm)];
     if (steps.length >= 2) {

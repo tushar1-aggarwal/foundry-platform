@@ -24,7 +24,7 @@
  * rows that don't yet surface through `clusters`.
  */
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import { logDebug, logInfo, logWarn } from "../observability/structured-log.js";
 import type { K8sSecretsApi } from "./dispatch-claude-auth.js";
 
@@ -57,7 +57,7 @@ export interface ClusterTarget {
  * whole fleet.
  */
 export async function reconcileOrphanedCredsSecrets(
-  app: AppContext,
+  deps: OrchestrationDeps,
   opts?: {
     /**
      * Injectable cluster enumerator. Tests supply their own list; prod
@@ -70,7 +70,7 @@ export async function reconcileOrphanedCredsSecrets(
   const result: ReconcileResult = { deleted: 0, kept: 0, errors: [] };
   let targets: ClusterTarget[] = [];
   try {
-    targets = await (opts?.clusterTargets ?? (() => defaultClusterTargets(app)))();
+    targets = await (opts?.clusterTargets ?? (() => defaultClusterTargets(deps)))();
   } catch (e: any) {
     const msg = `enumerate-clusters: ${e?.message ?? e}`;
     logWarn("session", `creds-reconciler: ${msg}`);
@@ -80,7 +80,7 @@ export async function reconcileOrphanedCredsSecrets(
 
   for (const target of targets) {
     try {
-      await reconcileOneCluster(app, target, result);
+      await reconcileOneCluster(deps, target, result);
     } catch (e: any) {
       const msg = `${target.clusterName}/${target.namespace}: ${e?.message ?? e}`;
       logWarn("session", `creds-reconciler: ${msg}`);
@@ -97,7 +97,11 @@ export async function reconcileOrphanedCredsSecrets(
   return result;
 }
 
-async function reconcileOneCluster(app: AppContext, target: ClusterTarget, result: ReconcileResult): Promise<void> {
+async function reconcileOneCluster(
+  deps: OrchestrationDeps,
+  target: ClusterTarget,
+  result: ReconcileResult,
+): Promise<void> {
   const { api, namespace, clusterName } = target;
   if (!api.listNamespacedSecret) {
     // Conservative: if the client we were handed has no list method we
@@ -138,7 +142,7 @@ async function reconcileOneCluster(app: AppContext, target: ClusterTarget, resul
 
     let session: { status?: string } | null = null;
     try {
-      session = (await app.sessions.get(sessionId)) as { status?: string } | null;
+      session = (await deps.sessions.get(sessionId)) as { status?: string } | null;
     } catch (e: any) {
       // DB read failure: count as error but don't delete (err on the side
       // of retention; next boot will try again).
@@ -201,8 +205,8 @@ async function tryDelete(
 // tenant context exists); those clusters will be left to the periodic
 // janitor.
 
-async function defaultClusterTargets(app: AppContext): Promise<ClusterTarget[]> {
-  const clusters = app.config?.compute?.clusters ?? [];
+async function defaultClusterTargets(deps: OrchestrationDeps): Promise<ClusterTarget[]> {
+  const clusters = deps.config?.compute?.clusters ?? [];
   if (!clusters.length) {
     logDebug("session", "creds-reconciler: no clusters in config.compute.clusters; skipping");
     return [];

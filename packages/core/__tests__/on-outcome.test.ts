@@ -15,6 +15,7 @@ import { mkdirSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import YAML from "yaml";
 import { getStage, getNextStage, resolveNextStage, validateDAG, type StageDefinition } from "../services/flow.js";
+import { depsFromApp } from "../services/deps.js";
 import { AppContext } from "../app.js";
 
 let app: AppContext;
@@ -47,8 +48,8 @@ describe("resolveNextStage", () => {
         { name: "deploy", agent: "closer", gate: "auto" },
       ],
     });
-    expect(resolveNextStage(app, "outcome-flow", "review", "approved")).toBe("deploy");
-    expect(resolveNextStage(app, "outcome-flow", "review", "rejected")).toBe("revise");
+    expect(resolveNextStage(depsFromApp(app), "outcome-flow", "review", "approved")).toBe("deploy");
+    expect(resolveNextStage(depsFromApp(app), "outcome-flow", "review", "rejected")).toBe("revise");
   });
 
   it("falls back to linear next when outcome doesn't match any key", () => {
@@ -61,7 +62,7 @@ describe("resolveNextStage", () => {
       ],
     });
     // "unknown_outcome" is not in on_outcome map -- falls back to linear next ("fix")
-    expect(resolveNextStage(app, "outcome-fallback", "check", "unknown_outcome")).toBe("fix");
+    expect(resolveNextStage(depsFromApp(app), "outcome-fallback", "check", "unknown_outcome")).toBe("fix");
   });
 
   it("falls back to linear next when no outcome provided", () => {
@@ -73,8 +74,8 @@ describe("resolveNextStage", () => {
         { name: "deploy", agent: "closer", gate: "auto" },
       ],
     });
-    expect(resolveNextStage(app, "outcome-no-arg", "review")).toBe("revise");
-    expect(resolveNextStage(app, "outcome-no-arg", "review", undefined)).toBe("revise");
+    expect(resolveNextStage(depsFromApp(app), "outcome-no-arg", "review")).toBe("revise");
+    expect(resolveNextStage(depsFromApp(app), "outcome-no-arg", "review", undefined)).toBe("revise");
   });
 
   it("falls back to linear next when stage has no on_outcome", () => {
@@ -85,8 +86,8 @@ describe("resolveNextStage", () => {
         { name: "implement", agent: "implementer", gate: "auto" },
       ],
     });
-    expect(resolveNextStage(app, "no-outcome", "plan")).toBe("implement");
-    expect(resolveNextStage(app, "no-outcome", "plan", "some_outcome")).toBe("implement");
+    expect(resolveNextStage(depsFromApp(app), "no-outcome", "plan")).toBe("implement");
+    expect(resolveNextStage(depsFromApp(app), "no-outcome", "plan", "some_outcome")).toBe("implement");
   });
 
   it("returns null at the last stage even with outcome", () => {
@@ -95,7 +96,7 @@ describe("resolveNextStage", () => {
       stages: [{ name: "final", agent: "closer", gate: "auto", on_outcome: { done: "nonexistent" } }],
     });
     // "nonexistent" stage doesn't exist, falls back to linear -- which is null (last stage)
-    expect(resolveNextStage(app, "outcome-last", "final", "done")).toBeNull();
+    expect(resolveNextStage(depsFromApp(app), "outcome-last", "final", "done")).toBeNull();
   });
 
   it("falls back to linear if on_outcome target stage doesn't exist in flow", () => {
@@ -107,7 +108,7 @@ describe("resolveNextStage", () => {
       ],
     });
     // Target "nonexistent" doesn't exist -- falls back to linear next ("next")
-    expect(resolveNextStage(app, "outcome-bad-target", "check", "fail")).toBe("next");
+    expect(resolveNextStage(depsFromApp(app), "outcome-bad-target", "check", "fail")).toBe("next");
   });
 
   it("handles empty string outcome (no routing)", () => {
@@ -119,7 +120,7 @@ describe("resolveNextStage", () => {
         { name: "deploy", agent: "deployer", gate: "auto" },
       ],
     });
-    expect(resolveNextStage(app, "outcome-empty", "check", "")).toBe("fix");
+    expect(resolveNextStage(depsFromApp(app), "outcome-empty", "check", "")).toBe("fix");
   });
 });
 

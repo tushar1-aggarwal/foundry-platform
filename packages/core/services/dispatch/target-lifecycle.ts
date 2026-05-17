@@ -42,6 +42,7 @@ import type { AgentHandle, ComputeHandle, LaunchOpts, PrepareCtx } from "../../c
 import type { ComputeTarget } from "../../compute/compute-target.js";
 import type { DeferredPlacementCtx } from "../../secrets/deferred-placement-ctx.js";
 import { provisionStep } from "../provisioning-steps.js";
+import { depsFromApp } from "../deps.js";
 
 export interface RunTargetLifecycleOpts {
   /** Optional override for the prepare context's workdir / config / log. */
@@ -106,12 +107,13 @@ export async function runTargetLifecycle(
   };
   const stepCtx = { compute: handle.name, computeKind: handle.kind };
   const onLog = opts.prepareCtx?.onLog;
+  const deps = depsFromApp(app);
 
   // 1. compute-start -- only when caller opted in AND the compute reports
   //    stopped. Providers can legitimately take a moment to register the
   //    start (StartInstances ack, k8s pod scheduling); 1 retry covers it.
   if (opts.autoStart !== false && opts.computeStatus === "stopped") {
-    await provisionStep(app, sessionId, "compute-start", () => target.compute.start(handle), {
+    await provisionStep(deps, sessionId, "compute-start", () => target.compute.start(handle), {
       retries: 1,
       retryBackoffMs: 2_000,
       context: stepCtx,
@@ -124,7 +126,7 @@ export async function runTargetLifecycle(
   //    transport is already up.
   if (opts.ensureReachable !== false && target.compute.ensureReachable) {
     await provisionStep(
-      app,
+      deps,
       sessionId,
       "ensure-reachable",
       () => target.compute.ensureReachable!(handle, { app, sessionId, onLog }),
@@ -139,7 +141,7 @@ export async function runTargetLifecycle(
   //    to flush.
   if (opts.placement && opts.placement.hasDeferred() && target.compute.flushPlacement) {
     await provisionStep(
-      app,
+      deps,
       sessionId,
       "flush-secrets",
       () => target.compute.flushPlacement!(handle, { placement: opts.placement!, sessionId, onLog }),
@@ -152,7 +154,7 @@ export async function runTargetLifecycle(
   //    the source URL or remote workdir is null (bare worktree mode).
   if (opts.workspace?.source && opts.workspace.remoteWorkdir && target.compute.prepareWorkspace) {
     await provisionStep(
-      app,
+      deps,
       sessionId,
       "prepare-workspace",
       () =>
@@ -168,7 +170,7 @@ export async function runTargetLifecycle(
   }
 
   // 5. isolation-prepare -- existing behaviour, kept.
-  await provisionStep(app, sessionId, "isolation-prepare", () => target.prepare(handle, ctx), {
+  await provisionStep(deps, sessionId, "isolation-prepare", () => target.prepare(handle, ctx), {
     retries: 1,
     retryBackoffMs: 1_000,
     context: stepCtx,
@@ -179,7 +181,7 @@ export async function runTargetLifecycle(
   // on arkd's generic /process/spawn instead of the isolation's tmux-based
   // launchAgent); otherwise we keep the isolation-driven path.
   return provisionStep(
-    app,
+    deps,
     sessionId,
     "launch-agent",
     () => (opts.launchOverride ? opts.launchOverride() : target.launchAgent(handle, launchOpts)),

@@ -42,6 +42,7 @@ import { NotSupportedError } from "./types.js";
 import { RemoteArkdCompute } from "./remote-arkd-compute.js";
 import { logDebug, logError, logInfo } from "../observability/structured-log.js";
 import { provisionStep } from "../services/provisioning-steps.js";
+import { depsFromApp } from "../services/deps.js";
 import { K8sPlacementCtx } from "./k8s-placement-ctx.js";
 import type { PlacementCtx } from "../secrets/placement-types.js";
 
@@ -455,7 +456,6 @@ export class K8sCompute extends RemoteArkdCompute {
     const arkdUrl = this.getArkdUrl(h);
     if (arkdUrl) {
       const { startArkdEventsConsumer } = await import("../services/channel/arkd-events-consumer.js");
-      const { depsFromApp } = await import("../services/deps.js");
       startArkdEventsConsumer(
         depsFromApp(opts.app),
         h.name,
@@ -608,7 +608,7 @@ export class K8sCompute extends RemoteArkdCompute {
     };
 
     if (useStep) {
-      await provisionStep(opts.app!, opts.sessionId!, "k8s-port-forward", fn, { context: stepCtx });
+      await provisionStep(depsFromApp(opts.app!), opts.sessionId!, "k8s-port-forward", fn, { context: stepCtx });
     } else {
       await fn();
     }

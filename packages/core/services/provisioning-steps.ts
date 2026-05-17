@@ -48,7 +48,7 @@
  * messages and stacks intact.
  */
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import { logInfo, logWarn, logError } from "../observability/structured-log.js";
 
 // ── Public types ─────────────────────────────────────────────────────────────
@@ -186,17 +186,17 @@ function captureErrorChain(error: unknown): ErrorChainLink[] {
 /**
  * Best-effort emit -- the event-log shouldn't be able to mask the step's
  * own outcome. We always log to `structured-log` synchronously (for
- * grep) and fire `app.events.log` as a fire-and-forget Promise (for the
+ * grep) and fire `deps.events.log` as a fire-and-forget Promise (for the
  * UI timeline). A failure to persist the event is logged at debug
  * level only; nothing throws back into the step's caller.
  */
 function emitStepEvent(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   data: ProvisioningStepData,
   context: Record<string, unknown>,
 ): void {
-  void app.events
+  void deps.events
     .log(sessionId, "provisioning_step", {
       actor: "system",
       data: { ...data, ...context },
@@ -211,7 +211,7 @@ function emitStepEvent(
  * success or throws `ProvisionStepError`.
  */
 export async function provisionStep<T>(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   step: string,
   fn: () => Promise<T>,
@@ -223,14 +223,14 @@ export async function provisionStep<T>(
   const context = opts.context ?? {};
   const startedAt = Date.now();
 
-  emitStepEvent(app, sessionId, { step, status: "started" }, context);
+  emitStepEvent(deps, sessionId, { step, status: "started" }, context);
   logInfo("provision", `[${sessionId}] step=${step} started`, { sessionId, step, ...context });
 
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     try {
       const result = await fn();
       const durationMs = Date.now() - startedAt;
-      emitStepEvent(app, sessionId, { step, status: "ok", durationMs, attempts: attempt }, context);
+      emitStepEvent(deps, sessionId, { step, status: "ok", durationMs, attempts: attempt }, context);
       logInfo("provision", `[${sessionId}] step=${step} ok in ${durationMs}ms (attempts=${attempt})`, {
         sessionId,
         step,
@@ -245,7 +245,7 @@ export async function provisionStep<T>(
       if (transient && hasBudget) {
         const backoff = backoffFor(attempt, baseBackoff);
         const message = messageOf(error);
-        emitStepEvent(app, sessionId, { step, status: "retrying", attempt, transient: true, message }, context);
+        emitStepEvent(deps, sessionId, { step, status: "retrying", attempt, transient: true, message }, context);
         logWarn(
           "provision",
           `[${sessionId}] step=${step} attempt ${attempt} failed (transient), retrying in ${backoff}ms: ${message}`,
@@ -259,7 +259,7 @@ export async function provisionStep<T>(
       const errorChain = captureErrorChain(error);
       const message = messageOf(error);
       emitStepEvent(
-        app,
+        deps,
         sessionId,
         { step, status: "failed", durationMs, attempts: attempt, transient, message, errorChain },
         context,

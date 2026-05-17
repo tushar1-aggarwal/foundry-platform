@@ -7,7 +7,7 @@
  * timer handles so the caller can `clearInterval` on shutdown.
  */
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import { safeAsync } from "../safe.js";
 import { listSchedules, cronMatches, updateScheduleLastRun } from "../schedule.js";
 import { pollPRReviews } from "../integrations/pr-poller.js";
@@ -29,11 +29,12 @@ export interface PollerOptions {
  * Start all background pollers. Returns the set of timer handles
  * so the caller can clear them on shutdown.
  */
-export function startPollers(app: AppContext, opts: PollerOptions): Array<ReturnType<typeof setInterval>> {
+export function startPollers(deps: OrchestrationDeps, opts: PollerOptions): Array<ReturnType<typeof setInterval>> {
   const timers: Array<ReturnType<typeof setInterval>> = [];
+  const app = deps.app!;
 
   // Schedule poller -- check every 60 seconds
-  timers.push(setInterval(() => safeAsync("schedule polling", () => tickSchedules(app)), POLL_INTERVAL_MS));
+  timers.push(setInterval(() => safeAsync("schedule polling", () => tickSchedules(deps)), POLL_INTERVAL_MS));
 
   // PR review poller - check every 60 seconds
   timers.push(setInterval(() => safeAsync("PR review polling", () => pollPRReviews(app)), POLL_INTERVAL_MS));
@@ -55,7 +56,8 @@ export function startPollers(app: AppContext, opts: PollerOptions): Array<Return
  * Run a single tick of the schedule poller. Extracted so the interval
  * callback stays thin.
  */
-async function tickSchedules(app: AppContext): Promise<void> {
+async function tickSchedules(deps: OrchestrationDeps): Promise<void> {
+  const app = deps.app!;
   const schedules = (await listSchedules(app)).filter((s) => s.enabled);
   const now = new Date();
   for (const sched of schedules) {
@@ -80,7 +82,7 @@ async function tickSchedules(app: AppContext): Promise<void> {
       });
       await app.dispatchService.dispatch(s.id);
       await updateScheduleLastRun(app, sched.id);
-      await app.events.log(s.id, "scheduled_dispatch", {
+      await deps.events.log(s.id, "scheduled_dispatch", {
         actor: "scheduler",
         data: { schedule_id: sched.id, cron: sched.cron },
       });

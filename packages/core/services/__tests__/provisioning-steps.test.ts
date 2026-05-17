@@ -6,6 +6,7 @@
  */
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../../app.js";
+import { depsFromApp } from "../deps.js";
 import { provisionStep, ProvisionStepError } from "../provisioning-steps.js";
 
 let app: AppContext;
@@ -33,7 +34,7 @@ async function readSteps(sessionId: string): Promise<Array<Record<string, unknow
 describe("provisionStep", () => {
   test("emits started + ok events on a happy-path step", async () => {
     const sid = await makeSession();
-    const result = await provisionStep(app, sid, "happy", async () => 42);
+    const result = await provisionStep(depsFromApp(app), sid, "happy", async () => 42);
     expect(result).toBe(42);
     const steps = await readSteps(sid);
     expect(steps).toHaveLength(2);
@@ -46,7 +47,7 @@ describe("provisionStep", () => {
     const sid = await makeSession();
     const e = new Error("boom");
     await expect(
-      provisionStep(app, sid, "explode", async () => {
+      provisionStep(depsFromApp(app), sid, "explode", async () => {
         throw e;
       }),
     ).rejects.toBeInstanceOf(ProvisionStepError);
@@ -64,7 +65,7 @@ describe("provisionStep", () => {
     const sid = await makeSession();
     const original = new Error("inner");
     try {
-      await provisionStep(app, sid, "named", async () => {
+      await provisionStep(depsFromApp(app), sid, "named", async () => {
         throw original;
       });
       throw new Error("should have thrown");
@@ -144,7 +145,7 @@ describe("provisionStep", () => {
 
   test("context fields are echoed onto every event for the step", async () => {
     const sid = await makeSession();
-    await provisionStep(app, sid, "ctx", async () => "ok", {
+    await provisionStep(depsFromApp(app), sid, "ctx", async () => "ok", {
       context: { compute: "ec2-test", instanceId: "i-deadbeef" },
     });
     const steps = await readSteps(sid);

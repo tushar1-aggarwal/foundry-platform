@@ -48,6 +48,7 @@ import type {
 import { NotSupportedError } from "../types.js";
 import { RemoteArkdCompute } from "../remote-arkd-compute.js";
 import { provisionStep } from "../../services/provisioning-steps.js";
+import { depsFromApp } from "../../services/deps.js";
 import { FirecrackerPlacementCtx } from "./placement-ctx.js";
 import type { PlacementCtx } from "../../secrets/placement-types.js";
 import { isFirecrackerAvailable } from "./availability.js";
@@ -419,11 +420,12 @@ export class FirecrackerCompute extends RemoteArkdCompute {
     const meta = readMeta(h);
     const stepCtx = { compute: h.name, vmId: meta.vmId };
 
-    await provisionStep(opts.app, opts.sessionId, "firecracker-bridge", () => this.ensureBridgeOnly(), {
+    const deps = depsFromApp(opts.app);
+    await provisionStep(deps, opts.sessionId, "firecracker-bridge", () => this.ensureBridgeOnly(), {
       context: stepCtx,
     });
 
-    await provisionStep(opts.app, opts.sessionId, "firecracker-arkd-probe", () => this.probeArkdOnly(meta.arkdUrl), {
+    await provisionStep(deps, opts.sessionId, "firecracker-arkd-probe", () => this.probeArkdOnly(meta.arkdUrl), {
       context: { ...stepCtx, arkdUrl: meta.arkdUrl },
     });
   }
