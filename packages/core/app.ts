@@ -47,7 +47,13 @@ import type { ScopingResolver } from "./scoping/index.js";
 import { ComputeTemplateRepository as ComputeTemplateRepositoryCtor } from "./repositories/index.js";
 import type { SessionService, ComputeService } from "./services/index.js";
 import type { SessionHooks } from "./services/session-hooks/index.js";
-import type { SessionLifecycle } from "./services/session/index.js";
+import type {
+  SessionCreator,
+  SessionTerminator,
+  SessionSuspender,
+  SessionForker,
+  SessionReviewer,
+} from "./services/session/index.js";
 import type { SessionAttachService } from "./services/session/attach.js";
 import type { DispatchService } from "./services/dispatch/index.js";
 import type { StageAdvanceService } from "./services/stage-advance/index.js";
@@ -709,8 +715,20 @@ export class AppContext {
   get sessionHooks(): SessionHooks {
     return this._resolve("sessionHooks");
   }
-  get sessionLifecycle(): SessionLifecycle {
-    return this._resolve("sessionLifecycle");
+  get sessionCreator(): SessionCreator {
+    return this._resolve("sessionCreator");
+  }
+  get sessionTerminator(): SessionTerminator {
+    return this._resolve("sessionTerminator");
+  }
+  get sessionSuspender(): SessionSuspender {
+    return this._resolve("sessionSuspender");
+  }
+  get sessionForker(): SessionForker {
+    return this._resolve("sessionForker");
+  }
+  get sessionReviewer(): SessionReviewer {
+    return this._resolve("sessionReviewer");
   }
   get sessionAttach(): SessionAttachService {
     return this._resolve("sessionAttach");

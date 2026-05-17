@@ -340,7 +340,11 @@ describe("tenant scoping", async () => {
       // fresh scoped instance per child container. Identity-equal would mean
       // the singleton leaked through the root scope.
       expect(tenantApp.dispatchService).not.toBe(app.dispatchService);
-      expect(tenantApp.sessionLifecycle).not.toBe(app.sessionLifecycle);
+      expect(tenantApp.sessionCreator).not.toBe(app.sessionCreator);
+      expect(tenantApp.sessionTerminator).not.toBe(app.sessionTerminator);
+      expect(tenantApp.sessionSuspender).not.toBe(app.sessionSuspender);
+      expect(tenantApp.sessionForker).not.toBe(app.sessionForker);
+      expect(tenantApp.sessionReviewer).not.toBe(app.sessionReviewer);
       expect(tenantApp.sessionService).not.toBe(app.sessionService);
       expect(tenantApp.sessionHooks).not.toBe(app.sessionHooks);
       expect(tenantApp.stageAdvance).not.toBe(app.stageAdvance);
@@ -348,17 +352,17 @@ describe("tenant scoping", async () => {
 
       // Two different tenant scopes also get different service instances.
       expect(tenantApp.dispatchService).not.toBe(otherTenantApp.dispatchService);
-      expect(tenantApp.sessionLifecycle).not.toBe(otherTenantApp.sessionLifecycle);
+      expect(tenantApp.sessionCreator).not.toBe(otherTenantApp.sessionCreator);
 
       // Within a single tenant scope, repeated accessor reads return the same
       // instance (SCOPED -- one instance per child container).
       expect(tenantApp.dispatchService).toBe(tenantApp.dispatchService);
-      expect(tenantApp.sessionLifecycle).toBe(tenantApp.sessionLifecycle);
+      expect(tenantApp.sessionCreator).toBe(tenantApp.sessionCreator);
     });
 
-    it("sessionLifecycle.start() on a tenant scope writes with tenant_id", async () => {
+    it("sessionCreator.start() on a tenant scope writes with tenant_id", async () => {
       const tenantApp = app.forTenant("acme");
-      const session = await tenantApp.sessionLifecycle.start({ summary: "tenant acme start" } as any);
+      const session = await tenantApp.sessionCreator.start({ summary: "tenant acme start" } as any);
 
       // The row must be tagged with `acme` -- not `default`. Before the fix,
       // sessionLifecycle was the root singleton, so its `sessions` dep was

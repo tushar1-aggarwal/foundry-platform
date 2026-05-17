@@ -19,7 +19,7 @@ withTestContext();
 
 describe("interrupt(getApp())", async () => {
   it("returns error for non-existent session", async () => {
-    const result = await getApp().sessionLifecycle.interrupt("s-nonexistent");
+    const result = await getApp().sessionSuspender.interrupt("s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -28,7 +28,7 @@ describe("interrupt(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "interrupt-not-running" });
     await getApp().sessions.update(session.id, { status: "pending" });
 
-    const result = await getApp().sessionLifecycle.interrupt(session.id);
+    const result = await getApp().sessionSuspender.interrupt(session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not running");
   });
@@ -42,8 +42,8 @@ describe("interrupt(getApp())", async () => {
     // through a raw-DB-manipulation route.
   });
 
-  it("is exposed on the SessionLifecycle service", () => {
-    expect(typeof getApp().sessionLifecycle.interrupt).toBe("function");
+  it("is exposed on the SessionSuspender service", () => {
+    expect(typeof getApp().sessionSuspender.interrupt).toBe("function");
   });
 });
 
@@ -303,7 +303,7 @@ describe("runVerification(getApp())", async () => {
   it("returns ok when no todos and no verify scripts", async () => {
     const session = await getApp().sessions.create({ summary: "verify-clean" });
 
-    const result = await getApp().sessionLifecycle.runVerification(session.id);
+    const result = await getApp().sessionReviewer.runVerification(session.id);
     expect(result.ok).toBe(true);
     expect(result.todosResolved).toBe(true);
     expect(result.pendingTodos).toHaveLength(0);
@@ -315,7 +315,7 @@ describe("runVerification(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "verify-todos" });
     await getApp().todos.add(session.id, "Must do this");
 
-    const result = await getApp().sessionLifecycle.runVerification(session.id);
+    const result = await getApp().sessionReviewer.runVerification(session.id);
     expect(result.ok).toBe(false);
     expect(result.todosResolved).toBe(false);
     expect(result.pendingTodos).toHaveLength(1);
@@ -326,7 +326,7 @@ describe("runVerification(getApp())", async () => {
     await getApp().todos.add(session.id, "Fix the bug");
     await getApp().todos.add(session.id, "Add tests");
 
-    const result = await getApp().sessionLifecycle.runVerification(session.id);
+    const result = await getApp().sessionReviewer.runVerification(session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("Fix the bug");
     expect(result.message).toContain("Add tests");
@@ -334,7 +334,7 @@ describe("runVerification(getApp())", async () => {
   });
 
   it("returns error for non-existent session", async () => {
-    const result = await getApp().sessionLifecycle.runVerification("s-nonexistent");
+    const result = await getApp().sessionReviewer.runVerification("s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -344,7 +344,7 @@ describe("runVerification(getApp())", async () => {
     const t1 = await getApp().todos.add(session.id, "Already done");
     await getApp().todos.toggle(t1.id);
 
-    const result = await getApp().sessionLifecycle.runVerification(session.id);
+    const result = await getApp().sessionReviewer.runVerification(session.id);
     expect(result.ok).toBe(true);
     expect(result.todosResolved).toBe(true);
     expect(result.pendingTodos).toHaveLength(0);
@@ -370,7 +370,7 @@ describe("runVerification(getApp())", async () => {
     await getApp().sessions.update(session.id, { stage: "only" });
 
     const calls: Array<{ script: string; cwd: string | undefined }> = [];
-    const result = await getApp().sessionLifecycle.runVerification(session.id, {
+    const result = await getApp().sessionReviewer.runVerification(session.id, {
       runScript: async (script, opts) => {
         calls.push({ script, cwd: opts.cwd });
         if (script === "good") return { stdout: "ok\n", stderr: "" };
@@ -407,7 +407,7 @@ describe("runVerification(getApp())", async () => {
     });
     await getApp().sessions.update(session.id, { stage: "only" });
 
-    const result = await getApp().sessionLifecycle.runVerification(session.id, {
+    const result = await getApp().sessionReviewer.runVerification(session.id, {
       runScript: async () => ({ stdout: "", stderr: "" }),
     });
     expect(result.ok).toBe(true);
@@ -480,7 +480,7 @@ describe("archive(getApp()) and restore(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "archive-test" });
     await getApp().sessions.update(session.id, { status: "completed" });
 
-    const result = await getApp().sessionLifecycle.archive(session.id);
+    const result = await getApp().sessionSuspender.archive(session.id);
     expect(result.ok).toBe(true);
     expect(result.message).toBe("Session archived");
 
@@ -489,7 +489,7 @@ describe("archive(getApp()) and restore(getApp())", async () => {
   });
 
   it("archive returns error for non-existent session", async () => {
-    const result = await getApp().sessionLifecycle.archive("s-nonexistent");
+    const result = await getApp().sessionSuspender.archive("s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -497,9 +497,9 @@ describe("archive(getApp()) and restore(getApp())", async () => {
   it("restore sets status to stopped", async () => {
     const session = await getApp().sessions.create({ summary: "restore-test" });
     await getApp().sessions.update(session.id, { status: "completed" });
-    await getApp().sessionLifecycle.archive(session.id);
+    await getApp().sessionSuspender.archive(session.id);
 
-    const result = await getApp().sessionLifecycle.restore(session.id);
+    const result = await getApp().sessionSuspender.restore(session.id);
     expect(result.ok).toBe(true);
     expect(result.message).toBe("Session restored");
 
@@ -511,7 +511,7 @@ describe("archive(getApp()) and restore(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "restore-not-archived" });
     await getApp().sessions.update(session.id, { status: "completed" });
 
-    const result = await getApp().sessionLifecycle.restore(session.id);
+    const result = await getApp().sessionSuspender.restore(session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not archived");
   });
@@ -519,7 +519,7 @@ describe("archive(getApp()) and restore(getApp())", async () => {
   it("archived sessions excluded from default list", async () => {
     const session = await getApp().sessions.create({ summary: "archive-list-test" });
     await getApp().sessions.update(session.id, { status: "completed" });
-    await getApp().sessionLifecycle.archive(session.id);
+    await getApp().sessionSuspender.archive(session.id);
 
     // Default list should not include archived
     const defaultList = await getApp().sessions.list();

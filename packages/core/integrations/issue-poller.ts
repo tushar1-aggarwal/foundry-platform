@@ -92,7 +92,7 @@ export async function createSessionFromIssue(
 
   if (await issueAlreadyTracked(app, ticket)) return null;
 
-  const session = await app.sessionLifecycle.start({
+  const session = await app.sessionCreator.start({
     ticket,
     summary: issue.title,
     config: {

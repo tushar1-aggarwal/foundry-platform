@@ -40,7 +40,7 @@ describe("approveReviewGate", async () => {
       ],
     });
 
-    const session = await getApp().sessionLifecycle.start({ flow: "pr-flow", summary: "test review gate" });
+    const session = await getApp().sessionCreator.start({ flow: "pr-flow", summary: "test review gate" });
     // startSession puts us at stage "code" -- advance past auto gate to "wait-review"
     const adv = await getApp().stageAdvance.advance(session.id, true);
     expect(adv.ok).toBe(true);
@@ -78,7 +78,7 @@ describe("approveReviewGate", async () => {
       ],
     });
 
-    const session = await getApp().sessionLifecycle.start({ flow: "rev-evt", summary: "event test" });
+    const session = await getApp().sessionCreator.start({ flow: "rev-evt", summary: "event test" });
     await approveReviewGate(getApp(), session.id);
 
     const events = await getApp().events.list(session.id, { type: "review_approved" });
@@ -100,7 +100,7 @@ describe("review gate blocking", async () => {
       ],
     });
 
-    const session = await getApp().sessionLifecycle.start({ flow: "block-flow", summary: "block test" });
+    const session = await getApp().sessionCreator.start({ flow: "block-flow", summary: "block test" });
     expect(session.stage).toBe("review-stage");
 
     // Gate blocks

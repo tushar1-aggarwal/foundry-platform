@@ -499,7 +499,7 @@ describe("Conductor channel report delivery", async () => {
 describe("Regression: complete() must advance flow (not leave status=ready)", async () => {
   it("SessionService.complete() + advance() on single-stage flow (bare) reaches 'completed'", async () => {
     // Use startSession (orchestration) to properly wire stage/flow like production
-    const session = await app.sessionLifecycle.start({ summary: "svc complete bare", flow: "bare" });
+    const session = await app.sessionCreator.start({ summary: "svc complete bare", flow: "bare" });
     await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running" });
 
     // Call complete via SessionService (same path as RPC handler)
@@ -507,7 +507,7 @@ describe("Regression: complete() must advance flow (not leave status=ready)", as
     expect(result.ok).toBe(true);
 
     // Must call advance -- this is what the RPC handler must do
-    const advResult = await app.sessionService.advance(session.id, true);
+    const advResult = await app.stageAdvance.advance(session.id, true);
     expect(advResult.ok).toBe(true);
 
     // Session must be "completed", not stuck at "ready"
@@ -516,14 +516,14 @@ describe("Regression: complete() must advance flow (not leave status=ready)", as
   });
 
   it("SessionService.complete() + advance() on multi-stage flow (quick) advances to next stage", async () => {
-    const session = await app.sessionLifecycle.start({ summary: "svc complete quick", flow: "quick" });
+    const session = await app.sessionCreator.start({ summary: "svc complete quick", flow: "quick" });
     // startSession sets stage to "implement" for quick flow
     await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running" });
 
     const result = await app.sessionService.complete(session.id);
     expect(result.ok).toBe(true);
 
-    const advResult = await app.sessionService.advance(session.id, true);
+    const advResult = await app.stageAdvance.advance(session.id, true);
     expect(advResult.ok).toBe(true);
 
     // Should advance to next stage (verify), not stay at "ready" on "implement"
@@ -533,7 +533,7 @@ describe("Regression: complete() must advance flow (not leave status=ready)", as
   });
 
   it("RPC session/complete handler advances bare flow to 'completed'", async () => {
-    const session = await app.sessionLifecycle.start({ summary: "rpc complete bare", flow: "bare" });
+    const session = await app.sessionCreator.start({ summary: "rpc complete bare", flow: "bare" });
     await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running" });
 
     // Use Router + registerSessionHandlers (same pattern as handler tests)
@@ -555,7 +555,7 @@ describe("Regression: complete() must advance flow (not leave status=ready)", as
   });
 
   it("RPC session/complete handler advances quick flow to next stage", async () => {
-    const session = await app.sessionLifecycle.start({ summary: "rpc complete quick", flow: "quick" });
+    const session = await app.sessionCreator.start({ summary: "rpc complete quick", flow: "quick" });
     await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running" });
 
     const { Router } = await import("../../conductor/router.js");

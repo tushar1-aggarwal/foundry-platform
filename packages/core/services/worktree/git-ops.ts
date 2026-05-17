@@ -304,8 +304,8 @@ export async function rebaseOntoBase(
  * Aborts safely on merge conflict without losing work.
  *
  * Pulls lifecycle ops (deleteSession, stop, runVerification) straight off
- * `app.sessionLifecycle` so there is no circular-import trick and no global
- * injection step required.
+ * the session sub-services so there is no circular-import trick and no
+ * global injection step required.
  */
 
 export async function finishWorktree(
@@ -332,7 +332,7 @@ export async function finishWorktree(
 
   // Verify before finishing (unless force)
   if (!opts?.force) {
-    const verify = await app.sessionLifecycle.runVerification(sessionId);
+    const verify = await app.sessionReviewer.runVerification(sessionId);
     if (!verify.ok) {
       return { ok: false, message: `Cannot finish: verification failed:\n${verify.message}` };
     }
@@ -369,7 +369,7 @@ export async function finishWorktree(
 
   // 1. Stop the session if running
   if (!["completed", "failed", "stopped", "pending"].includes(session.status)) {
-    await app.sessionLifecycle.stop(sessionId);
+    await app.sessionTerminator.stop(sessionId);
   }
 
   // 1b. Create PR instead of merging locally if requested
@@ -393,7 +393,7 @@ export async function finishWorktree(
         logError("session", `finishWorktree: remove worktree failed: ${e?.message ?? e}`);
       }
     }
-    await app.sessionLifecycle.deleteSession(sessionId);
+    await app.sessionTerminator.deleteSession(sessionId);
     await app.events.log(sessionId, "worktree_finished", {
       actor: "user",
       data: { branch, targetBranch, merged: false, pr: true },
@@ -463,7 +463,7 @@ export async function finishWorktree(
   }
 
   // 5. Delete the session
-  await app.sessionLifecycle.deleteSession(sessionId);
+  await app.sessionTerminator.deleteSession(sessionId);
 
   const mergeMsg = opts?.noMerge ? "skipped merge" : `merged ${branch} -> ${targetBranch}`;
   await app.events.log(sessionId, "worktree_finished", {

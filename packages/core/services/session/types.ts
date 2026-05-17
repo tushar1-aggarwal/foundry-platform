@@ -54,7 +54,7 @@ export interface AdvanceCb {
 
 // ── Public result shapes (stable; re-exported from the barrel) ──────────────
 
-export type SessionOpResult = { ok: true; sessionId: string } | { ok: false; message: string };
+export type { SessionOpResult } from "../../../types/index.js";
 
 /**
  * Lifecycle hooks invoked by start/fork/clone after the session row is

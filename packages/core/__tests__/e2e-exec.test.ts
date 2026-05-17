@@ -50,7 +50,7 @@ describe("waitForCompletion", async () => {
     sessionIds.push(session.id);
     await getApp().sessions.update(session.id, { status: "completed", stage: "work" });
 
-    const { session: final, timedOut } = await app.sessionLifecycle.waitForCompletion(session.id, { pollMs: 50 });
+    const { session: final, timedOut } = await app.sessionSuspender.waitForCompletion(session.id, { pollMs: 50 });
     expect(timedOut).toBe(false);
     expect(final.status).toBe("completed");
   });
@@ -60,7 +60,7 @@ describe("waitForCompletion", async () => {
     sessionIds.push(session.id);
     await getApp().sessions.update(session.id, { status: "failed", stage: "work", error: "boom" });
 
-    const { session: final, timedOut } = await app.sessionLifecycle.waitForCompletion(session.id, { pollMs: 50 });
+    const { session: final, timedOut } = await app.sessionSuspender.waitForCompletion(session.id, { pollMs: 50 });
     expect(timedOut).toBe(false);
     expect(final.status).toBe("failed");
     expect(final.error).toBe("boom");
@@ -71,7 +71,7 @@ describe("waitForCompletion", async () => {
     sessionIds.push(session.id);
     await getApp().sessions.update(session.id, { status: "stopped", stage: "work" });
 
-    const { session: final, timedOut } = await app.sessionLifecycle.waitForCompletion(session.id, { pollMs: 50 });
+    const { session: final, timedOut } = await app.sessionSuspender.waitForCompletion(session.id, { pollMs: 50 });
     expect(timedOut).toBe(false);
     expect(final.status).toBe("stopped");
   });
@@ -81,7 +81,7 @@ describe("waitForCompletion", async () => {
     sessionIds.push(session.id);
     await getApp().sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running", stage: "work" });
 
-    const { session: final, timedOut } = await app.sessionLifecycle.waitForCompletion(session.id, {
+    const { session: final, timedOut } = await app.sessionSuspender.waitForCompletion(session.id, {
       timeoutMs: 150,
       pollMs: 50,
     });
@@ -101,7 +101,7 @@ describe("waitForCompletion", async () => {
       await getApp().sessions.update(session.id, { status: "completed" });
     }, 120);
 
-    const { session: final, timedOut } = await app.sessionLifecycle.waitForCompletion(session.id, {
+    const { session: final, timedOut } = await app.sessionSuspender.waitForCompletion(session.id, {
       pollMs: 50,
       timeoutMs: 2000,
       onStatus: (status) => statuses.push(status),
@@ -114,7 +114,7 @@ describe("waitForCompletion", async () => {
   });
 
   it("returns null-ish for nonexistent session", async () => {
-    const { session: final, timedOut } = await app.sessionLifecycle.waitForCompletion("s-does-not-exist", {
+    const { session: final, timedOut } = await app.sessionSuspender.waitForCompletion("s-does-not-exist", {
       pollMs: 50,
     });
     expect(timedOut).toBe(false);
@@ -126,7 +126,7 @@ describe("waitForCompletion", async () => {
 
 describe("exec session creation", async () => {
   it("creates session with correct flow/summary/compute from opts", async () => {
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       summary: "exec-test-summary",
       repo: "my-repo",
       flow: "bare",

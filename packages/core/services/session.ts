@@ -157,7 +157,7 @@ export class SessionService {
     // orchestration for full cleanup (tmux kill, provider cleanup, hooks removal)
     if (session.session_id) {
       try {
-        return await this.app.sessionLifecycle.stop(id, opts);
+        return await this.app.sessionTerminator.stop(id, opts);
       } catch {
         logDebug("session", "AppContext not available (e.g. unit tests) -- fall through to local stop");
       }
@@ -228,7 +228,7 @@ export class SessionService {
     for (const s of all) {
       if (s.session_id) {
         try {
-          await this.app.sessionLifecycle.stop(s.id, { force: true });
+          await this.app.sessionTerminator.stop(s.id, { force: true });
         } catch (err: any) {
           logDebug("session", `stopAll: ${s.id}: ${err?.message ?? err}`);
         }
@@ -535,28 +535,6 @@ export class SessionService {
   }
 
   /**
-   * Interrupt a running agent (Ctrl+C) without killing the tmux session.
-   * Delegates to session-orchestration.ts interrupt().
-   */
-  async interrupt(id: string): Promise<SessionOpResult> {
-    return this.app.sessionLifecycle.interrupt(id);
-  }
-
-  /**
-   * Archive a session for later reference.
-   */
-  async archive(id: string): Promise<SessionOpResult> {
-    return this.app.sessionLifecycle.archive(id);
-  }
-
-  /**
-   * Restore an archived session back to stopped.
-   */
-  async restore(id: string): Promise<SessionOpResult> {
-    return this.app.sessionLifecycle.restore(id);
-  }
-
-  /**
    * Soft-delete a session (90s undo window).
    * Port of session.ts deleteSessionAsync() -- simplified: no tmux/provider
    * cleanup (caller handles), just state transition.
@@ -586,149 +564,12 @@ export class SessionService {
     return { ok: true, message: "OK", sessionId: id };
   }
 
-  // ── Delegating methods (complex orchestration -- call through to session.ts) ──
-
-  /**
-   * Dispatch a session: resolve agent, build task, launch executor.
-   * Delegates to the DispatchService which owns tmux/executor/flow logic.
-   */
-  async dispatch(id: string, opts?: { onLog?: (msg: string) => void }): Promise<SessionOpResult> {
-    return this.app.dispatchService.dispatch(id, opts);
-  }
-
-  /**
-   * Advance a session to the next flow stage.
-   * Delegates to the StageAdvanceService which owns gate evaluation and flow progression.
-   */
-  async advance(id: string, force?: boolean): Promise<SessionOpResult> {
-    return this.app.stageAdvance.advance(id, force);
-  }
-
-  /**
-   * Get captured output from a running session's tmux pane.
-   */
-  async getOutput(id: string, opts?: { lines?: number; ansi?: boolean }): Promise<string> {
-    const { getOutput: legacyGetOutput } = await import("./session-output.js");
-    return legacyGetOutput(this.app, id, opts);
-  }
-
   /**
    * Send a message to a running session's tmux pane.
    */
   async send(id: string, message: string): Promise<SessionOpResult> {
     const { send: legacySend } = await import("./session-output.js");
     return legacySend(this.app, id, message);
-  }
-
-  /**
-   * Poll until session reaches a terminal state (completed/failed/stopped).
-   */
-  async waitForCompletion(
-    id: string,
-    opts?: { timeoutMs?: number; pollMs?: number; onStatus?: (status: string) => void },
-  ): Promise<{ session: Session | null; timedOut: boolean }> {
-    return this.app.sessionLifecycle.waitForCompletion(id, opts);
-  }
-
-  /**
-   * Fork a session: create a new session from the same point in the flow.
-   */
-  async fork(id: string, name?: string): Promise<SessionOpResult> {
-    // session.ts has a narrower local SessionOpResult (no `message` on success)
-    return this.app.sessionLifecycle.fork(id, name, {
-      onCreated: (sid) => this.emitSessionCreated(sid),
-    }) as unknown as SessionOpResult;
-  }
-
-  /**
-   * Clone a session: deep copy including claude_session_id for --resume.
-   */
-  async clone(id: string, name?: string): Promise<SessionOpResult> {
-    return this.app.sessionLifecycle.clone(id, name, {
-      onCreated: (sid) => this.emitSessionCreated(sid),
-    }) as unknown as SessionOpResult;
-  }
-
-  /**
-   * Spawn a subagent session under a parent.
-   */
-  async spawn(
-    parentId: string,
-    opts: {
-      task: string;
-      agent?: string;
-      group_name?: string;
-      extensions?: string[];
-    },
-  ): Promise<SessionOpResult> {
-    const { spawnSubagent } = await import("./subagents.js");
-    return spawnSubagent(this.app, parentId, opts);
-  }
-
-  /**
-   * Fan-out: create parallel child sessions from a parent.
-   */
-  async fanOut(sessionId: string, opts: { tasks: Array<{ summary: string; agent?: string; flow?: string }> }) {
-    const { fanOut } = await import("./fork-join.js");
-    return fanOut(this.app, sessionId, opts);
-  }
-
-  /**
-   * Handoff: clone session to a different agent and dispatch.
-   */
-  async handoff(id: string, agent: string, instructions?: string): Promise<SessionOpResult> {
-    return this.app.stageAdvance.handoff(id, agent, instructions);
-  }
-
-  /**
-   * Get a diff summary for a session's worktree branch vs its base branch.
-   */
-  async worktreeDiff(id: string, opts?: { base?: string }): Promise<any> {
-    const { worktreeDiff: legacyDiff } = await import("./worktree/index.js");
-    return legacyDiff(this.app, id, opts);
-  }
-
-  /**
-   * Finish a worktree: merge back and clean up.
-   */
-  async finishWorktree(
-    id: string,
-    opts?: {
-      into?: string;
-      noMerge?: boolean;
-      keepBranch?: boolean;
-      createPR?: boolean;
-    },
-  ): Promise<SessionOpResult> {
-    const { finishWorktree: legacyFinish } = await import("./worktree/index.js");
-    return legacyFinish(this.app, id, opts);
-  }
-
-  /**
-   * Rebase a session's branch onto the base branch.
-   */
-  async rebaseOntoBase(id: string, opts?: { base?: string }): Promise<SessionOpResult> {
-    const { rebaseOntoBase: legacyRebase } = await import("./worktree/index.js");
-    return legacyRebase(this.app, id, opts);
-  }
-
-  /**
-   * Create a GitHub PR from a session's worktree branch.
-   */
-  async createWorktreePR(
-    id: string,
-    opts?: { title?: string; body?: string; base?: string; draft?: boolean },
-  ): Promise<SessionOpResult & { pr_url?: string }> {
-    const { createWorktreePR: legacyCreatePR } = await import("./worktree/index.js");
-    return legacyCreatePR(this.app, id, opts);
-  }
-
-  /**
-   * Join forked children back into parent session.
-   */
-  async join(parentId: string, force?: boolean): Promise<SessionOpResult> {
-    const { joinFork } = await import("./fork-join.js");
-    return joinFork(this.app, parentId, force);
   }
 
   /**

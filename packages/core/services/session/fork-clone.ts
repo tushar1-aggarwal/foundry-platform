@@ -39,7 +39,7 @@ export class SessionForker {
     });
 
     hooks?.onCreated?.(fork.id);
-    return { ok: true, sessionId: fork.id };
+    return { ok: true, message: "OK", sessionId: fork.id };
   }
 
   /**
@@ -75,6 +75,6 @@ export class SessionForker {
     });
 
     hooks?.onCreated?.(clone.id);
-    return { ok: true, sessionId: clone.id };
+    return { ok: true, message: "OK", sessionId: clone.id };
   }
 }

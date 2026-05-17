@@ -18,7 +18,7 @@ describe("forkSession (shallow)", () => {
       group_name: "my-group",
     });
 
-    const result = await getApp().sessionLifecycle.fork(original.id);
+    const result = await getApp().sessionForker.fork(original.id);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
 
@@ -36,7 +36,7 @@ describe("forkSession (shallow)", () => {
     const original = await getApp().sessions.create({ summary: "has-claude" });
     await getApp().sessions.update(original.id, { claude_session_id: "claude-abc-123" });
 
-    const result = await getApp().sessionLifecycle.fork(original.id);
+    const result = await getApp().sessionForker.fork(original.id);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
 
@@ -46,20 +46,20 @@ describe("forkSession (shallow)", () => {
 
   it("auto-generates unique name when no new name given", async () => {
     const original = await getApp().sessions.create({ summary: "my-task" });
-    const result = await getApp().sessionLifecycle.fork(original.id);
+    const result = await getApp().sessionForker.fork(original.id);
     if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
     expect((await getApp().sessions.get(result.sessionId))!.summary).toBe("my-task (fork)");
   });
 
   it("uses provided name", async () => {
     const original = await getApp().sessions.create({ summary: "my-task" });
-    const result = await getApp().sessionLifecycle.fork(original.id, "new-name");
+    const result = await getApp().sessionForker.fork(original.id, "new-name");
     if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
     expect((await getApp().sessions.get(result.sessionId))!.summary).toBe("new-name");
   });
 
   it("returns ok: false for nonexistent session", async () => {
-    const result = await getApp().sessionLifecycle.fork("s-nonexistent");
+    const result = await getApp().sessionForker.fork("s-nonexistent");
     expect(result.ok).toBe(false);
   });
 });
@@ -74,7 +74,7 @@ describe("cloneSession (deep)", () => {
       group_name: "my-group",
     });
 
-    const result = await getApp().sessionLifecycle.clone(original.id);
+    const result = await getApp().sessionForker.clone(original.id);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
 
@@ -91,7 +91,7 @@ describe("cloneSession (deep)", () => {
     const original = await getApp().sessions.create({ summary: "has-claude" });
     await getApp().sessions.update(original.id, { claude_session_id: "claude-abc-123" });
 
-    const result = await getApp().sessionLifecycle.clone(original.id);
+    const result = await getApp().sessionForker.clone(original.id);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(`fork/clone failed: ${result.message}`);
 
@@ -100,7 +100,7 @@ describe("cloneSession (deep)", () => {
   });
 
   it("returns ok: false for nonexistent session", async () => {
-    const result = await getApp().sessionLifecycle.clone("s-nonexistent");
+    const result = await getApp().sessionForker.clone("s-nonexistent");
     expect(result.ok).toBe(false);
   });
 });

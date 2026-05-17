@@ -76,7 +76,7 @@ describe("session name sanitization", () => {
 
 describe("session name in core (E2E)", async () => {
   it("stores name with spaces as-is in the DB", async () => {
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       summary: "my test session",
       flow: "bare",
     });
@@ -86,7 +86,7 @@ describe("session name in core (E2E)", async () => {
   });
 
   it("stores name with special characters as-is in the DB", async () => {
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       summary: "fix: auth module (v2)",
       flow: "bare",
     });
@@ -96,7 +96,7 @@ describe("session name in core (E2E)", async () => {
   });
 
   it("stores empty summary as null", async () => {
-    const session = await app.sessionLifecycle.start({ flow: "bare" });
+    const session = await app.sessionCreator.start({ flow: "bare" });
 
     const stored = (await getApp().sessions.get(session.id))!;
     expect(stored.summary).toBeNull();
@@ -104,7 +104,7 @@ describe("session name in core (E2E)", async () => {
 
   it("stores long names without truncation in core", async () => {
     const longName = "a".repeat(200);
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       summary: longName,
       flow: "bare",
     });

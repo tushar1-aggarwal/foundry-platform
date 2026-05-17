@@ -26,7 +26,7 @@ afterAll(async () => {
 
 describe("session.create: flat inputs bag passthrough", () => {
   it("persists arbitrary top-level input keys verbatim", async () => {
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       summary: "inputs passthrough",
       flow: "bare",
       inputs: {
@@ -47,7 +47,7 @@ describe("session.create: flat inputs bag passthrough", () => {
   it("legacy nested shape still round-trips unchanged (no key rewriting)", async () => {
     // Older callers that still send {files, params} should see their data
     // land at the same path. We don't upgrade the shape on write.
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       summary: "legacy nested",
       flow: "bare",
       inputs: {
@@ -64,7 +64,7 @@ describe("session.create: flat inputs bag passthrough", () => {
   });
 
   it("omits config.inputs entirely when no inputs are passed", async () => {
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       summary: "no inputs",
       flow: "bare",
     });

@@ -124,7 +124,7 @@ describe("CLI: compute lifecycle", async () => {
 describe("CLI: session lifecycle", async () => {
   it("creates a session with --repo and --summary", async () => {
     const app = getApp();
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       repo: ".",
       summary: "test-e2e-session",
       flow: "bare",
@@ -136,7 +136,7 @@ describe("CLI: session lifecycle", async () => {
 
   it("lists sessions", async () => {
     const app = getApp();
-    const session = await app.sessionLifecycle.start({ repo: ".", summary: "list-test", flow: "bare" });
+    const session = await app.sessionCreator.start({ repo: ".", summary: "list-test", flow: "bare" });
     testSessionIds.push(session.id);
     const sessions = await app.sessions.list();
     expect(sessions.some((s) => s.summary === "list-test")).toBe(true);
@@ -144,7 +144,7 @@ describe("CLI: session lifecycle", async () => {
 
   it("shows session details", async () => {
     const app = getApp();
-    const session = await app.sessionLifecycle.start({ repo: ".", summary: "show-test", flow: "bare" });
+    const session = await app.sessionCreator.start({ repo: ".", summary: "show-test", flow: "bare" });
     testSessionIds.push(session.id);
     const fetched = await app.sessions.get(session.id);
     expect(fetched).not.toBeNull();
@@ -155,7 +155,7 @@ describe("CLI: session lifecycle", async () => {
 
   it("deletes a session (soft-delete)", async () => {
     const app = getApp();
-    const session = await app.sessionLifecycle.start({ repo: ".", summary: "delete-test", flow: "bare" });
+    const session = await app.sessionCreator.start({ repo: ".", summary: "delete-test", flow: "bare" });
     await app.sessions.softDelete(session.id);
     const after = await app.sessions.get(session.id);
     expect(after).not.toBeNull();
@@ -164,7 +164,7 @@ describe("CLI: session lifecycle", async () => {
 
   it("undeletes a soft-deleted session", async () => {
     const app = getApp();
-    const session = await app.sessionLifecycle.start({ repo: ".", summary: "undelete-test", flow: "bare" });
+    const session = await app.sessionCreator.start({ repo: ".", summary: "undelete-test", flow: "bare" });
     await app.sessions.softDelete(session.id);
     const restored = await app.sessions.undelete(session.id);
     expect(restored).not.toBeNull();

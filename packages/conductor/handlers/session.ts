@@ -8,6 +8,10 @@ import { actorIdentity } from "../../core/auth/context.js";
 import { resolveTenantApp } from "./scope-helpers.js";
 import { eventBus } from "../../core/hooks.js";
 import { isRepoUrl } from "../../core/repo-url.js";
+import { getOutput as getSessionOutput } from "../../core/services/session-output.js";
+import { worktreeDiff, finishWorktree, createWorktreePR } from "../../core/services/worktree/index.js";
+import { joinFork, fanOut as fanOutChildren } from "../../core/services/fork-join.js";
+import { spawnSubagent } from "../../core/services/subagents.js";
 import type {
   SessionIdParams,
   SessionStartParams,
@@ -226,7 +230,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     //
     // `start()` emits `session_created` before returning; the default
     // dispatcher listener (registered above) kicks the background launcher.
-    const session = await scoped.sessionLifecycle.start(startOpts, {
+    const session = await scoped.sessionCreator.start(startOpts, {
       onCreated: (id) => scoped.sessionService.emitSessionCreated(id),
     });
     notify("session/created", { session });
@@ -280,7 +284,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       stage: sessForLog?.stage ?? undefined,
       data: { force: force ?? false },
     });
-    const result = await scoped.sessionService.advance(sessionId, force ?? false);
+    const result = await scoped.stageAdvance.advance(sessionId, force ?? false);
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -293,7 +297,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     if (!result.ok) throw new RpcError(result.message ?? "Complete failed", SESSION_NOT_FOUND);
     // Advance the flow after completing the stage -- without this, sessions
     // get stuck at "ready" instead of progressing to the next stage or "completed".
-    await scoped.sessionService.advance(sessionId, true);
+    await scoped.stageAdvance.advance(sessionId, true);
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -319,7 +323,9 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/fork", async (params, notify, ctx) => {
     const { sessionId, name, group_name } = extract<SessionForkParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.fork(sessionId, name);
+    const result = await scoped.sessionForker.fork(sessionId, name, {
+      onCreated: (sid) => scoped.sessionService.emitSessionCreated(sid),
+    });
     if (!result.ok) {
       throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
@@ -334,7 +340,9 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/clone", async (params, notify, ctx) => {
     const { sessionId, name } = extract<SessionCloneParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.clone(sessionId, name);
+    const result = await scoped.sessionForker.clone(sessionId, name, {
+      onCreated: (sid) => scoped.sessionService.emitSessionCreated(sid),
+    });
     if (!result.ok) {
       throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
@@ -428,7 +436,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/output", async (params, _notify, ctx) => {
     const { sessionId, lines } = extract<SessionOutputParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const output = await scoped.sessionService.getOutput(sessionId, { lines });
+    const output = await getSessionOutput(scoped, sessionId, { lines });
     return { output };
   });
 
@@ -481,7 +489,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/handoff", async (params, notify, ctx) => {
     const { sessionId, agent, instructions } = extract<SessionHandoffParams>(params, ["sessionId", "agent"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.handoff(sessionId, agent, instructions);
+    const result = await scoped.stageAdvance.handoff(sessionId, agent, instructions);
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -490,14 +498,14 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/join", async (params, _notify, ctx) => {
     const { sessionId, force } = extract<SessionJoinParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.join(sessionId, force ?? false);
+    const result = await joinFork(scoped, sessionId, force ?? false);
     return result;
   });
 
   router.handle("session/spawn", async (params, notify, ctx) => {
     const { sessionId, task, agent, group_name } = extract<SessionSpawnParams>(params, ["sessionId", "task"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.spawn(sessionId, {
+    const result = await spawnSubagent(scoped, sessionId, {
       task,
       agent,
       group_name,
@@ -516,7 +524,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       tasks: Array<{ summary: string; agent?: string; flow?: string }>;
     }>(params, ["sessionId", "tasks"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.fanOut(sessionId, { tasks });
+    const result = await fanOutChildren(scoped, sessionId, { tasks });
     if (!result.ok) throw new RpcError(result.message ?? "Fan-out failed", SESSION_NOT_FOUND);
     for (const childId of result.childIds ?? []) {
       const session = await scoped.sessions.get(childId);
@@ -634,7 +642,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     }
 
     // Non-claude-agent sessions: fall back to the tmux C-c interrupt.
-    const result = await scoped.sessionLifecycle.interrupt(sessionId);
+    const result = await scoped.sessionSuspender.interrupt(sessionId);
     return result;
   });
 
@@ -644,7 +652,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const { sessionId } = extract<{ sessionId: string }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
 
-    const result = await scoped.sessionLifecycle.kill(sessionId);
+    const result = await scoped.sessionTerminator.kill(sessionId);
     if (result.ok === false && result.message.includes("not found")) {
       throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
@@ -658,7 +666,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/archive", async (params, notify, ctx) => {
     const { sessionId } = extract<SessionIdParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.archive(sessionId);
+    const result = await scoped.sessionSuspender.archive(sessionId);
     if (result.ok) notify("session/updated", { session: await scoped.sessions.get(sessionId) });
     return result;
   });
@@ -666,7 +674,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/restore", async (params, notify, ctx) => {
     const { sessionId } = extract<SessionIdParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.restore(sessionId);
+    const result = await scoped.sessionSuspender.restore(sessionId);
     if (result.ok) notify("session/updated", { session: await scoped.sessions.get(sessionId) });
     return result;
   });
@@ -689,7 +697,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("worktree/diff", async (params, _notify, ctx) => {
     const { sessionId, base } = extract<{ sessionId: string; base?: string }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    return scoped.sessionService.worktreeDiff(sessionId, { base });
+    return worktreeDiff(scoped, sessionId, { base });
   });
 
   router.handle("worktree/create-pr", async (params, notify, ctx) => {
@@ -701,7 +709,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       draft?: boolean;
     }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.createWorktreePR(sessionId, { title, body, base, draft });
+    const result = await createWorktreePR(scoped, sessionId, { title, body, base, draft });
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -710,7 +718,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("worktree/finish", async (params, _notify, ctx) => {
     const { sessionId, noMerge, createPR } = extract<WorktreeFinishParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.finishWorktree(sessionId, {
+    const result = await finishWorktree(scoped, sessionId, {
       noMerge: noMerge ?? false,
       createPR: createPR ?? false,
     });
@@ -749,7 +757,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("verify/run", async (params, _notify, ctx) => {
     const { sessionId } = extract<SessionIdParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    return scoped.sessionLifecycle.runVerification(sessionId);
+    return scoped.sessionReviewer.runVerification(sessionId);
   });
 
   // ── Export ─────────────────────────────────────────────────────────────

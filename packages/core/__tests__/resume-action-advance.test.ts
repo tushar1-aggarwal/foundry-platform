@@ -40,7 +40,7 @@ describe("resume on an action stage marks failed when the action errors", () => 
       stages: [{ name: "finalize", action: "merge_pr", gate: "auto" as const }],
     };
 
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       summary: "resume action fail",
       flow: inlineFlow as any,
     });
@@ -80,7 +80,7 @@ describe("resume on an action stage auto-advances on success", () => {
       stages: [{ name: "finalize", action: "close", gate: "auto" as const }],
     };
 
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       summary: "resume action advance",
       flow: inlineFlow as any,
     });

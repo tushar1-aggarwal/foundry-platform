@@ -9,13 +9,13 @@
  *
  * The Temporal-mode test avoids a real Temporal server by using a stub
  * startTemporalWorkflow that resolves synchronously. It goes through
- * SessionLifecycle directly (not sessionService.start()) so we can inject
+ * SessionCreator directly (not sessionService.start()) so we can inject
  * the stub without standing up hosted mode plumbing.
  */
 
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
-import { SessionLifecycle } from "../services/session/index.js";
+import { SessionCreator } from "../services/session/index.js";
 
 let app: AppContext;
 
@@ -37,7 +37,7 @@ test("emitSessionCreated does NOT fire in Temporal mode", async () => {
   const stubWorkflowId = "stub-wf-id";
   const stubRunId = "stub-run-id";
 
-  const lifecycle = new SessionLifecycle({
+  const creator = new SessionCreator({
     sessions: app.sessions,
     events: app.events,
     messages: app.messages,
@@ -60,7 +60,7 @@ test("emitSessionCreated does NOT fire in Temporal mode", async () => {
     startTemporalWorkflow: async () => ({ workflowId: stubWorkflowId, runId: stubRunId }),
   });
 
-  await lifecycle.start(
+  await creator.start(
     { summary: "temporal-emit-gating-test" },
     {
       onCreated: () => {

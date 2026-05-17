@@ -92,9 +92,9 @@ const sessionStart: ToolDef = {
     }
 
     // Mirror packages/conductor/handlers/session.ts session/start: delegate to
-    // sessionLifecycle.start with the onCreated callback so the default
+    // sessionCreator.start with the onCreated callback so the default
     // dispatcher listener kicks the background launcher synchronously.
-    const session = await app.sessionLifecycle.start(
+    const session = await app.sessionCreator.start(
       {
         compute_name: parsed.compute,
         flow: parsed.flow,
@@ -135,7 +135,7 @@ const sessionKill: ToolDef = {
   inputSchema: sessionKillInput,
   handler: async (input, { app }) => {
     const parsed = input as z.infer<typeof sessionKillInput>;
-    const result = await app.sessionLifecycle.kill(parsed.sessionId);
+    const result = await app.sessionTerminator.kill(parsed.sessionId);
     if (result.ok === false && result.message.includes("not found")) {
       throw new Error(`Session not found: ${parsed.sessionId}`);
     }

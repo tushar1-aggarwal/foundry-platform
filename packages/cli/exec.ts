@@ -73,7 +73,7 @@ export async function execSession(app: AppContext, opts: ExecOpts): Promise<numb
   const log = output === "text" ? (msg: string) => process.stderr.write(chalk.dim(msg) + "\n") : () => {};
 
   // Resolve workspace if --workspace was passed. The session's workdir gets
-  // assigned by the workspace provisioner inside sessionLifecycle.start;
+  // assigned by the workspace provisioner inside sessionCreator.start;
   // here we just resolve the slug to a workspace_id.
   let workspace_id: string | null = null;
   if (opts.workspace) {
@@ -116,7 +116,7 @@ export async function execSession(app: AppContext, opts: ExecOpts): Promise<numb
 
   // Create session
   log(`Creating session: ${summary}`);
-  const session = await app.sessionLifecycle.start({
+  const session = await app.sessionCreator.start({
     ticket: opts.ticket,
     summary,
     repo,
@@ -143,7 +143,7 @@ export async function execSession(app: AppContext, opts: ExecOpts): Promise<numb
 
   // Wait
   const timeoutMs = (opts.timeout ?? 0) * 1000;
-  const { session: final, timedOut } = await app.sessionLifecycle.waitForCompletion(session.id, {
+  const { session: final, timedOut } = await app.sessionSuspender.waitForCompletion(session.id, {
     timeoutMs,
     pollMs: 5000,
     onStatus: (status) => log(`  Status: ${status}`),

@@ -70,7 +70,7 @@ async function tickSchedules(app: AppContext): Promise<void> {
         continue;
     }
     await safeAsync(`scheduled dispatch for ${sched.id}`, async () => {
-      const s = await app.sessionLifecycle.start({
+      const s = await app.sessionCreator.start({
         summary: sched.summary ?? `Scheduled: ${sched.id}`,
         repo: sched.repo ?? undefined,
         workdir: sched.workdir ?? undefined,

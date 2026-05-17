@@ -30,7 +30,14 @@ import type { TranscriptParserRegistry } from "../runtimes/transcript-parser.js"
 import type { StatusPollerRegistry } from "../executors/status-poller.js";
 import { SessionService, ComputeService } from "../services/index.js";
 import { SessionHooks } from "../services/session-hooks/index.js";
-import { SessionLifecycle } from "../services/session/index.js";
+import {
+  SessionCreator,
+  SessionTerminator,
+  SessionSuspender,
+  SessionForker,
+  SessionReviewer,
+} from "../services/session/index.js";
+import type { SessionLifecycleDeps } from "../services/session/index.js";
 import { SessionAttachService } from "../services/session/attach.js";
 import { DispatchService } from "../services/dispatch/index.js";
 import { StageAdvanceService } from "../services/stage-advance/index.js";
@@ -62,9 +69,76 @@ import type { PluginRegistry } from "../plugins/registry.js";
  * services close over the tenant-scoped repos + tenant-scoped `c.app` instead
  * of the root singletons. See `tenant-scope.ts` for the rationale: with awilix
  * `strict: true`, singleton deps resolve through the parent scope, which would
- * otherwise bind every tenant's `dispatchService` / `sessionLifecycle` /
+ * otherwise bind every tenant's `dispatchService` / session sub-services /
  * `sessionHooks` to the default-tenant repositories.
  */
+interface SessionLifecycleCradle {
+  sessions: SessionRepository;
+  events: EventRepository;
+  messages: MessageRepository;
+  todos: TodoRepository;
+  computes: ComputeRepository;
+  flows: FlowStore;
+  runtimes: RuntimeStore;
+  workspaces: WorkspaceStore;
+  usageRecorder: UsageRecorder;
+  statusPollers: StatusPollerRegistry;
+  config: ArkConfig;
+  app: AppContext;
+}
+
+/**
+ * Build the shared `SessionLifecycleDeps` cradle-slice consumed by every
+ * session sub-service. Each sub-service is registered independently in the
+ * container; they all close over the same narrow capability set.
+ */
+function buildSessionLifecycleDeps(c: SessionLifecycleCradle): SessionLifecycleDeps {
+  return {
+    sessions: c.sessions,
+    events: c.events,
+    messages: c.messages,
+    todos: c.todos,
+    computes: c.computes,
+    flows: c.flows,
+    runtimes: c.runtimes,
+    workspaces: c.workspaces,
+    config: c.config,
+    usageRecorder: c.usageRecorder,
+    statusPollers: c.statusPollers,
+    dispatch: (id) => c.app.dispatchService.dispatch(id),
+    removeWorktree: (session) => removeSessionWorktree(c.app, session),
+    deleteCredsSecret: (session, compute) => deletePerSessionCredsSecret(c.app, session, compute),
+    gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
+    resolveComputeTarget: (session) => c.app.resolveComputeTarget(session),
+    advance: (id, force) => c.app.stageAdvance.advance(id, force),
+    cleanupSession: async (session) => {
+      const { cleanupSession } = await import("../services/session/cleanup.js");
+      await cleanupSession(c.app, session);
+    },
+    provisionWorkspaceWorkdir: (session, ws, opts) => provisionWorkspaceWorkdir(c.app, session, ws, opts),
+    // Wire Temporal workflow starter when hosted mode + flag enabled.
+    // Uses a lazy async import so the @temporalio packages are only
+    // loaded when actually needed (avoids startup cost in local mode).
+    startTemporalWorkflow:
+      c.config.features.temporalOrchestration && (c.config.database?.url?.startsWith("postgres") ?? false)
+        ? async (sessionId: string, flowName: string, tenantId: string) => {
+            const { getTemporalClient } = await import("../temporal/client.js");
+            const client = await getTemporalClient(c.config.temporal);
+            const wfId = `session-${sessionId}`;
+            const handle = await client.workflow.start("sessionWorkflow", {
+              taskQueue: `ark.${tenantId}.stages`,
+              workflowId: wfId,
+              // Hard wall-clock cap so a stuck workflow eventually closes
+              // itself. See SessionService.start() for rationale.
+              workflowExecutionTimeout: (c.config.temporal?.workflowExecutionTimeout ?? "24h") as any,
+              args: [{ sessionId, tenantId, flowName }],
+            });
+            return { workflowId: wfId, runId: handle.firstExecutionRunId };
+          }
+        : undefined,
+  };
+}
+
 export function registerServices(
   container: AppContainer,
   lifetime: Lifetime.SINGLETON | Lifetime.SCOPED = Lifetime.SINGLETON,
@@ -109,77 +183,31 @@ export function registerServices(
           advance: (id, force, outcome) => c.app.stageAdvance.advance(id, force, outcome),
           dispatch: (id) => c.app.dispatchService.dispatch(id),
           executeAction: (id, action) => c.app.stageAdvance.executeAction(id, action),
-          runVerification: (id) => c.app.sessionLifecycle.runVerification(id),
+          runVerification: (id) => c.app.sessionReviewer.runVerification(id),
           recordSessionUsage: (session, usage, provider, source) =>
-            c.app.sessionLifecycle.recordSessionUsage(session, usage, provider, source),
+            c.app.sessionCreator.recordUsage(session, usage, provider, source),
           getOutput: (id, opts) => getOutput(c.app, id, opts),
-          cleanupOnTerminal: (id) => c.app.sessionLifecycle.cleanupOnTerminal(id),
+          cleanupOnTerminal: (id) => c.app.sessionTerminator.cleanupOnTerminal(id),
           ...buildFlowCallbacks(c.app),
         }),
       { lifetime },
     ),
 
-    sessionLifecycle: asFunction(
-      (c: {
-        sessions: SessionRepository;
-        events: EventRepository;
-        messages: MessageRepository;
-        todos: TodoRepository;
-        computes: ComputeRepository;
-        flows: FlowStore;
-        runtimes: RuntimeStore;
-        workspaces: WorkspaceStore;
-        usageRecorder: UsageRecorder;
-        statusPollers: StatusPollerRegistry;
-        config: ArkConfig;
-        app: AppContext;
-      }) =>
-        new SessionLifecycle({
-          sessions: c.sessions,
-          events: c.events,
-          messages: c.messages,
-          todos: c.todos,
-          computes: c.computes,
-          flows: c.flows,
-          runtimes: c.runtimes,
-          workspaces: c.workspaces,
-          config: c.config,
-          usageRecorder: c.usageRecorder,
-          statusPollers: c.statusPollers,
-          dispatch: (id) => c.app.dispatchService.dispatch(id),
-          removeWorktree: (session) => removeSessionWorktree(c.app, session),
-          deleteCredsSecret: (session, compute) => deletePerSessionCredsSecret(c.app, session, compute),
-          gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
-          resolveComputeTarget: (session) => c.app.resolveComputeTarget(session),
-          advance: (id, force) => c.app.stageAdvance.advance(id, force),
-          cleanupSession: async (session) => {
-            const { cleanupSession } = await import("../services/session/cleanup.js");
-            await cleanupSession(c.app, session);
-          },
-          provisionWorkspaceWorkdir: (session, ws, opts) => provisionWorkspaceWorkdir(c.app, session, ws, opts),
-          // Wire Temporal workflow starter when hosted mode + flag enabled.
-          // Uses a lazy async import so the @temporalio packages are only
-          // loaded when actually needed (avoids startup cost in local mode).
-          startTemporalWorkflow:
-            c.config.features.temporalOrchestration && (c.config.database?.url?.startsWith("postgres") ?? false)
-              ? async (sessionId: string, flowName: string, tenantId: string) => {
-                  const { getTemporalClient } = await import("../temporal/client.js");
-                  const client = await getTemporalClient(c.config.temporal);
-                  const wfId = `session-${sessionId}`;
-                  const handle = await client.workflow.start("sessionWorkflow", {
-                    taskQueue: `ark.${tenantId}.stages`,
-                    workflowId: wfId,
-                    // Hard wall-clock cap so a stuck workflow eventually closes
-                    // itself. See SessionService.start() for rationale.
-                    workflowExecutionTimeout: (c.config.temporal?.workflowExecutionTimeout ?? "24h") as any,
-                    args: [{ sessionId, tenantId, flowName }],
-                  });
-                  return { workflowId: wfId, runId: handle.firstExecutionRunId };
-                }
-              : undefined,
-        }),
-      { lifetime },
-    ),
+    sessionCreator: asFunction((c: SessionLifecycleCradle) => new SessionCreator(buildSessionLifecycleDeps(c)), {
+      lifetime,
+    }),
+    sessionTerminator: asFunction((c: SessionLifecycleCradle) => new SessionTerminator(buildSessionLifecycleDeps(c)), {
+      lifetime,
+    }),
+    sessionSuspender: asFunction((c: SessionLifecycleCradle) => new SessionSuspender(buildSessionLifecycleDeps(c)), {
+      lifetime,
+    }),
+    sessionForker: asFunction((c: SessionLifecycleCradle) => new SessionForker(buildSessionLifecycleDeps(c)), {
+      lifetime,
+    }),
+    sessionReviewer: asFunction((c: SessionLifecycleCradle) => new SessionReviewer(buildSessionLifecycleDeps(c)), {
+      lifetime,
+    }),
 
     // DispatchService -- RF-3 narrow deps. No AppContext field. Callbacks
     // wrap the still-AppContext-taking helpers (buildTaskWithHandoff,
@@ -290,10 +318,10 @@ export function registerServices(
           db: c.db,
           dispatch: (id) => c.app.dispatchService.dispatch(id),
           executeAction: (id, action, opts) => executeAction(c.app, id, action, opts),
-          runVerification: (id) => c.app.sessionLifecycle.runVerification(id),
+          runVerification: (id) => c.app.sessionReviewer.runVerification(id),
           recordSessionUsage: (session, usage, provider, source) =>
-            c.app.sessionLifecycle.recordSessionUsage(session, usage, provider, source),
-          sessionClone: (id, newName) => c.app.sessionLifecycle.clone(id, newName),
+            c.app.sessionCreator.recordUsage(session, usage, provider, source),
+          sessionClone: (id, newName) => c.app.sessionForker.clone(id, newName),
           capturePlanMd: (session) => capturePlanMdIfPresent(c.app, session),
           gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
           saveCheckpoint: (sessionId) => saveCheckpoint({ sessions: c.sessions, events: c.events }, sessionId),

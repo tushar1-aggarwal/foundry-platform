@@ -17,8 +17,9 @@
  *   post-launch.ts     finalizeLaunch (persist run state + poller + telemetry)
  *   inline-substage.ts dispatchInlineSubStage (for_each mode:inline sub-stages)
  *
- * Resume: tear down any running tmux, clear transient status fields, call
- * dispatch again.
+ * Resume: delegates to the single authoritative SessionService.resume
+ * (full multi-executor handle kill + flow-state rewind + background
+ * dispatch). dispatch-core does NOT own a second resume cleanup path.
  *
  * Dispatch resolves a `ComputeTarget` (Compute × Isolation composition)
  * from `(compute_kind, isolation_kind)` plus a `ComputeHandle` carrying
@@ -256,27 +257,21 @@ export class DispatchService {
     });
   }
 
-  async resume(sessionId: string, opts?: { onLog?: (msg: string) => void }): Promise<DispatchResult> {
-    const session = await this.deps.sessions.get(sessionId);
-    if (!session) return { ok: false, message: `Session ${sessionId} not found` };
-    if (session.status === "running" && session.session_id) return { ok: false, message: "Already running" };
-
-    if (session.session_id) await this.deps.launcher.kill(session.session_id);
-
-    await this.deps.sessions.update(sessionId, {
-      status: "ready",
-      error: null,
-      breakpoint_reason: null,
-      attached_by: null,
-      session_id: null,
-    });
-    await this.deps.events.log(sessionId, "session_resumed", {
-      stage: session.stage,
-      actor: "user",
-      data: { from_status: session.status },
-    });
-
-    // Auto re-dispatch
-    return this.dispatch(sessionId, opts);
+  /**
+   * Resume has ONE authoritative implementation: `SessionService.resume`.
+   * It is the complete cleanup path -- kills the runtime handle across every
+   * registered executor (the handle is opaque; only the owning executor can
+   * clean it up), rewinds + deletes flow-state on a rewind, routes agent vs
+   * action stages, and kicks dispatch in the background. This thin shim only
+   * exists so legacy `dispatchService.resume(id)` callers keep working; it
+   * MUST NOT re-implement a partial subset (that was the split-brain bug).
+   */
+  async resume(sessionId: string, opts?: { rewindToStage?: string }): Promise<DispatchResult> {
+    const result = await this.deps.getApp().sessionService.resume(sessionId, opts);
+    if (!result.ok) return { ok: false, message: result.message };
+    // Dispatch is kicked in the background by the session_created listener
+    // (agent stages) or kickActionStage (action stages); the session is at
+    // status=ready on return and flips to running once the launcher lands.
+    return { ok: true, launched: false, reason: "background_dispatch", message: result.message };
   }
 }

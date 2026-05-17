@@ -30,7 +30,7 @@
  */
 
 import type { ArkConfig } from "../../config.js";
-import type { Session } from "../../../types/index.js";
+import type { Session, SessionOpResult } from "../../../types/index.js";
 import type { SessionRepository } from "../../repositories/session.js";
 import type { EventRepository } from "../../repositories/event.js";
 import type { MessageRepository } from "../../repositories/message.js";
@@ -62,7 +62,7 @@ export interface RecordUsageCb {
   ): void;
 }
 export interface SessionCloneCb {
-  (sessionId: string, newName?: string): Promise<{ ok: true; sessionId: string } | { ok: false; message: string }>;
+  (sessionId: string, newName?: string): Promise<SessionOpResult>;
 }
 export interface CapturePlanMdCb {
   (session: Session): Promise<void>;

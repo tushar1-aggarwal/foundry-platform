@@ -71,11 +71,11 @@ describe("rejectReviewGate", async () => {
       ],
     });
 
-    const session = await getApp().sessionLifecycle.start({ flow: "reject-custom", summary: "custom reject" });
+    const session = await getApp().sessionCreator.start({ flow: "reject-custom", summary: "custom reject" });
     expect(session.stage).toBe("qa");
 
     let dispatched = 0;
-    const result = await getApp().sessionLifecycle.rejectReviewGate(session.id, "tests are missing", async () => {
+    const result = await getApp().sessionReviewer.reject(session.id, "tests are missing", async () => {
       dispatched++;
       return { ok: true, message: "dispatched" };
     });
@@ -105,8 +105,8 @@ describe("rejectReviewGate", async () => {
       ],
     });
 
-    const session = await getApp().sessionLifecycle.start({ flow: "reject-default", summary: "default" });
-    const result = await getApp().sessionLifecycle.rejectReviewGate(session.id, "needs more tests", async () => ({
+    const session = await getApp().sessionCreator.start({ flow: "reject-default", summary: "default" });
+    const result = await getApp().sessionReviewer.reject(session.id, "needs more tests", async () => ({
       ok: true,
       message: "ok",
     }));
@@ -123,8 +123,8 @@ describe("rejectReviewGate", async () => {
       stages: [{ name: "sign-off", agent: "reviewer", gate: "manual" }],
     });
 
-    const session = await getApp().sessionLifecycle.start({ flow: "reject-manual", summary: "manual gate" });
-    const res = await getApp().sessionLifecycle.rejectReviewGate(session.id, "nope", async () => ({
+    const session = await getApp().sessionCreator.start({ flow: "reject-manual", summary: "manual gate" });
+    const res = await getApp().sessionReviewer.reject(session.id, "nope", async () => ({
       ok: true,
       message: "ok",
     }));
@@ -137,8 +137,8 @@ describe("rejectReviewGate", async () => {
       name: "reject-auto",
       stages: [{ name: "build", agent: "builder", gate: "auto" }],
     });
-    const session = await getApp().sessionLifecycle.start({ flow: "reject-auto", summary: "auto" });
-    const res = await getApp().sessionLifecycle.rejectReviewGate(session.id, "nope", async () => ({
+    const session = await getApp().sessionCreator.start({ flow: "reject-auto", summary: "auto" });
+    const res = await getApp().sessionReviewer.reject(session.id, "nope", async () => ({
       ok: true,
       message: "ok",
     }));
@@ -147,7 +147,7 @@ describe("rejectReviewGate", async () => {
   });
 
   it("returns an error when the session does not exist", async () => {
-    const res = await getApp().sessionLifecycle.rejectReviewGate("s-missing", "why", async () => ({
+    const res = await getApp().sessionReviewer.reject("s-missing", "why", async () => ({
       ok: true,
       message: "x",
     }));
@@ -160,14 +160,14 @@ describe("rejectReviewGate", async () => {
       name: "reject-clear",
       stages: [{ name: "review", agent: "reviewer", gate: "review" }],
     });
-    const session = await getApp().sessionLifecycle.start({ flow: "reject-clear", summary: "clear" });
+    const session = await getApp().sessionCreator.start({ flow: "reject-clear", summary: "clear" });
     // Pre-populate runtime ids to verify they're nulled out.
     await getApp().sessions.update(session.id, {
       claude_session_id: "prev-claude",
       session_id: "ark-s-prev",
     });
 
-    await getApp().sessionLifecycle.rejectReviewGate(session.id, "rework", async () => ({ ok: true, message: "ok" }));
+    await getApp().sessionReviewer.reject(session.id, "rework", async () => ({ ok: true, message: "ok" }));
 
     const after = (await getApp().sessions.get(session.id))!;
     expect(after.claude_session_id).toBeNull();
@@ -192,7 +192,7 @@ describe("rejectReviewGate max_rejections", async () => {
       ],
     });
 
-    const session = await getApp().sessionLifecycle.start({ flow: "reject-cap", summary: "cap" });
+    const session = await getApp().sessionCreator.start({ flow: "reject-cap", summary: "cap" });
 
     let dispatchCount = 0;
     const stubDispatch = async () => {
@@ -201,19 +201,19 @@ describe("rejectReviewGate max_rejections", async () => {
     };
 
     // First reject -> rework_count becomes 1
-    let res = await getApp().sessionLifecycle.rejectReviewGate(session.id, "r1", stubDispatch);
+    let res = await getApp().sessionReviewer.reject(session.id, "r1", stubDispatch);
     expect(res.ok).toBe(true);
     expect((await getApp().sessions.get(session.id))!.rejection_count).toBe(1);
     expect(dispatchCount).toBe(1);
 
     // Second reject -> rework_count becomes 2 (still within cap since 1 < 2)
-    res = await getApp().sessionLifecycle.rejectReviewGate(session.id, "r2", stubDispatch);
+    res = await getApp().sessionReviewer.reject(session.id, "r2", stubDispatch);
     expect(res.ok).toBe(true);
     expect((await getApp().sessions.get(session.id))!.rejection_count).toBe(2);
     expect(dispatchCount).toBe(2);
 
     // Third reject -> cap hit (2 >= 2), session fails, no dispatch.
-    res = await getApp().sessionLifecycle.rejectReviewGate(session.id, "r3", stubDispatch);
+    res = await getApp().sessionReviewer.reject(session.id, "r3", stubDispatch);
     expect(res.ok).toBe(false);
     expect(res.message).toBe("max_rejections exceeded");
     expect(dispatchCount).toBe(2);
@@ -245,9 +245,9 @@ describe("rejectReviewGate max_rejections", async () => {
         },
       ],
     });
-    const session = await getApp().sessionLifecycle.start({ flow: "reject-zero", summary: "zero" });
+    const session = await getApp().sessionCreator.start({ flow: "reject-zero", summary: "zero" });
     let dispatched = 0;
-    const res = await getApp().sessionLifecycle.rejectReviewGate(session.id, "no", async () => {
+    const res = await getApp().sessionReviewer.reject(session.id, "no", async () => {
       dispatched++;
       return { ok: true, message: "x" };
     });
@@ -280,11 +280,11 @@ describe("review gate integration", async () => {
       ],
     });
 
-    const session = await getApp().sessionLifecycle.start({ flow: "integration", summary: "integration" });
+    const session = await getApp().sessionCreator.start({ flow: "integration", summary: "integration" });
     expect(session.stage).toBe("review");
 
     // Reject with a stub dispatch to simulate rework.
-    const res = await getApp().sessionLifecycle.rejectReviewGate(session.id, "add tests", async () => ({
+    const res = await getApp().sessionReviewer.reject(session.id, "add tests", async () => ({
       ok: true,
       message: "ok",
     }));

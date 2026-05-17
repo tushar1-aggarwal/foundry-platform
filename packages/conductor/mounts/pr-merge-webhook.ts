@@ -105,7 +105,7 @@ export async function handlePRMergeWebhook(app: AppContext, req: Request): Promi
     healthFetcher,
     onRevert,
     onStop: async (id) => {
-      await app.sessionLifecycle.stop(id);
+      await app.sessionTerminator.stop(id);
     },
   }).catch((e) => logError("conductor", `rollback watcher error: ${e}`));
 

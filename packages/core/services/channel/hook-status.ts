@@ -189,7 +189,7 @@ export async function processHookPayload(
     });
 
     if (result.newStatus === "completed" || result.newStatus === "failed") {
-      await scoped.sessionLifecycle.cleanupOnTerminal(sessionId);
+      await scoped.sessionTerminator.cleanupOnTerminal(sessionId);
 
       // Worktree removal + session_cleaned event (idempotent; safe to call
       // here without transactional coupling -- cleanup is external state only).

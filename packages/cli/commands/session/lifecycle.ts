@@ -81,7 +81,7 @@ export function registerLifecycleCommands(session: Command) {
       if (!opts.force) {
         // Run verification first
         const app = await getInProcessApp();
-        const result = await app.sessionLifecycle.runVerification(id);
+        const result = await app.sessionReviewer.runVerification(id);
         if (!result.ok) {
           console.log(chalk.red("Verification failed:"));
           console.log(chalk.red(result.message));
@@ -246,7 +246,7 @@ export function registerLifecycleCommands(session: Command) {
     .action(async (id) => {
       console.log(chalk.dim("Running verification..."));
       const app = await getInProcessApp();
-      const result = await app.sessionLifecycle.runVerification(id);
+      const result = await app.sessionReviewer.runVerification(id);
       if (result.ok) {
         console.log(chalk.green("Verification passed"));
       } else {

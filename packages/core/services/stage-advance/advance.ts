@@ -372,7 +372,9 @@ export class StageAdvanceService {
       { sessionId, stage: null, opKind: "handoff", idempotencyKey: opts?.idempotencyKey },
       async () => {
         const result = await deps.sessionClone(sessionId, instructions);
-        if (!result.ok) return { ok: false, message: (result as { ok: false; message: string }).message };
+        if (!result.ok || !result.sessionId) {
+          return { ok: false, message: result.message };
+        }
 
         await deps.events.log(result.sessionId, "session_handoff", {
           actor: "user",

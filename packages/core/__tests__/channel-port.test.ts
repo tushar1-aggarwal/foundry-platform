@@ -36,7 +36,7 @@ describe("isChannelPortAvailable", async () => {
   });
 
   it("returns false when a running session uses the port", async () => {
-    const session = await getApp().sessionLifecycle.start({
+    const session = await getApp().sessionCreator.start({
       summary: "port-test",
       repo: "test",
       flow: "bare",
@@ -50,7 +50,7 @@ describe("isChannelPortAvailable", async () => {
   });
 
   it("returns true when excludeSessionId matches the running session", async () => {
-    const session = await getApp().sessionLifecycle.start({
+    const session = await getApp().sessionCreator.start({
       summary: "port-exclude",
       repo: "test",
       flow: "bare",
