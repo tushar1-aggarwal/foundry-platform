@@ -97,6 +97,13 @@ export async function maybeHandleActionStage(
     });
     return { ok: false, message: result.message };
   }
+  // Action ran to completion on the conductor (no agent in a pod to emit
+  // hooks). Write the per-stage-done signal so awaitStageCompletionActivity's
+  // poll on session.status unblocks. Also clear session_id (sticky from the
+  // previous agent stage); the workflow's downstream projectStageActivity
+  // skips its `status: "running"` write only when session_id is null, so
+  // without this clear the "running" overwrites our "ready" 4ms later.
+  await deps.sessions.update(sessionId, { status: "ready", session_id: null });
   const postAction = await deps.sessions.get(sessionId);
   if (postAction?.status === "ready") {
     await deps.mediateStageHandoff(sessionId, { autoDispatch: true, source: "dispatch_action" });
