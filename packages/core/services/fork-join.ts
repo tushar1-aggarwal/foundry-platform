@@ -174,7 +174,7 @@ export async function fanOut(
     });
     // Set first stage so child is dispatchable
     const childFlow = task.flow ?? "bare";
-    const firstStage = flow.getFirstStage(deps, childFlow);
+    const firstStage = await flow.getFirstStage(deps, childFlow);
     await deps.sessions.update(child.id, {
       parent_id: parentId,
       fork_group: forkGroup,
