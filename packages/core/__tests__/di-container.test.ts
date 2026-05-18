@@ -314,7 +314,7 @@ describe("resource stores via container", async () => {
     const flows = app.flows;
     expect(typeof flows.list).toBe("function");
     // Should at least have builtin flows
-    const list = flows.list();
+    const list = await flows.list();
     expect(list.length).toBeGreaterThanOrEqual(0);
   });
 

@@ -38,10 +38,11 @@ export class EphemeralFlowStore implements FlowStore {
     return this.backing.get(name);
   }
 
-  list(): FlowSummary[] {
+  async list(): Promise<FlowSummary[]> {
     // Merge: backing list first, then overlay entries (ephemeral last so they
-    // don't shadow real flows in UIs that enumerate flows).
-    const result = this.backing.list();
+    // don't shadow real flows in UIs that enumerate flows). `await` handles
+    // both a sync (file-backed) and async (DB-backed) backing store.
+    const result = await this.backing.list();
     for (const [name, def] of this.overlay) {
       result.push({
         name,

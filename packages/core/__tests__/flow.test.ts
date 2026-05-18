@@ -80,40 +80,40 @@ describe("loadFlow", () => {
 // ── listFlows ────────────────────────────────────────────────────────────────
 
 describe("listFlows", () => {
-  it("includes builtin flows", () => {
-    const flows = getApp().flows.list();
+  it("includes builtin flows", async () => {
+    const flows = await getApp().flows.list();
     const names = flows.map((f) => f.name);
     expect(names).toContain("default");
   });
 
-  it("includes user-defined flows", () => {
+  it("includes user-defined flows", async () => {
     writeUserFlow("custom-flow", {
       name: "custom-flow",
       description: "a custom flow",
       stages: [{ name: "s1", agent: "tester", gate: "auto" }],
     });
-    const flows = getApp().flows.list();
+    const flows = await getApp().flows.list();
     const custom = flows.find((f) => f.name === "custom-flow");
     expect(custom).toBeDefined();
     expect(custom!.source).toBe("user");
     expect(custom!.description).toBe("a custom flow");
   });
 
-  it("user flow overrides builtin with same name", () => {
+  it("user flow overrides builtin with same name", async () => {
     writeUserFlow("default", {
       name: "default",
       description: "overridden",
       stages: [{ name: "x", agent: "a", gate: "auto" }],
     });
-    const flows = getApp().flows.list();
+    const flows = await getApp().flows.list();
     const defaults = flows.filter((f) => f.name === "default");
     expect(defaults).toHaveLength(1);
     expect(defaults[0].source).toBe("user");
     expect(defaults[0].description).toBe("overridden");
   });
 
-  it("returns stages as an array of stage names", () => {
-    const flows = getApp().flows.list();
+  it("returns stages as an array of stage names", async () => {
+    const flows = await getApp().flows.list();
     const def = flows.find((f) => f.name === "default");
     expect(def).toBeDefined();
     expect(Array.isArray(def!.stages)).toBe(true);

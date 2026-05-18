@@ -69,7 +69,7 @@ describe("FileFlowStore.get", () => {
 // ── list ────────────────────────────────────────────────────────────────────
 
 describe("FileFlowStore.list", () => {
-  it("returns empty when no flows exist", () => {
+  it("returns empty when no flows exist", async () => {
     rmSync(builtinDir, { recursive: true, force: true });
     rmSync(userDir, { recursive: true, force: true });
     rmSync(projectDir, { recursive: true, force: true });
@@ -77,42 +77,42 @@ describe("FileFlowStore.list", () => {
       builtinDir: join(tempDir, "gone-builtin"),
       userDir: join(tempDir, "gone-user"),
     });
-    expect(storeEmpty.list()).toEqual([]);
+    expect(await storeEmpty.list()).toEqual([]);
   });
 
-  it("lists flows from all tiers", () => {
+  it("lists flows from all tiers", async () => {
     writeFlow(builtinDir, "b-only", { name: "b-only", stages: [{ name: "s1", gate: "auto" }] });
     writeFlow(userDir, "u-only", { name: "u-only", stages: [{ name: "s2", gate: "manual" }] });
     writeFlow(projectDir, "p-only", { name: "p-only", stages: [{ name: "s3", gate: "auto" }] });
 
-    const flows = store.list();
+    const flows = await store.list();
     const names = flows.map((f) => f.name);
     expect(names).toContain("b-only");
     expect(names).toContain("u-only");
     expect(names).toContain("p-only");
   });
 
-  it("higher tier overrides lower tier with same name", () => {
+  it("higher tier overrides lower tier with same name", async () => {
     writeFlow(builtinDir, "overlap", { name: "overlap", description: "builtin", stages: [] });
     writeFlow(userDir, "overlap", { name: "overlap", description: "user", stages: [] });
 
-    const flows = store.list();
+    const flows = await store.list();
     const overlap = flows.find((f) => f.name === "overlap");
     expect(overlap).toBeDefined();
     expect(overlap!.source).toBe("user");
     expect(overlap!.description).toBe("user");
   });
 
-  it("project tier wins in listing", () => {
+  it("project tier wins in listing", async () => {
     writeFlow(builtinDir, "overlap", { name: "overlap", description: "builtin", stages: [] });
     writeFlow(projectDir, "overlap", { name: "overlap", description: "project", stages: [] });
 
-    const flows = store.list();
+    const flows = await store.list();
     const overlap = flows.find((f) => f.name === "overlap");
     expect(overlap!.source).toBe("project");
   });
 
-  it("returns stage names as string array", () => {
+  it("returns stage names as string array", async () => {
     writeFlow(builtinDir, "multi", {
       name: "multi",
       stages: [
@@ -120,7 +120,7 @@ describe("FileFlowStore.list", () => {
         { name: "impl", gate: "auto" },
       ],
     });
-    const flows = store.list();
+    const flows = await store.list();
     const multi = flows.find((f) => f.name === "multi");
     expect(multi!.stages).toEqual(["plan", "impl"]);
   });
@@ -166,11 +166,11 @@ describe("FileFlowStore.delete", () => {
 // ── no projectDir ───────────────────────────────────────────────────────────
 
 describe("FileFlowStore without projectDir", () => {
-  it("skips project tier when projectDir is not set", () => {
+  it("skips project tier when projectDir is not set", async () => {
     writeFlow(projectDir, "proj-only", { name: "proj-only", stages: [] });
     const storeNoProject = new FileFlowStore({ builtinDir, userDir });
     expect(storeNoProject.get("proj-only")).toBeNull();
-    const flows = storeNoProject.list();
+    const flows = await storeNoProject.list();
     expect(flows.find((f) => f.name === "proj-only")).toBeUndefined();
   });
 });

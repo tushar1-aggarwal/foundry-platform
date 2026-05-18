@@ -21,7 +21,11 @@ export interface FlowSummary {
 }
 
 export interface FlowStore {
-  list(): FlowSummary[];
+  // Async: a DB-backed store (hosted mode) lists over the network. All
+  // callers already `await`. `get()` stays sync on purpose -- the dispatch
+  // hot path (services/flow.ts) depends on a synchronous, cache-backed
+  // lookup; only `list()` (UI/enumeration, never the hot path) is async.
+  list(): Promise<FlowSummary[]>;
   get(name: string): FlowDefinition | null;
   save(name: string, flow: FlowDefinition, scope?: "global" | "project"): void;
   delete(name: string, scope?: "global" | "project"): boolean;
@@ -76,7 +80,7 @@ export class FileFlowStore implements FlowStore {
     return null;
   }
 
-  list(): FlowSummary[] {
+  async list(): Promise<FlowSummary[]> {
     const result = new Map<string, FlowSummary>();
 
     const dirs: [string, string][] = [
