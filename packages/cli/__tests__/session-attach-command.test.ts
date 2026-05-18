@@ -25,7 +25,6 @@ beforeAll(async () => {
   port = app.config.ports.conductor;
   const s = new ArkServer();
   registerAllHandlers(s.router, app);
-  s.attachLifecycle(app);
   s.attachApp(app);
   server = s.startWebSocket(port, { app });
   setRemoteServer(`http://localhost:${port}`, undefined);

@@ -38,7 +38,6 @@ describe("app-client: remote-mode (--server url)", () => {
     port = app.config.ports.conductor;
     const s = new ArkServer();
     registerAllHandlers(s.router, app);
-    s.attachLifecycle(app);
     s.attachApp(app);
     server = s.startWebSocket(port);
   });
@@ -81,7 +80,6 @@ describe("app-client: auto-discovery against a running local daemon", () => {
     port = app.config.ports.conductor;
     const s = new ArkServer();
     registerAllHandlers(s.router, app);
-    s.attachLifecycle(app);
     s.attachApp(app);
     server = s.startWebSocket(port);
 
