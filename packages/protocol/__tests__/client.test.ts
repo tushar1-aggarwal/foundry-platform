@@ -1,17 +1,33 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../core/app.js";
 import { ArkClient } from "../client.js";
 import { ArkServer } from "../../conductor/index.js";
 import { registerAllHandlers } from "../../conductor/register.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../core/temporal/test-harness.js";
 import type { Transport } from "../transport.js";
 import type { JsonRpcMessage } from "../types.js";
 
 let app: AppContext;
+let detach: (() => void) | undefined;
 beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(join(flowDir, "x-auto.yaml"), `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`);
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 afterAll(async () => {
+  detach?.();
   await app?.shutdown();
 });
 
@@ -58,48 +74,53 @@ describe("ArkClient", async () => {
   it("creates and lists sessions", async () => {
     const { client } = createPair();
     await client.initialize();
-    const session = await client.sessionStart({ summary: "client-test", repo: ".", flow: "bare" });
+    const session = await client.sessionStart({ summary: "client-test", repo: ".", flow: "x-auto" });
     expect(session.id).toBeTruthy();
     expect(session.summary).toBe("client-test");
     const sessions = await client.sessionList();
     expect(sessions.length).toBeGreaterThan(0);
     expect(sessions.some((s: any) => s.id === session.id)).toBe(true);
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
     client.close();
-  });
+  }, 45_000);
 
   it("reads session detail", async () => {
     const { client } = createPair();
     await client.initialize();
-    const session = await client.sessionStart({ summary: "read-test", repo: ".", flow: "bare" });
+    const session = await client.sessionStart({ summary: "read-test", repo: ".", flow: "x-auto" });
     const detail = await client.sessionRead(session.id);
     expect(detail.session.id).toBe(session.id);
     expect(detail.session.summary).toBe("read-test");
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
     client.close();
-  });
+  }, 45_000);
 
   it("reads session with events include", async () => {
     const { client } = createPair();
     await client.initialize();
-    const session = await client.sessionStart({ summary: "include-test", repo: ".", flow: "bare" });
+    const session = await client.sessionStart({ summary: "include-test", repo: ".", flow: "x-auto" });
     const detail = await client.sessionRead(session.id, ["events"]);
     expect(detail.session.id).toBe(session.id);
     expect(detail.events).toBeDefined();
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
     client.close();
-  });
+  }, 45_000);
 
   it("updates session fields", async () => {
     const { client } = createPair();
     await client.initialize();
-    const session = await client.sessionStart({ summary: "update-test", repo: ".", flow: "bare" });
+    const session = await client.sessionStart({ summary: "update-test", repo: ".", flow: "x-auto" });
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
     const updated = await client.sessionUpdate(session.id, { summary: "updated-summary" });
     expect(updated.summary).toBe("updated-summary");
     client.close();
-  });
+  }, 45_000);
 
   it("deletes and verifies session removal from list", async () => {
     const { client } = createPair();
     await client.initialize();
-    const session = await client.sessionStart({ summary: "delete-test", repo: ".", flow: "bare" });
+    const session = await client.sessionStart({ summary: "delete-test", repo: ".", flow: "x-auto" });
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
     await client.sessionDelete(session.id);
     // After delete, session should not appear in list (soft-delete)
     const sessions = await client.sessionList();
@@ -109,7 +130,7 @@ describe("ArkClient", async () => {
       expect(found.status).toBe("deleted");
     }
     client.close();
-  });
+  }, 45_000);
 
   it("receives notifications", async () => {
     const { client, server } = createPair();
@@ -194,13 +215,14 @@ describe("ArkClient", async () => {
   it("queries session events and messages", async () => {
     const { client } = createPair();
     await client.initialize();
-    const session = await client.sessionStart({ summary: "query-test", repo: ".", flow: "bare" });
+    const session = await client.sessionStart({ summary: "query-test", repo: ".", flow: "x-auto" });
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
     const events = await client.sessionEvents(session.id);
     expect(Array.isArray(events)).toBe(true);
     const messages = await client.sessionMessages(session.id);
     expect(Array.isArray(messages)).toBe(true);
     client.close();
-  });
+  }, 45_000);
 
   it("auto-increments request IDs", async () => {
     const sentIds: number[] = [];
