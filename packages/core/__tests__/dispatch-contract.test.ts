@@ -93,6 +93,32 @@ describe("DispatchResult contract", () => {
     }
   });
 
+  it("maybeHandleActionStage on successful action writes status='ready' so awaitStageCompletion unblocks", async () => {
+    const session = makeSession({ stage: "create_pr", status: "running" });
+    const updates: Array<Record<string, unknown>> = [];
+    const deps = {
+      sessions: {
+        get: async () => makeSession({ stage: "create_pr", status: "running" }),
+        update: async (_id: string, patch: Record<string, unknown>) => {
+          updates.push(patch);
+        },
+      },
+      getStageAction: () => ({ type: "action" as const, action: "create_pr" }),
+      executeAction: async () => ({ ok: true, message: "PR created" }),
+      mediateStageHandoff: async () => undefined,
+    } as any;
+
+    await maybeHandleActionStage(deps, session);
+
+    const statusWrites = updates.filter((p) => "status" in p);
+    expect(statusWrites).toHaveLength(1);
+    expect(statusWrites[0].status).toBe("ready");
+    // session_id must be cleared so the workflow's downstream
+    // projectStageActivity drops its `status: "running"` write (the guard
+    // there only skips the running transition when session_id is null).
+    expect(statusWrites[0].session_id).toBeNull();
+  });
+
   it("emitEmptyListComplete returns launched:false reason:for_each_empty_list", async () => {
     let logged: { sid: string; type: string } | null = null;
     let updated = false;

@@ -98,7 +98,14 @@ export async function maybeHandleActionStage(
     });
     return { ok: false, message: result.message };
   }
-  // On success the Temporal workflow drives the post-action handoff.
+  // Action ran to completion on the conductor (no agent in a pod to emit
+  // hooks). Write the per-stage-done signal so awaitStageCompletionActivity
+  // -- which polls session.status and treats "ready" as stage-done -- unblocks.
+  // Also clear session_id (sticky from the previous agent stage); the
+  // projection seam skips its `status: "running"` write only when session_id
+  // is null, so without this clear "running" would overwrite "ready". The
+  // Temporal workflow drives the next-stage handoff from here.
+  await deps.sessions.update(sessionId, { status: "ready", session_id: null });
   return {
     ok: true,
     launched: false,
