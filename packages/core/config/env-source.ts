@@ -27,6 +27,7 @@ export interface EnvSecretsOverrides {
   backend?: "file" | "aws";
   awsRegion?: string;
   awsKmsKeyId?: string;
+  awsEndpoint?: string;
 }
 
 /**
@@ -227,6 +228,7 @@ export function readEnv(env: NodeJS.ProcessEnv = process.env): EnvOverrides {
   }
   if (env.ARK_SECRETS_AWS_REGION) out.secrets.awsRegion = env.ARK_SECRETS_AWS_REGION;
   if (env.ARK_SECRETS_AWS_KMS_KEY_ID) out.secrets.awsKmsKeyId = env.ARK_SECRETS_AWS_KMS_KEY_ID;
+  if (env.ARK_SECRETS_AWS_ENDPOINT) out.secrets.awsEndpoint = env.ARK_SECRETS_AWS_ENDPOINT;
 
   // Database
   if (env.DATABASE_URL) out.databaseUrl = env.DATABASE_URL;

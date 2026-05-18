@@ -1,10 +1,13 @@
-# Local Postgres + Redis + Temporal worker for Ark control-plane mode dev.
+# Local Postgres + Redis + Temporal worker + LocalStack for Ark control-plane mode dev.
 #
 # Brings up:
 #   - ark-postgres        : Postgres 16 on :15433, db `ark`, user/pass `ark`/`ark`.
 #                           (Non-default host port so it can't clash with a host-side
 #                           Postgres or an RDS SSH tunnel that already grabbed :5432.)
 #   - ark-redis           : Redis 7 on :6379, no auth.
+#   - ark-localstack      : LocalStack on :4566 with SSM + KMS. Seeds /ark/kek/dev on
+#                           first boot. Point Ark at it with ARK_KEK_SSM_ENDPOINT and
+#                           ARK_SECRETS_AWS_ENDPOINT both set to http://localhost:4566.
 #   - temporal-worker     : Ark Temporal worker (image ark-temporal-worker:dev).
 #                           Connects to the ark-temporal compose project's server
 #                           via host.docker.internal:7233 and to the ark server on
@@ -52,6 +55,37 @@ services:
       - ark-redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # LocalStack -- SSM Parameter Store + KMS so the SsmKekBackend and
+  # AwsSecretsProvider can run end-to-end without a real AWS account.
+  # The seed script in ./localstack-init/ populates /ark/kek/dev on first
+  # boot. To use, set:
+  #   ARK_KEK_BACKEND=ssm
+  #   ARK_KEK_SSM_PARAMETER=/ark/kek/dev
+  #   ARK_KEK_SSM_ENDPOINT=http://localhost:4566
+  #   ARK_SECRETS_BACKEND=aws
+  #   ARK_SECRETS_AWS_ENDPOINT=http://localhost:4566   (gap to be closed in code)
+  #   AWS_REGION=ap-south-1
+  #   AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+  localstack:
+    image: localstack/localstack:3.4
+    container_name: ark-localstack
+    restart: unless-stopped
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: ssm,kms
+      DEFAULT_REGION: ap-south-1
+      DEBUG: "0"
+      PERSISTENCE: "1"
+    volumes:
+      - ./localstack-init:/etc/localstack/init/ready.d:ro
+      - ark-localstack-data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4566/_localstack/health"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -105,3 +139,5 @@ volumes:
     name: ark-dev-postgres-data
   ark-redis-data:
     name: ark-dev-redis-data
+  ark-localstack-data:
+    name: ark-dev-localstack-data

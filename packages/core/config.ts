@@ -188,6 +188,11 @@ export interface ArkConfig {
     backend?: "file" | "aws";
     awsRegion?: string;
     awsKmsKeyId?: string;
+    /**
+     * Optional SSM endpoint override (LocalStack dev). Mirrors
+     * `kek.ssm.endpoint`. Production leaves this unset.
+     */
+    awsEndpoint?: string;
   };
   /**
    * Master KEK backend configuration. Populated from `ARK_KEK_*` env vars
@@ -583,6 +588,7 @@ function overridesToEnv(o: LoadConfigOptions): EnvOverrides {
     if (o.secrets.backend === "file" || o.secrets.backend === "aws") out.secrets.backend = o.secrets.backend;
     if (o.secrets.awsRegion) out.secrets.awsRegion = o.secrets.awsRegion;
     if (o.secrets.awsKmsKeyId) out.secrets.awsKmsKeyId = o.secrets.awsKmsKeyId;
+    if (o.secrets.awsEndpoint) out.secrets.awsEndpoint = o.secrets.awsEndpoint;
   }
   return out;
 }
@@ -608,11 +614,16 @@ function parseSecretsConfig(rawYaml: unknown, merged: EnvOverrides): ArkConfig["
     fromEnv.awsKmsKeyId ??
     (typeof fromYaml.aws_kms_key_id === "string" ? (fromYaml.aws_kms_key_id as string) : undefined) ??
     (typeof fromYaml.awsKmsKeyId === "string" ? (fromYaml.awsKmsKeyId as string) : undefined);
-  if (!backend && !awsRegion && !awsKmsKeyId) return undefined;
+  const awsEndpoint =
+    fromEnv.awsEndpoint ??
+    (typeof fromYaml.aws_endpoint === "string" ? (fromYaml.aws_endpoint as string) : undefined) ??
+    (typeof fromYaml.awsEndpoint === "string" ? (fromYaml.awsEndpoint as string) : undefined);
+  if (!backend && !awsRegion && !awsKmsKeyId && !awsEndpoint) return undefined;
   const out: NonNullable<ArkConfig["secrets"]> = {};
   if (backend) out.backend = backend as "file" | "aws";
   if (awsRegion) out.awsRegion = awsRegion;
   if (awsKmsKeyId) out.awsKmsKeyId = awsKmsKeyId;
+  if (awsEndpoint) out.awsEndpoint = awsEndpoint;
   return out;
 }
 

@@ -201,7 +201,11 @@ export function buildLocalAppMode(app?: AppContext, database?: DatabaseMode): Ap
   const secretsCfg = app?.config?.secrets;
   const secrets: SecretsCapability =
     secretsCfg?.backend === "aws"
-      ? new AwsSecretsProvider({ region: secretsCfg.awsRegion, kmsKeyId: secretsCfg.awsKmsKeyId })
+      ? new AwsSecretsProvider({
+          region: secretsCfg.awsRegion,
+          kmsKeyId: secretsCfg.awsKmsKeyId,
+          endpoint: secretsCfg.awsEndpoint,
+        })
       : new FileSecretsProvider(arkDir);
   const tenantResolver = makeLocalTenantResolver();
   // Default to SQLite/null when no config was passed (tests that build a

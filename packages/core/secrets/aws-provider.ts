@@ -29,6 +29,12 @@ export interface AwsSecretsConfig {
   region?: string;
   /** Optional override KMS key (alias/ARN/id). When unset, the account default alias is used. */
   kmsKeyId?: string;
+  /**
+   * Optional SSM endpoint override (e.g. `http://localhost:4566` for LocalStack).
+   * Mirrors `SsmKekBackendConfig.endpoint`. Production leaves this unset so the
+   * SDK uses the standard regional SSM endpoint.
+   */
+  endpoint?: string;
   /** Test hook: inject a pre-built SSMClient. Normal code paths leave this unset. */
   client?: SSMClient;
 }
@@ -171,7 +177,9 @@ export class AwsSecretsProvider implements SecretsCapability {
     if (this._client) return this._client;
     const { SSMClient: Ctor } = await import("@aws-sdk/client-ssm");
     const region = this.cfg.region ?? process.env.AWS_REGION ?? "us-east-1";
-    this._client = new Ctor({ region });
+    const opts: { region: string; endpoint?: string } = { region };
+    if (this.cfg.endpoint) opts.endpoint = this.cfg.endpoint;
+    this._client = new Ctor(opts);
     return this._client;
   }
 
