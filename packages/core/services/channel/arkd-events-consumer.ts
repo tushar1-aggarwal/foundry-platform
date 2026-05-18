@@ -56,9 +56,23 @@ interface ConsumerEntry {
    * answerable forever, not just from ephemeral process logs.
    */
   triggerSessionId?: string;
+  /**
+   * Compute-scoped (rehydrate) consumers have no owning session. Resolves
+   * the compute's *current* arkd URL from shared state (the computes repo +
+   * compute impl). Returns null once the compute no longer resolves an arkd
+   * (pod gone / compute torn down) -- the replica-agnostic stop signal for a
+   * consumer that nothing else will ever call stopArkdEventsConsumer for.
+   */
+  resolveArkdUrl?: () => Promise<string | null>;
   abort: AbortController;
   stopped: boolean;
 }
+
+// Compute-scoped consumers self-terminate after this many consecutive
+// connect/stream failures with no recovery. There is no owning session and
+// no shared registry, so failure-to-reach IS the correct lifetime signal:
+// the backing ephemeral pod is genuinely gone and nothing else will stop us.
+const COMPUTE_SCOPED_MAX_CONSECUTIVE_FAILURES = 8;
 
 const consumers = new Map<string, ConsumerEntry>();
 
@@ -104,6 +118,7 @@ export function startArkdEventsConsumer(
   arkdUrl: string,
   arkdToken: string | null,
   triggerSessionId?: string,
+  resolveArkdUrl?: () => Promise<string | null>,
 ): void {
   const app = deps.app!;
   const existing = consumers.get(computeName);
@@ -123,7 +138,14 @@ export function startArkdEventsConsumer(
     consumers.delete(computeName);
   }
   const abort = new AbortController();
-  const entry: ConsumerEntry = { computeName, arkdUrl, triggerSessionId, abort, stopped: false };
+  const entry: ConsumerEntry = {
+    computeName,
+    arkdUrl,
+    triggerSessionId,
+    resolveArkdUrl,
+    abort,
+    stopped: false,
+  };
   consumers.set(computeName, entry);
   void runConsumerLoop(app, entry, arkdUrl, arkdToken);
   logInfo("conductor", `arkd-events: consumer started for compute=${computeName} url=${arkdUrl}`);
@@ -157,6 +179,7 @@ async function runConsumerLoop(
   arkdToken: string | null,
 ): Promise<void> {
   let backoff = RECONNECT_MIN_MS;
+  let consecutiveFailures = 0;
   while (!entry.stopped) {
     // A session-scoped consumer (k8s ephemeral pod-per-session) exists only
     // to drain THAT session's pod hooks. Its registry is an in-memory map
@@ -187,13 +210,50 @@ async function runConsumerLoop(
       } catch {
         /* transient DB blip -- keep draining, re-check next cycle */
       }
+    } else {
+      // Compute-scoped (rehydrate) consumer: no owning session, no shared
+      // registry. If the compute no longer resolves an arkd URL the backing
+      // pod is gone and this loop would otherwise reconnect a dead address
+      // forever (a different replica's stopArkdEventsConsumer can never
+      // reach this process-local map). That is the correct lifetime here,
+      // not a band-aid. Replica-agnostic: every replica resolves the same
+      // computes-repo state.
+      if (entry.resolveArkdUrl) {
+        try {
+          const current = await entry.resolveArkdUrl();
+          if (!current) {
+            logInfo(
+              "conductor",
+              `arkd-events: compute=${entry.computeName} no longer resolves an arkd url -- stopping consumer`,
+            );
+            entry.stopped = true;
+            entry.abort.abort();
+            consumers.delete(entry.computeName);
+            return;
+          }
+        } catch {
+          /* transient resolve blip -- failure bound below still bounds us */
+        }
+      }
+      if (consecutiveFailures >= COMPUTE_SCOPED_MAX_CONSECUTIVE_FAILURES) {
+        logInfo(
+          "conductor",
+          `arkd-events: compute=${entry.computeName} unreachable after ${consecutiveFailures} consecutive failures -- pod gone, stopping consumer`,
+        );
+        entry.stopped = true;
+        entry.abort.abort();
+        consumers.delete(entry.computeName);
+        return;
+      }
     }
     try {
       await readHooksChannelOnce(app, entry, arkdUrl, arkdToken);
       // Clean stream end (server closed) -- reconnect immediately.
       backoff = RECONNECT_MIN_MS;
+      consecutiveFailures = 0;
     } catch (err: unknown) {
       if (entry.stopped) return;
+      consecutiveFailures++;
       const msg = (err as { message?: string })?.message ?? String(err);
       logWarn("conductor", `arkd-events: stream error compute=${entry.computeName}: ${msg}`);
       // Durable: a subscribe/stream failure against this pod's arkd is the

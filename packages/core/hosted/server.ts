@@ -48,13 +48,8 @@ export async function startHostedServer(config: ArkConfig): Promise<{
   void app.container.cradle.tenantPolicyManager;
   void app.container.cradle.sessionScheduler;
 
-  // Start SSE bus (Redis if configured, in-memory otherwise)
-  let redisBus: import("./sse-redis.js").RedisSSEBus | null = null;
-  if (config.redisUrl) {
-    const { RedisSSEBus } = await import("./sse-redis.js");
-    redisBus = new RedisSSEBus(config.redisUrl);
-    await redisBus.connect();
-  }
+  // The SSE bus (Redis-backed when config.redisUrl is set, in-memory
+  // otherwise) is owned by the web server -- see createSSEBus() in web.ts.
 
   // Start web server
   const { startWebServer } = await import("./web.js");
@@ -80,9 +75,6 @@ export async function startHostedServer(config: ArkConfig): Promise<{
     stop: async () => {
       clearInterval(healthInterval);
       webServer.stop();
-      if (redisBus) {
-        await redisBus.disconnect();
-      }
       await app.shutdown();
     },
   };

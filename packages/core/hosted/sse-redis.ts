@@ -1,60 +1,84 @@
 /**
  * Redis-backed SSE bus -- enables horizontal scaling across multiple
- * Ark control plane instances. Uses Redis pub/sub for cross-process
- * event broadcasting.
+ * Ark control plane instances. Uses Redis pub/sub (via the shared
+ * RedisPubSub wrapper) for cross-process event broadcasting.
  *
- * Usage:
- *   const bus = new RedisSSEBus("redis://localhost:6379");
- *   await bus.connect();
- *   bus.subscribe("sessions", (event, data) => { ... });
- *   bus.publish("sessions", "update", { id: "s-123" });
- *   await bus.disconnect();
+ * Connection is established lazily in the background on first use so the
+ * sync `startWebServer` path can construct this without awaiting. Publishes
+ * issued before the connection is up are queued and flushed on connect;
+ * subscriptions are (re)registered once connected.
  */
 
-import { createClient, type RedisClientType } from "redis";
 import type { SSEBus } from "./sse-bus.js";
-import { logInfo, logDebug } from "../observability/structured-log.js";
+import { RedisPubSub } from "./redis-pubsub.js";
+import { logInfo, logDebug, logWarn } from "../observability/structured-log.js";
 
 type Listener = (event: string, data: unknown) => void;
 
 export class RedisSSEBus implements SSEBus {
-  private pub: RedisClientType;
-  private sub: RedisClientType;
+  private bus: RedisPubSub;
   private listeners = new Map<string, Set<Listener>>();
+  private subscribedChannels = new Set<string>();
+  private connected = false;
+  private pending: Array<{ channel: string; event: string; data: unknown }> = [];
+  private connectPromise: Promise<void> | null = null;
 
   constructor(redisUrl: string) {
-    this.pub = createClient({ url: redisUrl });
-    this.sub = createClient({ url: redisUrl });
+    this.bus = new RedisPubSub(redisUrl);
   }
 
+  /** Idempotent. Safe to call repeatedly; connects once. */
   async connect(): Promise<void> {
-    await this.pub.connect();
-    await this.sub.connect();
+    if (this.connected) return;
+    if (this.connectPromise) return this.connectPromise;
+    this.connectPromise = (async () => {
+      await this.bus.connect();
+      this.connected = true;
+      for (const channel of this.subscribedChannels) await this.wireChannel(channel);
+      const queued = this.pending;
+      this.pending = [];
+      for (const p of queued) this.bus.publish(p.channel, JSON.stringify({ event: p.event, data: p.data }));
+      logInfo("web", "RedisSSEBus connected");
+    })();
+    return this.connectPromise;
+  }
+
+  private async wireChannel(channel: string): Promise<void> {
+    await this.bus.subscribe(channel, (message) => {
+      try {
+        const { event, data } = JSON.parse(message);
+        for (const cb of this.listeners.get(channel) ?? []) {
+          try {
+            cb(event, data);
+          } catch {
+            logInfo("web", "Don't let one bad listener break others");
+          }
+        }
+      } catch {
+        logDebug("web", "Ignore malformed messages");
+      }
+    });
   }
 
   publish(channel: string, event: string, data: unknown): void {
-    this.pub.publish(channel, JSON.stringify({ event, data }));
+    if (!this.connected) {
+      this.pending.push({ channel, event, data });
+      return;
+    }
+    this.bus.publish(channel, JSON.stringify({ event, data }));
   }
 
   subscribe(channel: string, callback: Listener): () => void {
-    if (!this.listeners.has(channel)) {
-      this.listeners.set(channel, new Set());
-      this.sub.subscribe(channel, (message) => {
-        try {
-          const { event, data } = JSON.parse(message);
-          for (const cb of this.listeners.get(channel) ?? []) {
-            try {
-              cb(event, data);
-            } catch {
-              logInfo("web", "Don't let one bad listener break others");
-            }
-          }
-        } catch {
-          logDebug("web", "Ignore malformed messages");
-        }
-      });
-    }
+    if (!this.listeners.has(channel)) this.listeners.set(channel, new Set());
     this.listeners.get(channel)!.add(callback);
+    if (!this.subscribedChannels.has(channel)) {
+      this.subscribedChannels.add(channel);
+      if (this.connected) {
+        this.wireChannel(channel).catch((e) =>
+          logWarn("web", `RedisSSEBus subscribe failed channel=${channel}: ${(e as Error)?.message ?? e}`),
+        );
+      }
+    }
     return () => {
       this.listeners.get(channel)?.delete(callback);
     };
@@ -69,7 +93,7 @@ export class RedisSSEBus implements SSEBus {
   }
 
   async disconnect(): Promise<void> {
-    await this.pub.quit();
-    await this.sub.quit();
+    this.connected = false;
+    await this.bus.disconnect();
   }
 }

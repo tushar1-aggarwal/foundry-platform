@@ -1,4 +1,5 @@
 import { logInfo } from "../observability/structured-log.js";
+import { RedisSSEBus } from "./sse-redis.js";
 /**
  * SSE broadcast bus -- abstraction over the SSE publish/subscribe mechanism.
  *
@@ -74,19 +75,26 @@ export class InMemorySSEBus implements SSEBus {
 // ── Factory ────────────────────────────────────────────────────────────────
 
 /**
- * Create an SSE bus instance.
- * Returns RedisSSEBus when type is "redis" and a redisUrl is provided,
- * otherwise returns InMemorySSEBus.
+ * Create an SSE bus instance. Returns a RedisSSEBus (cross-process pub/sub)
+ * when a redisUrl is provided, otherwise an InMemorySSEBus (local/dev).
  *
- * Note: RedisSSEBus requires calling connect() after creation since
- * Redis connections are async. For sync usage, use InMemorySSEBus.
+ * RedisSSEBus connects in the background -- the sync `startWebServer` path
+ * needs no await; publishes before connect are queued and flushed. Pass a
+ * `redisBus` to reuse a connection already built by the hosted bootstrap
+ * instead of opening a second pair of connections.
  */
-export function createSSEBus(config?: { type?: "memory" | "redis"; redisUrl?: string }): SSEBus {
-  const type = config?.type ?? "memory";
-  if (type === "redis" && config?.redisUrl) {
-    // Dynamic import handled by caller -- return in-memory as sync fallback.
-    // Use RedisSSEBus directly for async initialization (see hosted.ts).
-    console.warn("Use RedisSSEBus directly for Redis-backed SSE bus (requires async connect)");
+export function createSSEBus(config?: {
+  redisUrl?: string;
+  redisBus?: SSEBus & { connect?: () => Promise<void> };
+}): SSEBus {
+  if (config?.redisBus) {
+    void config.redisBus.connect?.();
+    return config.redisBus;
+  }
+  if (config?.redisUrl) {
+    const bus = new RedisSSEBus(config.redisUrl);
+    void bus.connect();
+    return bus;
   }
   return new InMemorySSEBus();
 }

@@ -185,6 +185,22 @@ export class AppContext {
 
     await this._container.cradle.lifecycle.start();
 
+    // Cross-process event transport. Emitters run on the temporal-worker;
+    // SSE / live-tree subscribers run on the control-plane. Both processes
+    // pass through boot(), so attaching here once per process is what makes
+    // eventBus actually cross pods in a multi-replica deploy. redisUrl unset
+    // (local/dev) leaves the pure in-process path untouched.
+    if (this.config.redisUrl) {
+      try {
+        await eventBus.attachRedis(this.config.redisUrl);
+        const { logInfo } = await import("./observability/structured-log.js");
+        logInfo("web", "eventBus: Redis cross-process transport attached");
+      } catch (err: any) {
+        const { logError } = await import("./observability/structured-log.js");
+        logError("web", `eventBus: Redis attach failed -- live UI will not cross pods: ${err?.message ?? err}`);
+      }
+    }
+
     // Test profile: register the noop executor for every real runtime name.
     // Without this, any test that triggers dispatch (directly or via the
     // conductor HTTP hooks) would reach the real claude-code / agent-sdk
@@ -250,6 +266,8 @@ export class AppContext {
     if (this.phase === "stopped" || this.phase === "shutting_down") return;
     const wasBooted = this.phase === "ready";
     this.phase = "shutting_down";
+
+    await eventBus.detachRedis().catch(() => {});
 
     if (wasBooted) {
       // container.dispose() walks every registered disposer in reverse
@@ -462,7 +480,35 @@ export class AppContext {
         if (!arkdUrl) continue;
         const { startArkdEventsConsumer } = await import("./services/channel/arkd-events-consumer.js");
         const { depsFromApp } = await import("./services/deps.js");
-        startArkdEventsConsumer(depsFromApp(tenantApp), computeName, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
+        // Replica-agnostic liveness: re-resolve the compute's arkd from the
+        // shared computes repo each loop. Returns null once the compute /
+        // pod is gone, which is how this owner-less rehydrated consumer
+        // self-terminates instead of reconnect-looping a dead address.
+        const resolveArkdUrl = async (): Promise<string | null> => {
+          try {
+            const c = await tenantApp.computes.get(computeName);
+            if (!c) return null;
+            const impl = tenantApp.getCompute(c.compute_kind);
+            if (!impl) return null;
+            const h = impl.attachExistingHandle?.({
+              name: c.name,
+              status: c.status,
+              config: (c.config ?? {}) as Record<string, unknown>,
+            });
+            if (!h) return null;
+            return impl.getArkdUrl(h) ?? null;
+          } catch {
+            return arkdUrl;
+          }
+        };
+        startArkdEventsConsumer(
+          depsFromApp(tenantApp),
+          computeName,
+          arkdUrl,
+          process.env.ARK_ARKD_TOKEN ?? null,
+          undefined,
+          resolveArkdUrl,
+        );
         consumers++;
       } catch (err: any) {
         lw("boot", `rehydrate consumer failed for ${computeName}: ${err?.message ?? err}`);

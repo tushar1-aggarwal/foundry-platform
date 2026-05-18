@@ -172,7 +172,10 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
   }
 
   // ── SSE (backed by pluggable SSEBus) ─────────────────────────────────────
-  const sseBus: SSEBus = createSSEBus();
+  // Redis-backed when redisUrl is set so SSE fans out across control-plane
+  // replicas; in-memory otherwise (local/dev). The shared eventBus -> SSE
+  // bridge below relies on this being cross-process under a multi-pod deploy.
+  const sseBus: SSEBus = createSSEBus({ redisUrl: app.config.redisUrl });
   const sseClients = new Set<ReadableStreamDefaultController>();
 
   function broadcast(event: string, data: any) {
