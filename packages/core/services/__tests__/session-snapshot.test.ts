@@ -20,7 +20,6 @@ import type {
   Snapshot,
 } from "../../compute/types.js";
 import { NotSupportedError } from "../../compute/types.js";
-import { setApp } from "../../__tests__/test-helpers.js";
 
 let app: AppContext;
 
@@ -79,7 +78,10 @@ class FakeSnapshotCompute implements Compute {
 }
 
 async function seedSession(computeName?: string): Promise<string> {
-  const session = await app.sessionService.start({ summary: "pause-snap-test", repo: ".", flow: "bare" });
+  // Row factory only: these tests exercise pause/resume-with-snapshot
+  // orchestration, not workflow start. sessions.create() avoids spinning a
+  // real Temporal sessionWorkflow (Temporal is the sole orchestrator now).
+  const session = await app.sessions.create({ summary: "pause-snap-test", repo: ".", flow: "bare" });
   if (computeName) {
     await app.sessions.update(session.id, { compute_name: computeName });
   }

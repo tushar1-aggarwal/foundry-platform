@@ -16,31 +16,52 @@
  * and makes dependency swaps explicit instead of implicit.
  */
 
-import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
+import { describe, it, expect, beforeAll, afterEach, afterAll, mock } from "bun:test";
 import { asValue } from "awilix";
-import { Database } from "bun:sqlite";
-import { BunSqliteAdapter } from "../../database/sqlite.js";
-import type { DatabaseAdapter } from "../../database.js";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../app.js";
 import { SessionService } from "../session.js";
 import { SessionRepository } from "../../repositories/session.js";
 import { EventRepository } from "../../repositories/event.js";
 import { MessageRepository } from "../../repositories/message.js";
-import { initSchema } from "../../repositories/schema.js";
 import type { Session, SessionStatus } from "../../../types/index.js";
-import { setApp } from "../../__tests__/test-helpers.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../temporal/test-harness.js";
+
+// Temporal is the sole orchestrator: svc.start() now fires a real
+// sessionWorkflow via the Temporal client. The in-process harness drives the
+// genuine prod workflow+activities against the test AppContext. State-machine
+// methods (stop/resume/pause/...) are still pure prod operations on the
+// session row; those blocks use app.sessions.create() so a fresh workflow
+// never races the manual row mutations under test.
 
 let app: AppContext;
 let sessions: SessionRepository;
 let events: EventRepository;
 let messages: MessageRepository;
 let svc: SessionService;
+let detach: () => void;
 
-beforeEach(async () => {
+beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto
+description: single auto stage
+stages:
+  - name: work
+    agent: implementer
+    gate: auto
+`,
+  );
   await app.boot();
-  // Pull the wired dependencies out of the container. These are the same
-  // instances the SessionService was constructed with.
+  detach = await attachTemporalTestHarness(app);
   sessions = app.sessions;
   events = app.events;
   messages = app.messages;
@@ -48,6 +69,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await drainTemporalTestHarness();
+});
+
+afterAll(async () => {
+  detach?.();
   await app?.shutdown();
 });
 
@@ -56,37 +82,45 @@ describe("SessionService", async () => {
 
   describe("start", async () => {
     it("creates a session with correct defaults", async () => {
-      const s = await svc.start({});
+      // Default-flow value is the repository contract; svc.start({}) with the
+      // default 9-stage SDLC flow would park on its manual `plan` gate. The
+      // default itself is asserted on the row create path.
+      const s = await sessions.create({});
       expect(s.id).toMatch(/^s-[0-9a-z]{10}$/);
       expect(s.status).toBe("pending");
       expect(s.flow).toBe("default");
     });
 
-    it("stores ticket, summary, repo", async () => {
-      const s = await svc.start({ ticket: "PROJ-1", summary: "Fix bug", repo: "/tmp/repo" });
+    it("stores ticket, summary, repo and drives the real workflow to completion", async () => {
+      const s = await svc.start({ ticket: "PROJ-1", summary: "Fix bug", repo: "/tmp/repo", flow: "x-auto" });
       expect(s.ticket).toBe("PROJ-1");
       expect(s.summary).toBe("Fix bug");
       expect(s.repo).toBe("/tmp/repo");
-    });
+      expect(s.workflow_id).toBe(`session-${s.id}`);
+      const final = await waitForSessionStatus(app, s.id, ["completed", "failed"]);
+      expect(final.status).toBe("completed");
+    }, 45_000);
 
     it("applies agent override", async () => {
-      const s = await svc.start({ agent: "planner" });
+      const s = await svc.start({ agent: "planner", flow: "x-auto" });
       expect(s.agent).toBe("planner");
-    });
+      await waitForSessionStatus(app, s.id, ["completed", "failed"]);
+    }, 45_000);
 
     it("logs session_created event", async () => {
-      const s = await svc.start({ summary: "Test" });
+      const s = await svc.start({ summary: "Test", flow: "x-auto" });
       const evts = await events.list(s.id, { type: "session_created" });
       expect(evts.length).toBe(1);
       expect(evts[0].actor).toBe("system");
-    });
+      await waitForSessionStatus(app, s.id, ["completed", "failed"]);
+    }, 45_000);
   });
 
   // ── stop() ─────────────────────────────────────────────────────────────────
 
   describe("stop", async () => {
     it("transitions running -> stopped", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, {
         session_id: `ark-s-${s.id}`,
         status: "running" as SessionStatus,
@@ -98,28 +132,28 @@ describe("SessionService", async () => {
     });
 
     it("is idempotent on already-stopped", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, { status: "stopped" as SessionStatus } as Partial<Session>);
       const result = await svc.stop(s.id);
       expect(result.ok).toBe(true);
     });
 
     it("is idempotent on completed", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, { status: "completed" as SessionStatus } as Partial<Session>);
       const result = await svc.stop(s.id);
       expect(result.ok).toBe(true);
     });
 
     it("is idempotent on failed", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, { status: "failed" as SessionStatus } as Partial<Session>);
       const result = await svc.stop(s.id);
       expect(result.ok).toBe(true);
     });
 
     it("clears runtime fields (session_id, error) but preserves claude_session_id", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, {
         status: "running" as SessionStatus,
         session_id: "ark-s-abc",
@@ -140,7 +174,7 @@ describe("SessionService", async () => {
     });
 
     it("logs session_stopped event", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, {
         session_id: `ark-s-${s.id}`,
         status: "running" as SessionStatus,
@@ -154,16 +188,22 @@ describe("SessionService", async () => {
   // ── resume() ───────────────────────────────────────────────────────────────
 
   describe("resume", async () => {
-    it("transitions stopped -> ready", async () => {
-      const s = await svc.start({});
+    // resume() now terminates the prior workflow and starts a FRESH
+    // run-suffixed sessionWorkflow (Temporal is the sole orchestrator). The
+    // durable contract is asserted on the row + a run to terminal; the
+    // transient "ready" status is an implementation detail the workflow
+    // immediately advances past, so it is not asserted.
+    it("restarts the workflow from a stopped session", async () => {
+      const s = await sessions.create({ flow: "x-auto" });
       await sessions.update(s.id, { status: "stopped" as SessionStatus } as Partial<Session>);
       const result = await svc.resume(s.id);
       expect(result.ok).toBe(true);
-      expect((await sessions.get(s.id))!.status).toBe("ready");
-    });
+      expect((await sessions.get(s.id))!.workflow_id).toMatch(new RegExp(`^session-${s.id}-r`));
+      await waitForSessionStatus(app, s.id, ["completed", "failed"]);
+    }, 45_000);
 
     it("fails on completed sessions", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, { status: "completed" as SessionStatus } as Partial<Session>);
       const result = await svc.resume(s.id);
       expect(result.ok).toBe(false);
@@ -171,7 +211,7 @@ describe("SessionService", async () => {
     });
 
     it("clears error, breakpoint_reason, attached_by, session_id", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({ flow: "x-auto" });
       await sessions.update(s.id, {
         status: "failed" as SessionStatus,
         error: "some error",
@@ -185,15 +225,17 @@ describe("SessionService", async () => {
       expect(updated.breakpoint_reason).toBeNull();
       expect(updated.attached_by).toBeNull();
       expect(updated.session_id).toBeNull();
-    });
+      await waitForSessionStatus(app, s.id, ["completed", "failed"]);
+    }, 45_000);
 
     it("logs session_resumed event", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({ flow: "x-auto" });
       await sessions.update(s.id, { status: "stopped" as SessionStatus } as Partial<Session>);
       await svc.resume(s.id);
       const evts = await events.list(s.id, { type: "session_resumed" });
       expect(evts.length).toBe(1);
-    });
+      await waitForSessionStatus(app, s.id, ["completed", "failed"]);
+    }, 45_000);
 
     it("returns error for nonexistent session", async () => {
       const result = await svc.resume("s-000000");
@@ -205,7 +247,7 @@ describe("SessionService", async () => {
 
   describe("complete", async () => {
     it("transitions to ready and clears session_id", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, { status: "running" as SessionStatus, session_id: "tmux-1" } as Partial<Session>);
       const result = await svc.complete(s.id);
       expect(result.ok).toBe(true);
@@ -215,7 +257,7 @@ describe("SessionService", async () => {
     });
 
     it("marks messages as read", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await messages.send(s.id, "agent", "hello", "text");
       expect(await messages.unreadCount(s.id)).toBe(1);
       await svc.complete(s.id);
@@ -223,7 +265,7 @@ describe("SessionService", async () => {
     });
 
     it("logs stage_completed event", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, { stage: "plan" } as Partial<Session>);
       await svc.complete(s.id);
       const evts = await events.list(s.id, { type: "stage_completed" });
@@ -240,7 +282,7 @@ describe("SessionService", async () => {
 
   describe("pause", async () => {
     it("transitions to blocked with reason", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, {
         session_id: `ark-s-${s.id}`,
         status: "running" as SessionStatus,
@@ -253,13 +295,13 @@ describe("SessionService", async () => {
     });
 
     it("defaults reason to 'User paused'", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await svc.pause(s.id);
       expect((await sessions.get(s.id))!.breakpoint_reason).toBe("User paused");
     });
 
     it("logs session_paused event", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await svc.pause(s.id);
       const evts = await events.list(s.id, { type: "session_paused" });
       expect(evts.length).toBe(1);
@@ -275,7 +317,7 @@ describe("SessionService", async () => {
 
   describe("delete", async () => {
     it("soft-deletes session (status -> deleting)", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       const result = await svc.delete(s.id);
       expect(result.ok).toBe(true);
       const deleted = await sessions.get(s.id)!;
@@ -283,7 +325,7 @@ describe("SessionService", async () => {
     });
 
     it("logs session_deleted event", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await svc.delete(s.id);
       const evts = await events.list(s.id, { type: "session_deleted" });
       expect(evts.length).toBe(1);
@@ -299,7 +341,7 @@ describe("SessionService", async () => {
 
   describe("undelete", async () => {
     it("restores a soft-deleted session", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, {
         session_id: `ark-s-${s.id}`,
         status: "running" as SessionStatus,
@@ -312,13 +354,13 @@ describe("SessionService", async () => {
     });
 
     it("returns error for non-deleted session", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       const result = await svc.undelete(s.id);
       expect(result.ok).toBe(false);
     });
 
     it("logs session_undeleted event", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await svc.delete(s.id);
       await svc.undelete(s.id);
       const evts = await events.list(s.id, { type: "session_undeleted" });
@@ -335,7 +377,7 @@ describe("SessionService", async () => {
 
   describe("get / list", async () => {
     it("get returns session by id", async () => {
-      const s = await svc.start({ summary: "hello" });
+      const s = await sessions.create({ summary: "hello" });
       expect((await svc.get(s.id))!.summary).toBe("hello");
     });
 
@@ -343,10 +385,13 @@ describe("SessionService", async () => {
       expect(await svc.get("s-000000")).toBeNull();
     });
 
-    it("list returns all sessions", async () => {
-      await svc.start({ summary: "a" });
-      await svc.start({ summary: "b" });
-      expect((await svc.list()).length).toBe(2);
+    it("list returns created sessions", async () => {
+      // One shared app (beforeAll) -> assert membership, not a global count.
+      const a = await sessions.create({ summary: "list-a" });
+      const b = await sessions.create({ summary: "list-b" });
+      const ids = (await svc.list()).map((x) => x.id);
+      expect(ids).toContain(a.id);
+      expect(ids).toContain(b.id);
     });
   });
 
@@ -366,23 +411,29 @@ describe("SessionService", async () => {
 
   describe("list with filters", async () => {
     it("list passes filters through to repository", async () => {
-      await svc.start({ flow: "quick" });
-      await svc.start({ flow: "default" });
+      const q = await sessions.create({ flow: "quick" });
+      const d = await sessions.create({ flow: "default" });
       const quickSessions = await svc.list({ flow: "quick" });
-      expect(quickSessions.length).toBe(1);
-      expect(quickSessions[0].flow).toBe("quick");
+      // Filter passthrough: the quick row is present, the default row is not,
+      // and every returned row honours the filter.
+      const ids = quickSessions.map((x) => x.id);
+      expect(ids).toContain(q.id);
+      expect(ids).not.toContain(d.id);
+      expect(quickSessions.every((x) => x.flow === "quick")).toBe(true);
     });
 
     it("list filters by status", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, {
         session_id: `ark-s-${s.id}`,
         status: "running" as SessionStatus,
       } as Partial<Session>);
-      await svc.start({});
+      const other = await sessions.create({});
       const running = await svc.list({ status: "running" });
-      expect(running.length).toBe(1);
-      expect(running[0].id).toBe(s.id);
+      const ids = running.map((x) => x.id);
+      expect(ids).toContain(s.id);
+      expect(ids).not.toContain(other.id);
+      expect(running.every((x) => x.status === "running")).toBe(true);
     });
   });
 
@@ -390,14 +441,14 @@ describe("SessionService", async () => {
 
   describe("stop edge cases", async () => {
     it("stops a pending session (no session_id)", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       const result = await svc.stop(s.id);
       expect(result.ok).toBe(true);
       expect((await sessions.get(s.id))!.status).toBe("stopped");
     });
 
     it("returns sessionId in result", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       const result = await svc.stop(s.id);
       expect(result.sessionId).toBe(s.id);
     });
@@ -407,34 +458,35 @@ describe("SessionService", async () => {
 
   describe("resume edge cases", async () => {
     it("resumes a failed session", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({ flow: "x-auto" });
       await sessions.update(s.id, { status: "failed" as SessionStatus } as Partial<Session>);
       const result = await svc.resume(s.id);
       expect(result.ok).toBe(true);
-      expect((await sessions.get(s.id))!.status).toBe("ready");
-    });
+      await waitForSessionStatus(app, s.id, ["completed", "failed"]);
+    }, 45_000);
 
     it("resumes a blocked session", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({ flow: "x-auto" });
       await sessions.update(s.id, { status: "blocked" as SessionStatus } as Partial<Session>);
       const result = await svc.resume(s.id);
       expect(result.ok).toBe(true);
-      expect((await sessions.get(s.id))!.status).toBe("ready");
-    });
+      await waitForSessionStatus(app, s.id, ["completed", "failed"]);
+    }, 45_000);
 
     it("returns sessionId in result", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({ flow: "x-auto" });
       await sessions.update(s.id, { status: "stopped" as SessionStatus } as Partial<Session>);
       const result = await svc.resume(s.id);
       expect(result.sessionId).toBe(s.id);
-    });
+      await waitForSessionStatus(app, s.id, ["completed", "failed"]);
+    }, 45_000);
   });
 
   // ── complete edge cases ───────────────────────────────────────────────
 
   describe("complete edge cases", async () => {
     it("returns sessionId in result", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       const result = await svc.complete(s.id);
       expect(result.sessionId).toBe(s.id);
     });
@@ -444,13 +496,13 @@ describe("SessionService", async () => {
 
   describe("pause edge cases", async () => {
     it("returns sessionId in result", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       const result = await svc.pause(s.id);
       expect(result.sessionId).toBe(s.id);
     });
 
     it("logs the previous status in event data", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await sessions.update(s.id, {
         session_id: `ark-s-${s.id}`,
         status: "running" as SessionStatus,
@@ -465,13 +517,13 @@ describe("SessionService", async () => {
 
   describe("delete/undelete edge cases", async () => {
     it("delete returns sessionId in result", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       const result = await svc.delete(s.id);
       expect(result.sessionId).toBe(s.id);
     });
 
     it("undelete returns sessionId in result", async () => {
-      const s = await svc.start({});
+      const s = await sessions.create({});
       await svc.delete(s.id);
       const result = await svc.undelete(s.id);
       expect(result.sessionId).toBe(s.id);
@@ -512,13 +564,17 @@ describe("SessionService", async () => {
       });
 
       const freshSvc = app.container.resolve("sessionService");
-      const s = await freshSvc.start({ summary: "override test" });
+      const s = await freshSvc.start({ summary: "override test", flow: "x-auto" });
 
       expect(recorded.length).toBe(1);
       expect(recorded[0].sessionId).toBe(s.id);
       expect(recorded[0].type).toBe("session_created");
       expect(fakeEvents.log).toHaveBeenCalledTimes(1);
-    });
+
+      // start() now unconditionally launches the real sessionWorkflow; let it
+      // reach terminal so the harness drain stays fast.
+      await waitForSessionStatus(app, s.id, ["completed", "failed"]);
+    }, 45_000);
 
     it("swapping the sessions repo with a fake lets us assert call patterns", async () => {
       // Minimal fake repo -- just enough surface for stop() to run.
@@ -545,29 +601,11 @@ describe("SessionService", async () => {
     });
   });
 
-  // ── Pure-unit construction (legacy, still supported) ──────────────────
-  //
-  // For pure unit tests that don't need the full AppContext, you can still
-  // construct SessionService directly. Prefer the container path above when
-  // the test touches more than one repository.
-
-  describe("pure unit construction (no container)", async () => {
-    let pureDb: DatabaseAdapter;
-    let pureSvc: SessionService;
-
-    beforeEach(async () => {
-      pureDb = new BunSqliteAdapter(new Database(":memory:"));
-      await initSchema(pureDb);
-      pureSvc = new SessionService(
-        new SessionRepository(pureDb),
-        new EventRepository(pureDb),
-        new MessageRepository(pureDb),
-      );
-    });
-
-    it("start() works without an AppContext", async () => {
-      const s = await pureSvc.start({ summary: "pure unit" });
-      expect(s.id).toMatch(/^s-[0-9a-z]{10}$/);
-    });
-  });
+  // DELETED: "pure unit construction (no container) > start() works without
+  // an AppContext". Temporal is now the sole orchestrator -- SessionService
+  // .start() unconditionally launches the real sessionWorkflow via the
+  // Temporal client, which requires an AppContext (startSessionWorkflow reads
+  // this.app). A SessionService built with no AppContext can no longer start;
+  // the prod code deliberately removed that capability, so the test asserts a
+  // mechanic prod no longer supports (B-litmus deletion, not a prod bug).
 });
