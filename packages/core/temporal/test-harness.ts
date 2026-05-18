@@ -234,13 +234,18 @@ export async function attachTemporalTestHarness(app: AppContext): Promise<() => 
   const { stageWorkflow } = await import("./workflows/stage-workflow.js");
   _childWorkflows = { stageWorkflow };
 
-  // Substitute getTemporalClient -- the genuine boundary every prod start
-  // path crosses. SessionService also reads a _temporalClientFactory seam;
-  // set it too so an already-resolved service picks up the fake client.
+  // Substitute ONLY getTemporalClient -- the genuine boundary every prod
+  // start path crosses. SessionService also reads a _temporalClientFactory
+  // seam; set it too so an already-resolved service picks up the fake
+  // client. Partial mock: spread the REAL module so pure exports like
+  // `temporalClientKey` keep their real behavior (a process-global
+  // mock.module otherwise leaks a constant key into tests that import the
+  // real fn -- e.g. temporal/client-key.test.ts).
+  const realClient = await import("./client.js");
   mock.module("./client.js", () => ({
+    ...realClient,
     getTemporalClient: async () => makeFakeClient(),
     closeTemporalClient: async () => {},
-    temporalClientKey: () => "in-process",
   }));
   const svc: any = app.sessionService;
   svc._temporalClientFactory = async () => makeFakeClient();
