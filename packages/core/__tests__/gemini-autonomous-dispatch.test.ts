@@ -52,8 +52,8 @@ function waitFor(fn: () => boolean | Promise<boolean>, timeoutMs = 25000): Promi
 // ── Runtime resolution ───────────────────────────────────────────────────────
 
 describe("Gemini runtime resolution", () => {
-  it("gemini runtime definition loads from RuntimeStore", () => {
-    const runtime = app.runtimes.get("gemini");
+  it("gemini runtime definition loads from RuntimeStore", async () => {
+    const runtime = await app.runtimes.get("gemini");
     expect(runtime).not.toBeNull();
     expect(runtime!.name).toBe("gemini");
     expect(runtime!.type).toBe("cli-agent");
@@ -63,9 +63,9 @@ describe("Gemini runtime resolution", () => {
     expect(runtime!.billing?.transcript_parser).toBe("gemini");
   });
 
-  it("resolveAgentWithRuntime merges gemini runtime into worker agent", () => {
+  it("resolveAgentWithRuntime merges gemini runtime into worker agent", async () => {
     const session = { summary: "test task", id: "s-test01" };
-    const agent = resolveAgentWithRuntime(app, "worker", session, { runtimeOverride: "gemini" });
+    const agent = await resolveAgentWithRuntime(app, "worker", session, { runtimeOverride: "gemini" });
 
     expect(agent).not.toBeNull();
     expect(agent!._resolved_runtime_type).toBe("cli-agent");
@@ -73,9 +73,9 @@ describe("Gemini runtime resolution", () => {
     expect(agent!.task_delivery).toBe("stdin");
   });
 
-  it("uses the agent's own runtime when no override is specified", () => {
+  it("uses the agent's own runtime when no override is specified", async () => {
     const session = { summary: "test", id: "s-test03" };
-    const agent = resolveAgentWithRuntime(app, "worker", session, {});
+    const agent = await resolveAgentWithRuntime(app, "worker", session, {});
 
     // Without an override, resolution honours the agent YAML's `runtime:` field.
     // worker.yaml is canonical and ships with `runtime: claude-agent`.
@@ -174,11 +174,11 @@ describe("Gemini runtime + autonomous flow completion", async () => {
 
       await waitFor(async () => {
         const s = await app.sessions.get(session.id);
-        return s?.status === "completed";
+        return s?.status === "ready";
       });
 
       const updated = await app.sessions.get(session.id);
-      expect(updated?.status).toBe("completed");
+      expect(updated?.status).toBe("ready");
     } finally {
       spy.mockRestore();
     }
@@ -199,7 +199,7 @@ describe("Gemini runtime + autonomous flow completion", async () => {
 
       await waitFor(async () => {
         const s = await app.sessions.get(session.id);
-        return s?.status === "completed";
+        return s?.status === "ready";
       });
 
       // Verify that a session_completed event was logged
@@ -229,7 +229,7 @@ describe("Gemini runtime + autonomous flow completion", async () => {
 
       await waitFor(async () => {
         const s = await app.sessions.get(session.id);
-        return s?.status === "completed";
+        return s?.status === "ready";
       });
 
       const updated = await app.sessions.get(session.id);
@@ -276,8 +276,8 @@ describe("Gemini transcript parser registration", async () => {
     expect(parser).not.toBeUndefined();
   });
 
-  it("gemini runtime billing config specifies transcript_parser: gemini", () => {
-    const runtime = app.runtimes.get("gemini");
+  it("gemini runtime billing config specifies transcript_parser: gemini", async () => {
+    const runtime = await app.runtimes.get("gemini");
     expect(runtime).not.toBeNull();
     expect(runtime!.billing?.transcript_parser).toBe("gemini");
   });

@@ -34,34 +34,34 @@ function writeFlow(dir: string, name: string, def: Record<string, unknown>): voi
 // ── get ─────────────────────────────────────────────────────────────────────
 
 describe("FileFlowStore.get", () => {
-  it("returns null for non-existent flow", () => {
-    expect(store.get("does-not-exist")).toBeNull();
+  it("returns null for non-existent flow", async () => {
+    expect(await store.get("does-not-exist")).toBeNull();
   });
 
-  it("loads a flow from builtin dir", () => {
+  it("loads a flow from builtin dir", async () => {
     writeFlow(builtinDir, "test-flow", {
       name: "test-flow",
       description: "A test flow",
       stages: [{ name: "plan", agent: "planner", gate: "auto" }],
     });
-    const flow = store.get("test-flow");
+    const flow = await store.get("test-flow");
     expect(flow).not.toBeNull();
     expect(flow!.name).toBe("test-flow");
     expect(flow!.stages).toHaveLength(1);
   });
 
-  it("user dir overrides builtin dir", () => {
+  it("user dir overrides builtin dir", async () => {
     writeFlow(builtinDir, "shared", { name: "shared", description: "builtin", stages: [] });
     writeFlow(userDir, "shared", { name: "shared", description: "user", stages: [] });
-    const flow = store.get("shared");
+    const flow = await store.get("shared");
     expect(flow!.description).toBe("user");
   });
 
-  it("project dir overrides user and builtin", () => {
+  it("project dir overrides user and builtin", async () => {
     writeFlow(builtinDir, "shared", { name: "shared", description: "builtin", stages: [] });
     writeFlow(userDir, "shared", { name: "shared", description: "user", stages: [] });
     writeFlow(projectDir, "shared", { name: "shared", description: "project", stages: [] });
-    const flow = store.get("shared");
+    const flow = await store.get("shared");
     expect(flow!.description).toBe("project");
   });
 });
@@ -129,15 +129,15 @@ describe("FileFlowStore.list", () => {
 // ── save ────────────────────────────────────────────────────────────────────
 
 describe("FileFlowStore.save", () => {
-  it("saves to user dir by default", () => {
-    store.save("new-flow", { name: "new-flow", stages: [{ name: "s1", gate: "auto" } as any] });
+  it("saves to user dir by default", async () => {
+    await store.save("new-flow", { name: "new-flow", stages: [{ name: "s1", gate: "auto" } as any] });
     expect(existsSync(join(userDir, "new-flow.yaml"))).toBe(true);
-    const loaded = store.get("new-flow");
+    const loaded = await store.get("new-flow");
     expect(loaded!.name).toBe("new-flow");
   });
 
-  it("saves to project dir when scope is project", () => {
-    store.save("proj-flow", { name: "proj-flow", stages: [] }, "project");
+  it("saves to project dir when scope is project", async () => {
+    await store.save("proj-flow", { name: "proj-flow", stages: [] }, "project");
     expect(existsSync(join(projectDir, "proj-flow.yaml"))).toBe(true);
     expect(existsSync(join(userDir, "proj-flow.yaml"))).toBe(false);
   });
@@ -146,19 +146,19 @@ describe("FileFlowStore.save", () => {
 // ── delete ──────────────────────────────────────────────────────────────────
 
 describe("FileFlowStore.delete", () => {
-  it("returns false for non-existent flow", () => {
-    expect(store.delete("ghost")).toBe(false);
+  it("returns false for non-existent flow", async () => {
+    expect(await store.delete("ghost")).toBe(false);
   });
 
-  it("deletes from user dir and returns true", () => {
+  it("deletes from user dir and returns true", async () => {
     writeFlow(userDir, "to-del", { name: "to-del", stages: [] });
-    expect(store.delete("to-del")).toBe(true);
+    expect(await store.delete("to-del")).toBe(true);
     expect(existsSync(join(userDir, "to-del.yaml"))).toBe(false);
   });
 
-  it("deletes from project dir when scope is project", () => {
+  it("deletes from project dir when scope is project", async () => {
     writeFlow(projectDir, "p-del", { name: "p-del", stages: [] });
-    expect(store.delete("p-del", "project")).toBe(true);
+    expect(await store.delete("p-del", "project")).toBe(true);
     expect(existsSync(join(projectDir, "p-del.yaml"))).toBe(false);
   });
 });
@@ -169,7 +169,7 @@ describe("FileFlowStore without projectDir", () => {
   it("skips project tier when projectDir is not set", async () => {
     writeFlow(projectDir, "proj-only", { name: "proj-only", stages: [] });
     const storeNoProject = new FileFlowStore({ builtinDir, userDir });
-    expect(storeNoProject.get("proj-only")).toBeNull();
+    expect(await storeNoProject.get("proj-only")).toBeNull();
     const flows = await storeNoProject.list();
     expect(flows.find((f) => f.name === "proj-only")).toBeUndefined();
   });
