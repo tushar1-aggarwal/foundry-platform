@@ -27,17 +27,21 @@ spec:
           imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
           # Hosted mode boots the web server in-process but does NOT spawn the
           # conductor (the daemon that serves :19100/health, which the kubelet
-          # probes target). Spawn the daemon detached first, then exec the web
-          # server so the daemon survives the parent replace and PID 1 is the
-          # foreground process kubelet monitors.
+          # probes target). The daemon runs the conductor + arkd-events
+          # consumer + hook pipeline; `--detach` daemonized it with stdio
+          # swallowed, so conductor-side failures were undiagnosable. Instead
+          # run it in foreground, redirect stdio to an inspectable logfile,
+          # and background it with `&` so it survives the `exec` parent
+          # replace while PID 1 stays the web server kubelet monitors.
+          # Tail it with: kubectl exec <pod> -- cat /tmp/ark-conductor-daemon.log
           command:
             - sh
             - -c
             - >
               bun packages/cli/index.ts server daemon start
               --port {{ .Values.controlPlane.ports.conductor }}
-              --detach
-              && exec bun packages/cli/index.ts server start
+              > /tmp/ark-conductor-daemon.log 2>&1 &
+              exec bun packages/cli/index.ts server start
               --hosted --port {{ .Values.controlPlane.ports.web }}
           ports:
             - name: web
@@ -53,6 +57,15 @@ spec:
             - configMapRef:
                 name: {{ include "ark.fullname" . }}-config
           env:
+            # In-cluster Kubernetes API CA trust. @kubernetes/client-node
+            # picks up the in-cluster context fine, but Bun's TLS stack does
+            # not auto-load the service-account CA the way kubectl does --
+            # without this, K8sCompute.provision (and any other in-cluster
+            # K8s API call) fails with "unable to verify the first
+            # certificate". The file is mounted automatically when a service
+            # account is attached to the pod.
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
             {{- if and (not .Values.postgresql.enabled) .Values.postgresql.external.host }}
             # External Postgres -- DB_USERNAME/DB_PASSWORD from the
             # RDS-managed secret (rotating). DATABASE_URL is built at
@@ -94,6 +107,8 @@ spec:
             # Hosted mode requires storage.blobBackend=s3 (LocalDiskBlobStore
             # is pod-ephemeral and rejected at boot in di/storage.ts). Plumbed
             # from .Values.s3 so chart consumers don't have to duplicate it.
+            # ARK_S3_ENDPOINT / AWS_ENDPOINT_URL_S3 / ARK_S3_PATH_STYLE come
+            # from the configmap when LocalStack is wired.
             - name: ARK_BLOB_BACKEND
               value: "s3"
             - name: ARK_S3_BUCKET
@@ -104,14 +119,15 @@ spec:
             - name: ARK_S3_PREFIX
               value: {{ .Values.s3.prefix | quote }}
             {{- end }}
+            # LocalStack accepts any credentials; supply dummy values so the
+            # AWS SDK chain doesn't fall through to IMDS lookups inside the
+            # pod (which would hang then 404).
+            {{- if include "ark.s3Endpoint" . }}
+            - name: AWS_ACCESS_KEY_ID
+              value: "test"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "test"
             {{- end }}
-            {{- if .Values.controlPlane.devAllowLocalHostedStorage }}
-            # Hosted mode also requires an S3SnapshotStore implementation; the
-            # only documented bypass is this dev flag. Acceptable today only
-            # for replicaCount=1; revisit when the S3 snapshot store impl
-            # lands upstream and flip this off for multi-replica.
-            - name: ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE
-              value: "1"
             {{- end }}
           {{- if or .Values.llm.anthropicApiKey .Values.llm.existingSecret }}
             - name: ANTHROPIC_API_KEY

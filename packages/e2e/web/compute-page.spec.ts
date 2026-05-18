@@ -29,14 +29,14 @@ test.afterAll(async () => {
 
 async function goToCompute() {
   await page.click('nav button:has-text("Compute")');
-  await expect(page.locator("h1")).toContainText("Compute");
+  await expect(page.locator("h1", { hasText: "Compute" })).toBeVisible();
 }
 
 // -- Compute page rendering ---------------------------------------------------
 
 test("compute page loads with title", async () => {
   await goToCompute();
-  await expect(page.locator("h1")).toContainText("Compute");
+  await expect(page.locator("h1", { hasText: "Compute" })).toBeVisible();
 });
 
 // -- System metrics cards -----------------------------------------------------
@@ -59,7 +59,7 @@ test("compute page renders metrics section", async () => {
     // The ComputeView renders SnapshotMetrics cards with CPU, Memory, etc.
     // Metrics may or may not render depending on system state.
     // At minimum, the page should not crash and the heading should persist.
-    await expect(page.locator("h1")).toContainText("Compute");
+    await expect(page.locator("h1", { hasText: "Compute" })).toBeVisible();
   }
 });
 
@@ -96,5 +96,5 @@ test("compute page survives reload", async () => {
   await page.reload();
   await page.waitForSelector("nav", { timeout: 10_000 });
   await goToCompute();
-  await expect(page.locator("h1")).toContainText("Compute");
+  await expect(page.locator("h1", { hasText: "Compute" })).toBeVisible();
 });

@@ -250,6 +250,57 @@ export class SessionTerminator {
     return { ok: true, message: `Session restored (status: ${restored.status})` };
   }
 
+  /**
+   * Hard-terminate a session: SIGKILL via executor (no SIGTERM grace),
+   * mark stopped with `error: "killed"` as the discriminator from a
+   * graceful stop, run the synchronous cleanup pass. Sister of stop()
+   * for callers that want a direct kill without the orderly shutdown
+   * (RPC `session/kill` + MCP `session_kill` tool both use this).
+   */
+  async kill(
+    sessionId: string,
+  ): Promise<{ ok: true; terminated_at: number; cleaned_up: boolean } | { ok: false; message: string }> {
+    const d = this.deps;
+    const session = await d.sessions.get(sessionId);
+    if (!session) return { ok: false, message: `Session ${sessionId} not found` };
+
+    const terminalStatuses = ["completed", "failed", "archived", "stopped"];
+    if (terminalStatuses.includes(session.status)) {
+      return { ok: false, message: `session already terminal (status=${session.status})` };
+    }
+
+    // SIGKILL via the executor that launched this session. We use the
+    // legacy executor.terminate/kill path here (not the ComputeTarget
+    // shutdown that stop() uses) because kill() is "no grace": skip
+    // worker-side teardown and go straight to the OS-signal layer.
+    const handle = session.session_id;
+    if (handle) {
+      const { getExecutor } = await import("../../executor.js");
+      const executorName = (session.config as Record<string, unknown> | null)?.launch_executor as string | undefined;
+      const executor = executorName ? getExecutor(executorName) : undefined;
+      if (executor) {
+        if (executor.terminate) await executor.terminate(handle);
+        else await executor.kill(handle);
+      }
+    }
+
+    await d.sessions.update(sessionId, {
+      status: "stopped",
+      error: "killed",
+      session_id: null,
+    });
+
+    await d.events.log(sessionId, "session_killed", {
+      actor: "user",
+      data: { handle: handle ?? null },
+    });
+
+    const updated = await d.sessions.get(sessionId);
+    if (updated) await d.cleanupSession(updated);
+
+    return { ok: true, terminated_at: Date.now(), cleaned_up: true };
+  }
+
   async cleanupOnTerminal(sessionId: string): Promise<void> {
     const d = this.deps;
     const session = await d.sessions.get(sessionId);

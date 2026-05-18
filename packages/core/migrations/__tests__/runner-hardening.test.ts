@@ -116,4 +116,39 @@ describe("MigrationRunner hardening -- advisory lock (postgres)", async () => {
       await db.close();
     }
   });
+
+  // Reproduces the production deadlock: control-plane daemon + hosted server
+  // + N Temporal workers all call MigrationRunner.apply() against the same
+  // Postgres at boot. With pg_advisory_lock taken/released on different
+  // pooled connections the lock leaked and every caller after the first hung
+  // forever. withMigrationLock pins lock+unlock to one reserved connection,
+  // so concurrent callers serialize cleanly: one applies, the rest block
+  // briefly then no-op.
+  it("serializes concurrent apply() callers without deadlock", async () => {
+    const { PostgresAdapter } = await import("../../database/postgres.js");
+    const adapters: Array<InstanceType<typeof PostgresAdapter>> = [];
+    try {
+      // 4 independent adapters = 4 independent pools = 4 "processes".
+      const runners = Array.from({ length: 4 }, () => {
+        const db = new PostgresAdapter(url as string);
+        adapters.push(db);
+        return new MigrationRunner(db, "postgres");
+      });
+
+      // All four boot simultaneously. Must all resolve; a leaked lock would
+      // hang the last three until the per-test timeout fires.
+      await Promise.all(runners.map((r) => r.apply()));
+
+      // Lock must be free afterward (try-lock from a fresh session).
+      const probe = new PostgresAdapter(url as string);
+      adapters.push(probe);
+      const row = (await probe.prepare(`SELECT pg_try_advisory_lock(hashtext('ark_migrations')) AS got`).get()) as
+        | { got: boolean }
+        | undefined;
+      expect(row?.got).toBe(true);
+      await probe.prepare(`SELECT pg_advisory_unlock(hashtext('ark_migrations'))`).run();
+    } finally {
+      await Promise.all(adapters.map((a) => a.close().catch(() => {})));
+    }
+  }, 30_000);
 });

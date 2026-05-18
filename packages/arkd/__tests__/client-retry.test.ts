@@ -13,9 +13,10 @@
  * writing any HTTP response. fetch() against this surfaces the exact
  * "socket connection was closed unexpectedly" we hit in production.
  */
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, test } from "bun:test";
 import { createServer, type Server, type Socket } from "net";
 import { ArkdClient } from "../client/index.js";
+import { ArkdUnreachableError } from "../common/errors.js";
 import { allocatePort } from "../../core/config/port-allocator.js";
 
 interface Counter {
@@ -93,5 +94,15 @@ describe("ArkdClient transient-error retry", () => {
     } finally {
       await new Promise<void>((resolve) => srv.close(() => resolve()));
     }
+  });
+});
+
+describe("ArkdUnreachableError", () => {
+  test("client throws ArkdUnreachableError when endpoint is not listening", async () => {
+    // Port 1 is never open (reserved, always ECONNREFUSED on localhost).
+    const client = new ArkdClient("http://127.0.0.1:1", { requestTimeoutMs: 2000 });
+    const err = await client.health().catch((e) => e);
+    expect(err).toBeInstanceOf(ArkdUnreachableError);
+    expect((err as ArkdUnreachableError).url).toContain("127.0.0.1:1");
   });
 });

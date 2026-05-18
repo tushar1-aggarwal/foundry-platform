@@ -1,0 +1,52 @@
+# Pod-isolation contract -- run {{run_id}}
+
+**Date:** {{date}}
+**Cluster:** {{cluster}}
+**Image:** {{image}}
+**Repo:** {{repo}}
+**Branch:** {{branch}}
+**Summary:** {{summary}}
+
+## Stage results
+
+| Stage | exit_code | terminal | commits added | duration_ms | cost USD | notes |
+|---|---|---|---|---|---|---|
+| plan | {{plan.exit_code}} | {{plan.terminal_reason}} | {{plan.commit_count}} | {{plan.duration_ms}} | {{plan.cost_usd}} | {{plan.notes}} |
+| implement | {{implement.exit_code}} | {{implement.terminal_reason}} | {{implement.commit_count}} | {{implement.duration_ms}} | {{implement.cost_usd}} | {{implement.notes}} |
+| pr | {{pr.exit_code}} | - | - | {{pr.duration_ms}} | - | {{pr.notes}} |
+
+**PR URL:** {{pr.url}}
+
+## Input contract (production-equivalent)
+
+Each stage was driven with the exact env + prompt CP would emit. See
+`<stage>/inputs.json` for the literal values. Surfaces that matter for the
+SDK launcher (`packages/core/runtimes/claude-agent/launch.ts`):
+
+- `ARK_SESSION_ID`, `ARK_SESSION_DIR`, `ARK_WORKTREE`, `ARK_PROMPT_FILE`
+- `ARK_STAGE`, `ARK_MAX_TURNS`, `ARK_MODEL`
+- `ARK_COMPAT=bedrock` (enables the in-process bedrock-compat proxy)
+- `ARK_SYSTEM_PROMPT_APPEND` (the agent YAML's rendered system_prompt)
+- `ARK_TENANT_ID`
+- `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`
+- File at `$ARK_PROMPT_FILE` holds the task prompt (rendered)
+
+## What this proves
+
+- ✓ The per-session pod can complete a docs-flow E2E given correct inputs.
+- ✓ The claude-agent SDK + bedrock-compat proxy + harinder JWT + haiku slug path works.
+- ✓ Authed git clone + push against private Bitbucket works.
+- ✓ Bitbucket REST API PR-create works with our SSM credentials.
+
+Implication: any failure in production E2E with the same image + DB +
+secrets is in the **orchestration layer** (Temporal workflow, CP dispatch
+pipeline, arkd integration), not the pod itself.
+
+## Skip notes
+
+- arkd was NOT exercised. Hook forwarding to `ARK_ARKD_URL` was disabled.
+- Stage transitions were driven by the driver, not the conductor's stage
+  state machine. The `complete_stage` MCP tool call was made by the agent
+  and acknowledged by the SDK's in-process MCP server (no CP notification).
+- `prepare-workspace` step was driver bash, not `runTargetLifecycle`. CP's
+  per-step instrumentation was not exercised.

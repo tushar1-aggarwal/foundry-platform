@@ -8,7 +8,7 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { RoutingEngine } from "../engine.js";
 import { ProviderRegistry } from "../providers.js";
-import { defaultPolicyRegistry, TierEscalator, type PolicySelector, type Tier } from "../policies/index.js";
+import { defaultPolicyRegistry, higherTiers, type PolicySelector, type Tier } from "../policies/index.js";
 import type { RouterConfig, ModelConfig } from "../types.js";
 import type { ClassificationResult } from "../classifier.js";
 
@@ -171,16 +171,14 @@ describe("RoutingEngine policy extensibility", () => {
   });
 });
 
-describe("TierEscalator", () => {
+describe("higherTiers", () => {
   test("default ladder promotes economy -> standard -> frontier", () => {
-    const esc = new TierEscalator();
-    expect(esc.higherTiers("economy")).toEqual(["standard", "frontier"] as Tier[]);
-    expect(esc.higherTiers("standard")).toEqual(["frontier"] as Tier[]);
-    expect(esc.higherTiers("frontier")).toEqual([] as Tier[]);
+    expect(higherTiers("economy")).toEqual(["standard", "frontier"] as Tier[]);
+    expect(higherTiers("standard")).toEqual(["frontier"] as Tier[]);
+    expect(higherTiers("frontier")).toEqual([] as Tier[]);
   });
 
   test("unknown tier returns an empty ladder", () => {
-    const esc = new TierEscalator();
-    expect(esc.higherTiers("platinum")).toEqual([]);
+    expect(higherTiers("platinum")).toEqual([]);
   });
 });

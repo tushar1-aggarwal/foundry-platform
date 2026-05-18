@@ -17,6 +17,8 @@ import type { ComputeRepository } from "../repositories/compute.js";
 import type { EventRepository } from "../repositories/event.js";
 import type { MessageRepository } from "../repositories/message.js";
 import type { TodoRepository } from "../repositories/todo.js";
+import type { ArtifactRepository } from "../repositories/artifact.js";
+import type { LedgerRepository } from "../repositories/ledger.js";
 import type { FlowStateRepository } from "../repositories/flow-state.js";
 import type { FlowStore } from "../stores/flow-store.js";
 import type { RuntimeStore } from "../stores/runtime-store.js";
@@ -40,7 +42,7 @@ import { garbageCollectComputeIfTemplate } from "../services/compute-lifecycle.j
 import { capturePlanMdIfPresent } from "../services/plan-artifact.js";
 import { saveCheckpoint } from "../session/checkpoint.js";
 import { provisionWorkspaceWorkdir } from "../workspace/provisioner.js";
-import * as flow from "../services/flow.js";
+import { buildFlowCallbacks } from "../services/flow-callbacks.js";
 import { buildTaskWithHandoff, extractSubtasks } from "../services/task-builder.js";
 import * as agentRegistry from "../agent/agent.js";
 import { getExecutor } from "../executor.js";
@@ -87,6 +89,8 @@ export function registerServices(
         events: EventRepository;
         messages: MessageRepository;
         todos: TodoRepository;
+        artifacts: ArtifactRepository;
+        ledger: LedgerRepository;
         flows: FlowStore;
         usageRecorder: UsageRecorder;
         transcriptParsers: TranscriptParserRegistry;
@@ -97,6 +101,8 @@ export function registerServices(
           events: c.events,
           messages: c.messages,
           todos: c.todos,
+          artifacts: c.artifacts,
+          ledger: c.ledger,
           flows: c.flows,
           usageRecorder: c.usageRecorder,
           transcriptParsers: c.transcriptParsers,
@@ -107,8 +113,8 @@ export function registerServices(
           recordSessionUsage: (session, usage, provider, source) =>
             c.app.sessionLifecycle.recordSessionUsage(session, usage, provider, source),
           getOutput: (id, opts) => getOutput(c.app, id, opts),
-          getStage: (flowName, stageName) => flow.getStage(c.app, flowName, stageName),
-          getStageAction: (flowName, stageName) => flow.getStageAction(c.app, flowName, stageName),
+          cleanupOnTerminal: (id) => c.app.sessionLifecycle.cleanupOnTerminal(id),
+          ...buildFlowCallbacks(c.app),
         }),
       { lifetime },
     ),
@@ -146,6 +152,10 @@ export function registerServices(
           gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
           resolveComputeTarget: (session) => c.app.resolveComputeTarget(session),
           advance: (id, force) => c.app.stageAdvance.advance(id, force),
+          cleanupSession: async (session) => {
+            const { cleanupSession } = await import("../services/session/cleanup.js");
+            await cleanupSession(c.app, session);
+          },
           provisionWorkspaceWorkdir: (session, ws, opts) => provisionWorkspaceWorkdir(c.app, session, ws, opts),
           // Wire Temporal workflow starter when hosted mode + flag enabled.
           // Uses a lazy async import so the @temporalio packages are only
@@ -217,8 +227,7 @@ export function registerServices(
           },
 
           // Flow + task-building callbacks
-          getStage: (flowName, stageName) => flow.getStage(c.app, flowName, stageName),
-          getStageAction: (flowName, stageName) => flow.getStageAction(c.app, flowName, stageName),
+          ...buildFlowCallbacks(c.app),
           buildTask: (session, stage, agentName) => buildTaskWithHandoff(c.app, session, stage, agentName),
           extractSubtasks: (session) => extractSubtasks(c.app, session),
           materializeClaudeAuth: (session, compute) => materializeClaudeAuthForDispatch(c.app, session, compute),
@@ -288,10 +297,7 @@ export function registerServices(
           capturePlanMd: (session) => capturePlanMdIfPresent(c.app, session),
           gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
           saveCheckpoint: (sessionId) => saveCheckpoint({ sessions: c.sessions, events: c.events }, sessionId),
-          getStage: (flowName, stageName) => flow.getStage(c.app, flowName, stageName),
-          getStageAction: (flowName, stageName) => flow.getStageAction(c.app, flowName, stageName),
-          resolveNextStage: (flowName, stage, outcome) => flow.resolveNextStage(c.app, flowName, stage, outcome),
-          evaluateGate: (flowName, stage, session) => flow.evaluateGate(c.app, flowName, stage, session),
+          ...buildFlowCallbacks(c.app),
           // Stop the previous stage's poller before sessions.update clears
           // session_id. Closes the stale-handle race documented at
           // executors/status-poller.ts#L205.

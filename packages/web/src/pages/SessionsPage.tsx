@@ -10,14 +10,12 @@ import { useSessions } from "../hooks/useSessions.js";
 import { useApi } from "../hooks/useApi.js";
 import { useUnreadCountsQuery } from "../hooks/useSessionQueries.js";
 import { useFlowStagesMap } from "../hooks/useFlowQueries.js";
-import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 
 interface SessionsPageProps {
   view: string;
   onNavigate: (view: string) => void;
   readOnly: boolean;
   onToast: (msg: string, type: string) => void;
-  daemonStatus?: DaemonStatus | null;
   initialSelectedId?: string | null;
   onSelectedChange?: (id: string | null) => void;
   initialTab?: string | null;
@@ -29,7 +27,6 @@ export function SessionsPage({
   onNavigate,
   readOnly,
   onToast,
-  daemonStatus,
   initialSelectedId,
   onSelectedChange,
   initialTab,
@@ -210,14 +207,7 @@ export function SessionsPage({
   ) : undefined;
 
   return (
-    <Layout
-      view={view}
-      onNavigate={onNavigate}
-      readOnly={readOnly}
-      daemonStatus={daemonStatus}
-      totalUnread={totalUnread}
-      list={listPanel}
-    >
+    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly} totalUnread={totalUnread} list={listPanel}>
       <h1 className="sr-only">Sessions</h1>
 
       {/* Center Panel */}
@@ -249,7 +239,6 @@ export function SessionsPage({
             setShowNew(false);
           }}
           readOnly={readOnly}
-          daemonStatus={daemonStatus}
         />
       )}
       <ConfirmDialog

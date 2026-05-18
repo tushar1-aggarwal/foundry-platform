@@ -22,6 +22,7 @@ import type { PlacementCtx } from "../../secrets/placement-types.js";
 import { DeferredPlacementCtx } from "../../secrets/deferred-placement-ctx.js";
 import { placeAllSecrets } from "../../secrets/placement.js";
 import { HierarchicalSecretResolver } from "../../../secrets/resolver/index.js";
+import { isRepoUrl } from "../../repo-url.js";
 import { logDebug, logWarn } from "../../observability/structured-log.js";
 
 export interface LaunchEnvResult {
@@ -211,7 +212,8 @@ export async function launchAgent(
 
   return executor.launch({
     sessionId: opts.sessionId,
-    workdir: opts.session.workdir ?? opts.session.repo,
+    workdir:
+      opts.session.workdir ?? (opts.session.repo && !isRepoUrl(opts.session.repo) ? opts.session.repo : undefined),
     agent: opts.agent as any,
     task: opts.task,
     claudeArgs: opts.claudeArgs,

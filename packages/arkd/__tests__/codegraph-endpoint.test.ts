@@ -56,8 +56,7 @@ describe("POST /codegraph/index", async () => {
     // Skip if codegraph binary isn't available
     const cgBin = join(process.cwd(), "node_modules", ".bin", "codegraph");
     if (!existsSync(cgBin)) {
-      console.log("  skipped: codegraph binary not found");
-      return;
+      throw new Error(`prereq missing: ${cgBin} -- run 'bun install' (or set up the codegraph dependency)`);
     }
 
     // Temporarily prepend node_modules/.bin to PATH so the spawn finds codegraph
@@ -84,8 +83,9 @@ describe("POST /codegraph/index", async () => {
         typeof data.error === "string" &&
         /NODE_MODULE_VERSION|better-sqlite3|recompiling|reinstalling/i.test(data.error)
       ) {
-        console.log(`  skipped: codegraph native addon ABI mismatch -- run \`npm rebuild better-sqlite3\``);
-        return;
+        throw new Error(
+          `codegraph native addon ABI mismatch -- run \`npm rebuild better-sqlite3\` (raw error: ${data.error})`,
+        );
       }
 
       expect(data.ok).toBe(true);

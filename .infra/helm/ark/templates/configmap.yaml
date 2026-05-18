@@ -8,7 +8,7 @@ metadata:
 data:
   ARK_CONDUCTOR_HOST: "0.0.0.0"
   ARK_CONDUCTOR_PORT: {{ .Values.controlPlane.ports.conductor | quote }}
-  ARK_AUTH_ENABLED: {{ .Values.controlPlane.auth.enabled | quote }}
+  ARK_AUTH_REQUIRE_TOKEN: {{ .Values.controlPlane.auth.enabled | ternary "true" "false" | quote }}
   ARK_ROUTER_POLICY: {{ .Values.controlPlane.router.policy | quote }}
   {{- $dbUrl := include "ark.databaseUrl" . }}
   {{- if $dbUrl }}
@@ -18,7 +18,8 @@ data:
   {{- if $redisUrl }}
   REDIS_URL: {{ $redisUrl | quote }}
   {{- end }}
-  {{- if .Values.temporal.enabled }}
+  # Temporal is structural -- always emitted. Hosted/control-plane mode always
+  # routes dispatch through Temporal workflows (Phase 3).
   ARK_TEMPORAL_ORCHESTRATION: "true"
   ARK_TEMPORAL_SERVER_URL: "{{ .Values.temporal.serverServiceName }}:7233"
   ARK_TEMPORAL_NAMESPACE: {{ .Values.temporal.namespace | quote }}
@@ -26,4 +27,10 @@ data:
   {{- if .Values.temporal.taskQueueAssignments }}
   ARK_TEMPORAL_TASK_QUEUE_ASSIGNMENTS: {{ .Values.temporal.taskQueueAssignments | quote }}
   {{- end }}
+  {{- $s3Endpoint := include "ark.s3Endpoint" . }}
+  {{- if $s3Endpoint }}
+  ARK_S3_ENDPOINT: {{ $s3Endpoint | quote }}
+  AWS_ENDPOINT_URL: {{ $s3Endpoint | quote }}
+  AWS_ENDPOINT_URL_S3: {{ $s3Endpoint | quote }}
+  ARK_S3_PATH_STYLE: "true"
   {{- end }}

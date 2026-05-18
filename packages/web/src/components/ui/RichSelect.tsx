@@ -20,6 +20,12 @@ export interface RichSelectProps {
   className?: string;
   searchable?: boolean;
   disabled?: boolean;
+  /**
+   * Forwarded to the trigger button. Tests + screen readers need a stable
+   * handle on a popover trigger that otherwise only has visual context
+   * (the field label sits in a sibling element).
+   */
+  "aria-label"?: string;
 }
 
 const triggerClass = cn(
@@ -43,6 +49,7 @@ export function RichSelect({
   className,
   searchable,
   disabled,
+  "aria-label": ariaLabel,
 }: RichSelectProps) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -74,6 +81,7 @@ export function RichSelect({
       <Popover.Trigger asChild>
         <button
           type="button"
+          aria-label={ariaLabel}
           className={cn(triggerClass, disabled && "opacity-50 cursor-not-allowed", className)}
           disabled={disabled}
         >

@@ -1,4 +1,13 @@
-{{- if and .Values.temporal.enabled .Values.temporal.namespaceJob.enabled }}
+{{- /*
+Idempotent namespace registration. Always emitted -- temporal-worker fails
+without its namespace.
+
+post-install,post-upgrade hook (weight 5, after temporal-schema at 0). The
+temporal CLI fails fast when the frontend isn't reachable yet (temporal-server
+is still crashlooping toward its schema); the Job's backoffLimit is the
+k8s-native retry until the server is serving. `namespace create` is guarded by
+a `describe` check so re-runs on upgrade are no-ops.
+*/ -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -8,18 +17,15 @@ metadata:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-namespace
   annotations:
-    # Post-install: server must be up before we can call its API.
     "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
     "argocd.argoproj.io/hook": PostSync
-    "argocd.argoproj.io/sync-wave": "10"
+    "argocd.argoproj.io/sync-wave": "5"
     "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
 spec:
-  backoffLimit: 3
-  # Hard ceiling so a hung temporal CLI call (partial TCP connection, image
-  # pull stall) cannot block the ArgoCD post-install phase indefinitely.
-  activeDeadlineSeconds: 300
+  backoffLimit: 20
+  activeDeadlineSeconds: 600
   template:
     metadata:
       labels:
@@ -40,15 +46,9 @@ spec:
             - -c
             - |
               set -e
-              # Wait up to 90s for server to be reachable.
-              for i in $(seq 1 30); do
-                if temporal operator cluster health --address "$TEMPORAL_ADDRESS" >/dev/null 2>&1; then
-                  break
-                fi
-                echo "waiting for temporal-server... ($i)"
-                sleep 3
-              done
-              # Idempotent namespace creation.
+              # Fail fast if the frontend isn't serving yet -- the Job
+              # controller retries (backoffLimit) until temporal-server is up.
+              temporal operator cluster health --address "$TEMPORAL_ADDRESS"
               {{- range .Values.temporal.namespaces }}
               if temporal operator namespace describe {{ . | quote }} >/dev/null 2>&1; then
                 echo "namespace {{ . }} exists"
@@ -57,4 +57,3 @@ spec:
                 echo "namespace {{ . }} created"
               fi
               {{- end }}
-{{- end }}

@@ -30,7 +30,7 @@ test.afterAll(async () => {
 
 async function goToSessions() {
   await page.click('nav button:has-text("Sessions")');
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 }
 
 // -- Session page elements ----------------------------------------------------
@@ -38,21 +38,12 @@ async function goToSessions() {
 test("sessions page shows search input", async () => {
   await goToSessions();
   // Search is collapsed behind an icon toggle -- click to expand the input.
-  await page.locator('button[title="Search (/ )"]').click();
+  await page.locator('button[title="Search"]').click();
   await expect(page.locator('input[placeholder*="Search"]')).toBeVisible();
 });
 
-// TODO(#176): SessionList only renders chips for running/waiting/completed/
-// failed statuses (see packages/web/src/components/SessionList.tsx). Fresh
-// sessions created via `session/start` in the e2e fixture land in "ready"
-// status and never transition to one of those four without a live conductor
-// to dispatch them. Re-enable when the fixture can produce a running session.
-test.skip("sessions page shows filter chips", async () => {
-  await goToSessions();
-});
-
 test("sessions page shows New Session button", async () => {
-  await expect(page.locator('button:has-text("New Session")')).toBeVisible();
+  await expect(page.locator('button[title^="New session"]').first()).toBeVisible();
 });
 
 // -- Create session via inline form -------------------------------------------
@@ -60,9 +51,10 @@ test("sessions page shows New Session button", async () => {
 test("create session via New Session inline form", async () => {
   await goToSessions();
 
-  // Open the inline form in the right panel
-  await page.click('button:has-text("New Session")');
-  await expect(page.locator("text=New Session").first()).toBeVisible();
+  // Open the inline form in the right panel. Trigger is the compact
+  // icon-button with title="New session (n)".
+  await page.locator('button[title^="New session"]').first().click();
+  await expect(page.locator('[data-testid="new-session-modal"]')).toBeVisible();
 
   // Fill in the summary field
   const summaryInput = page.locator('textarea[placeholder="What should the agent work on?"]');
@@ -110,36 +102,23 @@ test("search filters sessions by summary text", async () => {
   await page.keyboard.press("Escape");
 
   // Search is collapsed behind an icon toggle -- click to open the input.
-  await page.locator('button[title="Search (/ )"]').click();
+  await page.locator('button[title="Search"]').click();
   const searchInput = page.locator('input[placeholder*="Search"]');
   await expect(searchInput).toBeVisible({ timeout: 5_000 });
   await searchInput.fill("alpha");
 
-  // Alpha session should be visible. Use .first() because even with the
-  // detail pane closed the SessionCard + nav breadcrumb both contain the
-  // summary; we only care that filtering shows *at least one* alpha row.
-  await expect(page.locator("text=E2E test session alpha").first()).toBeVisible();
-  // Beta session should be hidden
-  await expect(page.locator("text=E2E test session beta")).not.toBeVisible();
+  // Search only filters the session list panel; the dashboard's "recent
+  // sessions" strip is a separate surface and still shows beta. Scope the
+  // assertions to the list (`session-tree-list` data-testid lives inside
+  // `SessionListPanel` when group-by-parent is on, which is the default).
+  const list = page.locator('[data-testid="session-tree-list"]');
+  await expect(list.locator("text=E2E test session alpha")).toBeVisible();
+  // Beta session should be hidden from the list while filtered.
+  await expect(list.locator("text=E2E test session beta")).not.toBeVisible();
 
-  // Clear search
+  // Clear search -- beta should reappear in the list.
   await searchInput.fill("");
-  await expect(page.locator("text=E2E test session beta").first()).toBeVisible();
-});
-
-// -- Filter by status chips ---------------------------------------------------
-
-// TODO(#177): The FilterChip UI was rewritten: only chips for statuses
-// with sessions are rendered, there is no "All" chip (deselect by clicking
-// the active chip again), and labels are lowercase ("3 running", not
-// "Running"). This test's assertions no longer map to the UI and need
-// rewriting against the current contract.
-test.skip("filter chips show only matching status sessions", async () => {
-  await goToSessions();
-  await page.click('button:has-text("Running")');
-  await expect(page.locator("text=E2E test session alpha")).not.toBeVisible({ timeout: 3_000 });
-  await page.click('button:has-text("All")');
-  await expect(page.locator("text=E2E test session alpha")).toBeVisible();
+  await expect(list.locator("text=E2E test session beta")).toBeVisible();
 });
 
 // -- Delete and undelete session ----------------------------------------------
@@ -150,8 +129,15 @@ test("delete and undelete session via RPC", async () => {
   // session row context menu, and undo is a toast. Drive the lifecycle
   // through RPCs so we exercise the real handler; the UI layer is
   // covered by sessions-page / detail-drawer unit tests.
-  const list = await ws.rpc<{ sessions: Array<{ id: string; summary: string }> }>("session/list", { limit: 200 });
-  const alpha = list.sessions.find((s) => s.summary === "E2E test session alpha");
+  let list = await ws.rpc<{ sessions: Array<{ id: string; summary: string }> }>("session/list", { limit: 200 });
+  let alpha = list.sessions.find((s) => s.summary === "E2E test session alpha");
+  if (!alpha) {
+    // Earlier UI-driven creation can be skipped or flaky; seed via RPC so
+    // this test isn't tightly coupled to the inline-form test passing.
+    await ws.rpc("session/start", { summary: "E2E test session alpha", repo: ws.env.workdir, flow: "bare" });
+    list = await ws.rpc<{ sessions: Array<{ id: string; summary: string }> }>("session/list", { limit: 200 });
+    alpha = list.sessions.find((s) => s.summary === "E2E test session alpha");
+  }
   expect(alpha).toBeTruthy();
 
   const deleteRes = await ws.rpc<{ ok: boolean }>("session/delete", { sessionId: alpha!.id });
@@ -171,8 +157,13 @@ test("clone session via fork RPC", async () => {
   // The SessionDetail header no longer surfaces a visible "Fork" button --
   // the action moved behind a context menu. Drive the RPC directly so the
   // handler stays covered; UI wiring is covered by detail-drawer tests.
-  const list = await ws.rpc<{ sessions: Array<{ id: string; summary: string }> }>("session/list", { limit: 200 });
-  const alpha = list.sessions.find((s) => s.summary === "E2E test session alpha");
+  let list = await ws.rpc<{ sessions: Array<{ id: string; summary: string }> }>("session/list", { limit: 200 });
+  let alpha = list.sessions.find((s) => s.summary === "E2E test session alpha");
+  if (!alpha) {
+    await ws.rpc("session/start", { summary: "E2E test session alpha", repo: ws.env.workdir, flow: "bare" });
+    list = await ws.rpc<{ sessions: Array<{ id: string; summary: string }> }>("session/list", { limit: 200 });
+    alpha = list.sessions.find((s) => s.summary === "E2E test session alpha");
+  }
   expect(alpha).toBeTruthy();
 
   const before = list.sessions.length;

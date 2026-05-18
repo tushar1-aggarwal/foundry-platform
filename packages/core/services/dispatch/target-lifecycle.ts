@@ -57,7 +57,7 @@ export interface RunTargetLifecycleOpts {
    * arkd). Pass `null` for bare-worktree sessions or when the compute
    * shares the conductor's filesystem.
    */
-  workspace?: { source: string | null; remoteWorkdir: string | null };
+  workspace?: { source: string | null; remoteWorkdir: string | null; branch?: string | null };
   /**
    * Deferred placement queue from the dispatcher's `buildLaunchEnv` pass.
    * When present and non-empty, `target.compute.flushPlacement` flushes it
@@ -160,6 +160,7 @@ export async function runTargetLifecycle(
           source: opts.workspace!.source,
           remoteWorkdir: opts.workspace!.remoteWorkdir,
           sessionId,
+          branch: opts.workspace!.branch ?? null,
           onLog,
         }),
       { retries: 2, retryBackoffMs: 1_000, context: stepCtx },

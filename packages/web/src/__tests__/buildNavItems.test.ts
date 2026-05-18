@@ -16,7 +16,7 @@ import { describe, test, expect } from "bun:test";
 import { buildNavItems } from "../components/Layout.js";
 
 describe("buildNavItems", () => {
-  test("no identity, no unread -> base 9 entries, no admin", () => {
+  test("no identity, no unread -> base entries, no admin", () => {
     const items = buildNavItems(null, undefined);
     expect(items.map((i) => i.id)).toEqual([
       "sessions",
@@ -27,6 +27,7 @@ describe("buildNavItems", () => {
       "tools",
       "schedules",
       "integrations",
+      "secrets",
       "costs",
     ]);
     expect(items.some((i) => i.id === "admin")).toBe(false);
@@ -51,7 +52,7 @@ describe("buildNavItems", () => {
 
   test("admin role -> admin entry appended at end", () => {
     const items = buildNavItems("admin", undefined);
-    expect(items.length).toBe(10);
+    expect(items.length).toBe(11);
     expect(items[items.length - 1].id).toBe("admin");
     expect(items[items.length - 1].label).toBe("Admin");
   });

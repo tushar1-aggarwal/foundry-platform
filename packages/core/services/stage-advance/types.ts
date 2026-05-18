@@ -41,7 +41,6 @@ import type { RuntimeStore } from "../../stores/runtime-store.js";
 import type { UsageRecorder } from "../../observability/usage.js";
 import type { TranscriptParserRegistry } from "../../runtimes/transcript-parser.js";
 import type { DatabaseAdapter } from "../../database/index.js";
-import type { StageDefinition, StageAction } from "../flow.js";
 
 // ── Callbacks ───────────────────────────────────────────────────────────────
 
@@ -74,18 +73,7 @@ export interface GcComputeIfTemplateCb {
 export interface SaveCheckpointCb {
   (sessionId: string): Promise<void>;
 }
-export interface GetStageCb {
-  (flowName: string, stageName: string): StageDefinition | null;
-}
-export interface GetStageActionCb {
-  (flowName: string, stageName: string): StageAction;
-}
-export interface ResolveNextStageCb {
-  (flowName: string, stage: string, outcome?: string): string | null;
-}
-export interface EvaluateGateCb {
-  (flowName: string, stage: string, session: Session): { canProceed: boolean; reason: string };
-}
+export type { GetStageCb, GetStageActionCb, ResolveNextStageCb, EvaluateGateCb } from "../flow-callbacks.js";
 export interface StopStatusPollerCb {
   (sessionId: string): void;
 }

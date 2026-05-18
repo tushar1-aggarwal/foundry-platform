@@ -12,11 +12,12 @@ import type { SessionRepository } from "../../repositories/session.js";
 import type { EventRepository } from "../../repositories/event.js";
 import type { MessageRepository } from "../../repositories/message.js";
 import type { TodoRepository } from "../../repositories/todo.js";
+import type { ArtifactRepository } from "../../repositories/artifact.js";
+import type { LedgerRepository } from "../../repositories/ledger.js";
 import type { FlowStore } from "../../stores/flow-store.js";
 import type { UsageRecorder } from "../../observability/usage.js";
 import type { TranscriptParserRegistry } from "../../runtimes/transcript-parser.js";
 import type { Session, MessageRole, MessageType } from "../../../types/index.js";
-import type { StageDefinition, StageAction } from "../flow.js";
 import type { DispatchResult } from "../dispatch/types.js";
 
 // ── Callbacks for helpers that still take AppContext ────────────────────────
@@ -49,11 +50,15 @@ export interface RecordUsageCb {
 export interface GetOutputCb {
   (sessionId: string, opts?: { lines?: number }): Promise<string>;
 }
-export interface GetStageCb {
-  (flowName: string, stageName: string): StageDefinition | null;
-}
-export interface GetStageActionCb {
-  (flowName: string, stageName: string): StageAction;
+export type { GetStageCb, GetStageActionCb } from "../flow-callbacks.js";
+
+/**
+ * Terminal-state cleanup (worktree removal, claude-auth deletion, status
+ * poller stop, etc.). Lives on SessionLifecycle; passed as a callback so
+ * SessionHooks doesn't take a dependency on the whole lifecycle service.
+ */
+export interface CleanupOnTerminalCb {
+  (sessionId: string): Promise<void>;
 }
 
 // ── Deps ────────────────────────────────────────────────────────────────────
@@ -63,6 +68,8 @@ export interface SessionHooksDeps {
   events: EventRepository;
   messages: MessageRepository;
   todos: TodoRepository;
+  artifacts: ArtifactRepository;
+  ledger: LedgerRepository;
   flows: FlowStore;
   usageRecorder: UsageRecorder;
   transcriptParsers: TranscriptParserRegistry;
@@ -76,6 +83,7 @@ export interface SessionHooksDeps {
   getOutput: GetOutputCb;
   getStage: GetStageCb;
   getStageAction: GetStageActionCb;
+  cleanupOnTerminal: CleanupOnTerminalCb;
 }
 
 // ── Public result shapes (stable; re-exported from the barrel) ──────────────

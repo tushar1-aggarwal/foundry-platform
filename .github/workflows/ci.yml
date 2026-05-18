@@ -7,9 +7,7 @@ on:
     branches: [main]
   # workflow_dispatch lets a maintainer fire CI manually from the Actions
   # tab (or via `gh workflow run CI`). Useful for validating long-lived
-  # feature branches whose base is an integration branch rather than main
-  # -- e.g. PRs into `temporal-integration` don't satisfy the branch
-  # filter above and would otherwise never see this workflow.
+  # feature branches whose base is an integration branch rather than main.
   workflow_dispatch:
 
 jobs:
@@ -19,8 +17,7 @@ jobs:
     # status-poller assertions (Gemini/Codex/Goose autonomous-flow tests
     # all timed out at exactly 10000-10300ms). The tests don't have any
     # macOS-specific dependencies -- tmux is installable on both. Darwin
-    # coverage continues via build (darwin-*), install.sh matrix, and
-    # desktop-e2e (macos-latest).
+    # coverage continues via build (darwin-*) and the install.sh matrix.
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -138,103 +135,6 @@ jobs:
       - name: Run local-bespoke docs-flow e2e
         run: make test-e2e-local-bespoke
 
-  # Hosted docs-flow e2e: brings up the full hosted-mode docker stack
-  # (Postgres :15434 + Redis :6380 + Temporal :7234 + temporal-worker
-  # container), spawns the real `ark server start --hosted` binary, and runs
-  # the docs-flow Temporal suite end-to-end:
-  #   - e2e/temporal-control-plane.test.ts:
-  #       * compound: plan -> implement -> review_gate -> pr (with stop/resume)
-  #       * restart-then-fail: server killed mid-implement; workflow durability
-  #         + AuthError surface as status=failed
-  #
-  # The Makefile target boots the stack once and shares it via
-  # ARK_E2E_STACK_RUNNING=1; teardown runs even when a test fails. Worker
-  # image is built from .infra/Dockerfile.temporal-worker; GHA layer cache
-  # keeps the rebuild cheap (~30s warm vs ~150s cold).
-  e2e-control-plane:
-    name: e2e (hosted docs-flow + temporal)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
-
-      - name: Start tmux server
-        run: tmux new-session -d -s ci-init
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Verify Docker is available
-        run: docker ps
-
-      # Pre-pull pinned images so the compose `up --wait` doesn't pay the
-      # registry-fetch cost inside the test budget. Versions mirror what
-      # .infra/docker-compose.e2e.yaml references.
-      - name: Pre-pull e2e stack images
-        run: |
-          docker pull postgres:16 &
-          docker pull redis:7-alpine &
-          docker pull temporalio/auto-setup:1.26 &
-          docker pull temporalio/ui:2.31.2 &
-          wait
-
-      # Build temporal-worker image with GHA layer cache. Cold builds take
-      # ~150s; warm builds drop to ~30s once the cache is primed. The image
-      # tag must match the `image:` field on the `temporal-worker` service
-      # in docker-compose.e2e.yaml so compose picks it up instead of building
-      # locally during `up --wait`.
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build temporal-worker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: .infra/Dockerfile.temporal-worker
-          tags: ark-temporal-worker:e2e
-          load: true
-          cache-from: type=gha,scope=temporal-worker
-          cache-to: type=gha,scope=temporal-worker,mode=max
-
-      - name: Run control-plane + Temporal e2e
-        run: make test-e2e-control-plane
-
-      # Capture every container's stdout/stderr on failure so post-mortems
-      # aren't blind. Logs are written by docker daemon and only survive
-      # teardown if we grab them BEFORE `test-e2e-control-plane-down` drops
-      # the volumes.
-      - name: Dump docker compose logs (on failure)
-        if: failure()
-        run: |
-          docker compose -f .infra/docker-compose.e2e.yaml -p ark-e2e logs --no-color > /tmp/e2e-stack.log 2>&1 || true
-          ls -lh /tmp/ark-* 2>/dev/null || true
-
-      - name: Upload failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-control-plane-logs
-          path: |
-            /tmp/e2e-stack.log
-            /tmp/ark-*.log
-          retention-days: 7
-          if-no-files-found: ignore
-
-      # Mirror of `dev-stack` -> `dev-stack-down`: the test target leaves the
-      # stack up for iteration, so CI must tear it down explicitly. `always()`
-      # ensures cleanup runs whether tests passed or failed.
-      - name: Tear down e2e Docker stack
-        if: always()
-        run: make test-e2e-control-plane-down || true
-
   # Build binaries for all 4 platforms
   build:
     strategy:
@@ -335,7 +235,6 @@ jobs:
   web-e2e:
     runs-on: macos-latest
     timeout-minutes: 15
-    continue-on-error: true # WIP: fixtures use Bun APIs incompatible with Playwright/Node runner
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -351,76 +250,11 @@ jobs:
       - name: Install dependencies
         run: bun install
       - name: Install Playwright browsers
-        # bunx --bun: the fixture (packages/e2e/fixtures/web-server.ts)
-        # uses Bun APIs (`import { spawn } from "bun"`, `import.meta.dir`,
-        # `Bun.sleep`) that the Node Playwright runner can't parse. Running
-        # Playwright under Bun makes the imports resolve.
-        run: cd packages/e2e && bun install && bunx --bun playwright install chromium
+        # Standard Node Playwright runner: the fixtures
+        # (packages/e2e/fixtures/*.ts) are Node-only -- the Bun-coupled
+        # `ark web` server runs out-of-process as its own Bun subprocess,
+        # state is seeded over HTTP. Running Playwright under Node is the
+        # supported path; `bunx --bun` was a non-working hack.
+        run: cd packages/e2e && bun install && npx playwright install chromium
       - name: Run Web UI E2E tests
-        run: cd packages/e2e && bunx --bun playwright test
-
-  desktop-e2e:
-    name: desktop-e2e (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      # tmux is required by packages/core (session launcher imports it).
-      - name: Install tmux (macOS)
-        if: runner.os == 'macOS'
-        run: brew install tmux
-
-      - name: Install tmux + Electron runtime deps (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y tmux xvfb libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libxkbcommon0 libasound2t64 || \
-            sudo apt-get install -y tmux xvfb libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libxkbcommon0 libasound2
-
-      - name: Start tmux server
-        run: tmux new-session -d -s ci-init
-
-      - name: Install repo dependencies
-        run: bun install
-
-      # Build the React SPA the desktop shell serves. Without this,
-      # the Electron window loads a 404 and every test fails.
-      - name: Build web frontend
-        run: bun run build:web
-
-      - name: Install desktop dependencies
-        working-directory: packages/desktop
-        run: npm install
-
-      - name: Run Electron smoke tests (macOS)
-        if: runner.os == 'macOS'
-        working-directory: packages/desktop
-        run: npm test
-
-      - name: Run Electron smoke tests (Linux under xvfb)
-        if: runner.os == 'Linux'
-        working-directory: packages/desktop
-        run: xvfb-run -a npm test
-
-      - name: Upload test artifacts on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-e2e-${{ matrix.os }}
-          path: |
-            packages/desktop/test-results/
-            packages/desktop/playwright-report/
-          retention-days: 7
+        run: cd packages/e2e && npx playwright test

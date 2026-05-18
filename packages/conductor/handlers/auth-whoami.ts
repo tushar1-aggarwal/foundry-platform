@@ -23,12 +23,13 @@
 
 import type { Router } from "../router.js";
 import type { AppContext } from "../../core/app.js";
+import { actorIdentity } from "../../core/auth/context.js";
 
 export interface WhoAmIResponse {
   userId: string;
   email: string | null;
   tenantId: string;
-  role: "admin" | "member" | "viewer";
+  role: "admin" | "member" | "viewer" | "worker";
 }
 
 export function registerAuthWhoamiHandlers(router: Router, app: AppContext): void {
@@ -52,10 +53,14 @@ export function registerAuthWhoamiHandlers(router: Router, app: AppContext): voi
       };
     }
     // Bearer + cookie paths: look up the user row for the email.
-    const user = await app.users.get(ctx.userId);
+    // Use `actorIdentity` so api-key callers (userId === "ak-*" but
+    // scopingUserId === "u-*") resolve to the real user row instead of
+    // showing the key sentinel as the logged-in identity.
+    const realId = actorIdentity(ctx)!;
+    const user = await app.users.get(realId);
     return {
       identity: {
-        userId: ctx.userId,
+        userId: realId,
         email: user?.email ?? null,
         tenantId: ctx.tenantId,
         role: ctx.role,

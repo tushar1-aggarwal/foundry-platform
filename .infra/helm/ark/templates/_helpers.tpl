@@ -148,3 +148,39 @@ Database secret name -- user-provided or chart-generated.
 {{- printf "%s-db" (include "ark.fullname" .) }}
 {{- end }}
 {{- end }}
+
+{{/*
+LocalStack service name (in-cluster).
+*/}}
+{{- define "ark.localstackServiceName" -}}
+{{- printf "%s-localstack" (include "ark.fullname" .) }}
+{{- end }}
+
+{{/*
+S3 endpoint -- in-cluster LocalStack service when enabled, external endpoint
+when set, empty string otherwise (real AWS S3).
+*/}}
+{{- define "ark.s3Endpoint" -}}
+{{- if .Values.localstack.enabled }}
+{{- printf "http://%s:4566" (include "ark.localstackServiceName" .) }}
+{{- else if .Values.localstack.external.endpoint }}
+{{- .Values.localstack.external.endpoint }}
+{{- end }}
+{{- end }}
+
+{{/*
+Master postgres secret for the temporal-db-bootstrap job. Defaults to the
+chart-managed db secret when postgresql.enabled (DB_USERNAME/DB_PASSWORD
+written by templates/secret.yaml in that case); else falls back to
+postgresql.external.existingSecret (operator-supplied) or the explicit
+dbBootstrap.masterSecretName override.
+*/}}
+{{- define "ark.temporalBootstrapMasterSecret" -}}
+{{- if .Values.temporal.dbBootstrap.masterSecretName }}
+{{- .Values.temporal.dbBootstrap.masterSecretName }}
+{{- else if .Values.postgresql.enabled }}
+{{- include "ark.dbSecretName" . }}
+{{- else }}
+{{- .Values.postgresql.external.existingSecret }}
+{{- end }}
+{{- end }}

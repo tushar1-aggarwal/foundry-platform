@@ -24,7 +24,8 @@ import { findProjectRoot } from "../agent/agent.js";
 import { resolveModelFromStore, providerSlugFor } from "../models/resolver.js";
 import type { AppContext } from "../app.js";
 import type { Session } from "../../types/index.js";
-import type { AgentDefinition, RuntimeDefinition } from "../../types/agent.js";
+import type { RuntimeDefinition } from "../../types/agent.js";
+import type { AgentDefinition } from "../agent/agent.js";
 import type { ModelDefinition } from "../../types/model.js";
 import type { StageDefinition, InlineAgentSpec } from "../services/flow.js";
 

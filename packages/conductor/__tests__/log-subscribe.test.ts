@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../../core/app.js";
+import { waitFor } from "../../core/__tests__/test-helpers.js";
 import { registerSessionHandlers } from "../handlers/session.js";
 import { Router, Subscription } from "../router.js";
 import { createRequest, type JsonRpcResponse, type JsonRpcError } from "../../protocol/types.js";
@@ -115,7 +116,10 @@ describe("log/subscribe", () => {
     await appendTrackFile(session.id, "stdio.log", newBytes);
 
     // Wait for the fs.watch event to fire and the async push to complete.
-    await Bun.sleep(300);
+    await waitFor(() => notifications.some((n) => n.method === "log/chunk"), {
+      timeout: 2000,
+      message: "log/chunk notification never arrived after append",
+    });
 
     const chunks = notifications.filter((n) => n.method === "log/chunk");
     expect(chunks.length).toBeGreaterThanOrEqual(1);
@@ -151,6 +155,10 @@ describe("log/subscribe", () => {
     sub.flush();
 
     await appendTrackFile(session.id, "stdio.log", "after-close\n");
+    // Negative assertion: no condition to wait on. fs.watch is async, so
+    // give it a window long enough that any (incorrectly) routed
+    // notification has a real chance to arrive, then assert none did.
+    // Kept as a sleep because there is no positive event to poll for.
     await Bun.sleep(300);
 
     const chunks = notifications.filter((n) => n.method === "log/chunk");

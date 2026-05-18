@@ -55,7 +55,7 @@ export default [
   {
     // React hooks rules enforced for the web frontend. Error level so CI
     // rejects stale-closure / conditional-hook regressions.
-    files: ["packages/web/**/*.ts", "packages/web/**/*.tsx", "packages/desktop/**/*.ts", "packages/desktop/**/*.tsx"],
+    files: ["packages/web/**/*.ts", "packages/web/**/*.tsx"],
     plugins: {
       "react-hooks": reactHooks,
     },

@@ -4,20 +4,18 @@ import { Layout } from "../components/Layout.js";
 import { PageShell } from "../components/PageShell.js";
 import { ScheduleView } from "../components/ScheduleView.js";
 import { Button } from "../components/ui/button.js";
-import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 
 interface SchedulesPageProps {
   view: string;
   onNavigate: (view: string) => void;
   readOnly: boolean;
-  daemonStatus?: DaemonStatus | null;
 }
 
-export function SchedulesPage({ view, onNavigate, readOnly, daemonStatus }: SchedulesPageProps) {
+export function SchedulesPage({ view, onNavigate, readOnly }: SchedulesPageProps) {
   const [showNew, setShowNew] = useState(false);
 
   return (
-    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus}>
+    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly}>
       <PageShell
         title="Schedules"
         padded={false}

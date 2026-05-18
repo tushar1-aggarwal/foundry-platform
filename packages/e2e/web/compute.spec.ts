@@ -28,14 +28,18 @@ test.afterAll(async () => {
 
 async function goToCompute() {
   await page.click('nav button:has-text("Compute")');
-  await expect(page.locator("h1")).toContainText("Compute");
+  // Scope by text. Plain `locator("h1")` matches multiple h1s during the
+  // lazy-route transition (previous SessionsPage's sr-only + dashboard h1
+  // remain mounted while the ComputePage chunk loads), and Playwright's
+  // strict-mode rejects multi-element locators without auto-retrying.
+  await expect(page.locator("h1", { hasText: "Compute" })).toBeVisible();
 }
 
 // -- Compute page rendering ---------------------------------------------------
 
 test("compute page shows title and New Compute button", async () => {
   await goToCompute();
-  await expect(page.locator("h1")).toContainText("Compute");
+  await expect(page.locator("h1", { hasText: "Compute" })).toBeVisible();
   await expect(page.locator('button:has-text("New Compute")')).toBeVisible();
 });
 
@@ -108,32 +112,31 @@ test("create compute via New Compute inline form", async () => {
   await expect(nameInput).toBeVisible();
   await nameInput.fill("e2e-ui-compute");
 
-  // The form now uses RichSelect (Radix Popover) instead of native <select>.
-  // Open the Compute picker, pick "local". Leave runtime as the default
-  // "direct" -- local+direct is a persistent concrete target, which is the
-  // simplest path that won't hit the template-lifecycle guard.
-  await page
-    .locator('button[aria-label="Select compute kind"]')
-    .click()
-    .catch(async () => {
-      // Fallback: the RichSelect trigger may not have the aria-label in this
-      // theme -- click the button inside the labeled Compute section instead.
-      const computeSection = page.locator("text=Compute").first().locator("..");
-      await computeSection.locator("button").first().click();
-    });
-  await page.locator('div[role="option"], button:has-text("local")').first().click();
+  // Default compute is "local". The default isolation "direct" collides with
+  // the auto-seeded singleton `local+direct` row, so flip isolation to
+  // "docker" -- local+docker is a template-lifecycle pair, which auto-flips
+  // the segmented control to "Template" and yields a non-singleton row.
+  // RichSelect renders a Radix Popover trigger button; we expose the trigger
+  // via the `aria-label` prop on RichSelect for stable selection here.
+  await page.locator('button[aria-label="Select isolation kind"]').click();
+  await page.locator('button:has-text("docker")').first().click();
 
-  // Submit
-  await page.click('button:has-text("Create Compute"), button:has-text("Create Template")');
+  // Submit. local+docker is a template-lifecycle pair so the form auto-flips
+  // to template mode and the submit button reads "Create Template".
+  await page.locator('button[aria-label="Create compute template"]').click();
 
-  // Wait for the compute target to appear (may need reload)
+  // Wait for the row to appear (may need reload to pick up RPC-side state)
   await page.waitForTimeout(1_000);
   await page.reload();
   await page.waitForSelector("nav", { timeout: 10_000 });
   await goToCompute();
+  // Template rows live under the "Templates" tab in the new unified list.
+  await page.locator('button[role="tab"]:has-text("Templates")').click();
   await expect(page.locator("text=e2e-ui-compute")).toBeVisible({ timeout: 10_000 });
 
-  // Cleanup: destroy via RPC
+  // Cleanup: destroy via RPC. With the canDelete guard now scoped to the
+  // auto-seeded singleton (compute_kind === name && !is_template && !cloned_from),
+  // user-named template rows on a canDelete=false kind are deletable.
   await ws.rpc("compute/destroy", { name: "e2e-ui-compute" });
 });
 

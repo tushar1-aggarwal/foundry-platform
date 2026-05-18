@@ -1,20 +1,27 @@
 /**
- * StageAdvancer -- runs `advance()`: linear + graph-flow routing, stage
- * isolation, flow completion bookkeeping, optional idempotency.
+ * StageAdvanceService -- stage advancement, completion, handoff, action
+ * execution, and non-Claude transcript parsing.
  *
- * Extracted from the legacy `services/stage-advance.ts` free function.
+ * One class owns the four entry points (advance / complete / handoff /
+ * executeAction) plus the private cascade logic between them. Earlier
+ * versions split these into four sibling classes behind a facade; the
+ * facade's forwarding methods were pure noise and the helper classes
+ * were tiny enough that the split added cognitive cost without hiding
+ * meaningful complexity.
+ *
  * Deps-only; no AppContext, no getApp().
  */
 
 import type { Session } from "../../../types/index.js";
 import { parseGraphFlow, getSuccessors, resolveNextStages, computeSkippedStages } from "../flow-graph.js";
-import { logDebug } from "../../observability/structured-log.js";
+import { logDebug, logError } from "../../observability/structured-log.js";
 import { recordEvent } from "../../observability.js";
 import { emitSessionSpanEnd, emitStageSpanStart, emitStageSpanEnd, flushSpans } from "../../observability/otlp.js";
 import { withIdempotency } from "../idempotency.js";
+import { loadRepoConfig } from "../../repo-config.js";
 import type { IdempotencyCapable, StageAdvanceDeps, StageOpResult } from "./types.js";
 
-export class StageAdvancer {
+export class StageAdvanceService {
   constructor(private readonly deps: StageAdvanceDeps) {}
 
   /** Public entry -- advance a session to its next stage, wrapped in idempotency. */
@@ -296,5 +303,130 @@ export class StageAdvancer {
       logDebug("session", "compute gc on complete -- best-effort");
     }
     flushSpans();
+  }
+
+  // ── complete: verification + transcript parse + cascade into advance ───────
+
+  complete(sessionId: string, opts?: { force?: boolean } & IdempotencyCapable): Promise<StageOpResult> {
+    return withIdempotency(
+      this.deps.db,
+      { sessionId, stage: null, opKind: "complete", idempotencyKey: opts?.idempotencyKey },
+      () => this.completeImpl(sessionId, opts),
+    );
+  }
+
+  private async completeImpl(
+    sessionId: string,
+    opts: ({ force?: boolean } & IdempotencyCapable) | undefined,
+  ): Promise<StageOpResult> {
+    const { deps } = this;
+    const session = await deps.sessions.get(sessionId);
+    if (!session) return { ok: false, message: `Session ${sessionId} not found` };
+
+    // Run verification unless --force.
+    // Quick sync check: only invoke async runVerification if there are todos or verify scripts.
+    if (!opts?.force) {
+      const hasTodos = (await deps.todos.list(sessionId)).length > 0;
+      const stageVerify =
+        session.stage && session.flow ? deps.getStage(session.flow, session.stage)?.verify : undefined;
+      const repoVerify = session.workdir ? loadRepoConfig(session.workdir).verify : undefined;
+      const hasScripts = (stageVerify ?? repoVerify ?? []).length > 0;
+
+      if (hasTodos || hasScripts) {
+        const verify = await deps.runVerification(sessionId);
+        if (!verify.ok) {
+          return { ok: false, message: `Verification failed:\n${verify.message}` };
+        }
+      }
+    }
+
+    await deps.events.log(sessionId, "stage_completed", {
+      stage: session.stage,
+      actor: "user",
+      data: { note: "Manually completed" },
+    });
+    await deps.messages.markRead(sessionId);
+
+    // Parse agent transcript for token usage (non-Claude agents). Claude
+    // usage is captured via hooks in applyHookStatus(); this handles codex/gemini.
+    this.parseNonClaudeTranscript(session);
+
+    await deps.sessions.update(sessionId, { status: "ready", session_id: null });
+    // Internal cascade -- the outer complete() already keyed on idempotencyKey,
+    // so we MUST NOT re-key advance() here or we'd collide with a caller that
+    // later replays advance() on its own. Run the body directly.
+    return this.advanceImpl(sessionId, true, undefined);
+  }
+
+  // ── handoff: clone + dispatch to a different agent ─────────────────────────
+
+  handoff(
+    sessionId: string,
+    toAgent: string,
+    instructions?: string,
+    opts?: IdempotencyCapable,
+  ): Promise<StageOpResult> {
+    const { deps } = this;
+    return withIdempotency(
+      deps.db,
+      { sessionId, stage: null, opKind: "handoff", idempotencyKey: opts?.idempotencyKey },
+      async () => {
+        const result = await deps.sessionClone(sessionId, instructions);
+        if (!result.ok) return { ok: false, message: (result as { ok: false; message: string }).message };
+
+        await deps.events.log(result.sessionId, "session_handoff", {
+          actor: "user",
+          data: { from_session: sessionId, to_agent: toAgent, instructions },
+        });
+
+        return deps.dispatch(result.sessionId);
+      },
+    );
+  }
+
+  // ── executeAction: dispatch named action via the action registry ───────────
+
+  executeAction(sessionId: string, action: string, opts?: IdempotencyCapable): Promise<StageOpResult> {
+    return this.deps.executeAction(sessionId, action, opts);
+  }
+
+  // ── non-Claude transcript parsing (used by complete()) ─────────────────────
+
+  private parseNonClaudeTranscript(session: Session): void {
+    const { deps } = this;
+    try {
+      const runtimeName = (session.config?.runtime as string | undefined) ?? session.agent;
+      if (!runtimeName) return;
+      const runtime = deps.runtimes.get(runtimeName);
+      const parserKind = runtime?.billing?.transcript_parser;
+      // Only handle non-Claude kinds here; Claude is handled via hooks in applyHookStatus.
+      if (!parserKind || parserKind === "claude") return;
+
+      const parser = deps.transcriptParsers.get(parserKind);
+      if (!parser) {
+        logError("session", "no transcript parser registered", { sessionId: session.id, kind: parserKind });
+        return;
+      }
+
+      const workdir = session.workdir;
+      if (!workdir) return;
+
+      const transcriptPath = parser.findForSession({
+        workdir,
+        startTime: session.created_at ? new Date(session.created_at) : undefined,
+      });
+      if (!transcriptPath) return;
+
+      const result = parser.parse(transcriptPath);
+      if (result.usage.input_tokens > 0 || result.usage.output_tokens > 0) {
+        const provider = parserKind === "codex" ? "openai" : parserKind === "gemini" ? "google" : parserKind;
+        deps.recordSessionUsage(session, result.usage, provider, "transcript");
+      }
+    } catch (e: any) {
+      logError("session", "non-Claude transcript parsing failed", {
+        sessionId: session.id,
+        error: String(e?.message ?? e),
+      });
+    }
   }
 }

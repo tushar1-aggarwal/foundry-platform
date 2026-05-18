@@ -32,7 +32,11 @@ workers:
       memory: 8Gi
   capacity: 5
 
-# Use external managed Postgres (e.g. RDS)
+# Use external managed Postgres (e.g. RDS).
+# Temporal shares the same Postgres server -- one host, one credential set.
+# The temporal role + temporal/temporal_visibility databases must be
+# provisioned out-of-band against this Postgres (the chart's bootstrap job
+# only runs when postgresql.enabled).
 postgresql:
   enabled: false
   external:
@@ -49,6 +53,12 @@ redis:
     port: 6379
     existingSecret: ark-redis-credentials
 
+# LocalStack is dev-only -- always disabled in production. With both flags
+# off and localstack.external.endpoint empty, the chart wires nothing for
+# ARK_S3_ENDPOINT and the AWS SDK uses real S3.
+localstack:
+  enabled: false
+
 ingress:
   enabled: true
   className: nginx
@@ -61,11 +71,10 @@ llm:
   existingSecret: ark-llm-keys
 
 # -- Temporal (production overrides)
-# The persistence.host MUST be set per AWS account in the account-specific
-# values file (e.g., values-<account>.yaml). It is intentionally blank here.
+# Persistence (host/port) is resolved from postgresql.external above -- no
+# separate temporal.persistence.host field exists anymore. The temporal role
+# and databases must be provisioned in the external Postgres before install.
 temporal:
-  enabled: true
-  # Each environment overrides namespace + namespaces in its own values file.
   server:
     replicaCount: 2
     resources:
@@ -75,10 +84,8 @@ temporal:
       limits:
         cpu: 4000m
         memory: 8Gi
-  schemaJob:
-    enabled: true
-  namespaceJob:
-    enabled: true
+    tls:
+      enabled: true   # RDS requires SSL
   ui:
     enabled: true
     # The UI is exposed in-cluster on Service temporal-ui:8080. Path-based

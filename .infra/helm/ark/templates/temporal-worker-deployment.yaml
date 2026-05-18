@@ -1,4 +1,3 @@
-{{- if .Values.temporal.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -36,6 +35,12 @@ spec:
                 name: {{ .Values.postgresql.external.existingSecret }}
             {{- end }}
           env:
+            # In-cluster Kubernetes API CA trust. Required for the temporal
+            # worker to call K8sCompute.provision (Phase 3 -- not wired today
+            # but the env must be in place so the wiring lands clean). Same
+            # rationale as control-plane-deployment.yaml.
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
             {{- if and (not .Values.postgresql.enabled) .Values.postgresql.external.host }}
             - name: DB_HOST
               value: {{ .Values.postgresql.external.host | quote }}
@@ -47,6 +52,8 @@ spec:
             {{- if .Values.s3.bucket }}
             # Temporal worker boots AppContext (hosted mode) and hits the same
             # storage.blobBackend check as the control-plane Deployment.
+            # ARK_S3_ENDPOINT / AWS_ENDPOINT_URL_S3 / ARK_S3_PATH_STYLE come
+            # from the configmap (envFrom above) when LocalStack is wired.
             - name: ARK_BLOB_BACKEND
               value: "s3"
             - name: ARK_S3_BUCKET
@@ -57,10 +64,13 @@ spec:
             - name: ARK_S3_PREFIX
               value: {{ .Values.s3.prefix | quote }}
             {{- end }}
+            {{- if include "ark.s3Endpoint" . }}
+            # Dummy creds so the AWS SDK doesn't fall through to IMDS lookups.
+            - name: AWS_ACCESS_KEY_ID
+              value: "test"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "test"
             {{- end }}
-            {{- if .Values.controlPlane.devAllowLocalHostedStorage }}
-            - name: ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE
-              value: "1"
             {{- end }}
             # LLM keys -- Temporal activities (dispatch-stage, run-verification)
             # exec agent runtimes that read these directly from process.env.
@@ -103,4 +113,3 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
-{{- end }}

@@ -137,7 +137,6 @@ export { buildReplay, type ReplayStep } from "./session/replay.js";
 
 // Cost helpers -- read from usage_records (written by UsageRecorder)
 export {
-  calculateCost,
   formatCost,
   getSessionCost,
   getAllSessionCosts,

@@ -181,7 +181,7 @@ test("session/kill RPC marks running session as failed with reason killed", asyn
   expect(typeof result.terminated_at).toBe("number");
 
   const updated = await app.sessions.get(session.id);
-  expect(updated?.status).toBe("failed");
+  expect(updated?.status).toBe("stopped");
   expect(updated?.error).toBe("killed");
 
   const events = await app.events.list(session.id);

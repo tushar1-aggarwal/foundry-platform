@@ -82,8 +82,6 @@ function buildAgent(name: string, body: Partial<AgentDefinition>): AgentDefiniti
     ...(body.runtime ? { runtime: body.runtime } : {}),
     ...(body.command ? { command: body.command } : {}),
     ...(body.task_delivery ? { task_delivery: body.task_delivery } : {}),
-    ...(body.recipe ? { recipe: body.recipe } : {}),
-    ...(body.sub_recipes ? { sub_recipes: body.sub_recipes } : {}),
   };
 }
 

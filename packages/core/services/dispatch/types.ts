@@ -25,20 +25,11 @@ import type { ArkConfig } from "../../config.js";
 import type { SecretsCapability } from "../../secrets/types.js";
 import type { Session, Compute } from "../../../types/index.js";
 import type { SessionScheduler } from "../../hosted/scheduler.js";
-import type { StageDefinition, StageAction } from "../flow.js";
 import type { ClaudeAuthMaterialization } from "../dispatch-claude-auth.js";
 
 // ── Callbacks wrapping free-functions that still take AppContext ────────────
 
-/** Stage lookup from the flow registry. */
-export interface GetStageCb {
-  (flowName: string, stageName: string): StageDefinition | null;
-}
-
-/** Stage action (agent | action | fork | for_each) lookup. */
-export interface GetStageActionCb {
-  (flowName: string, stageName: string): StageAction;
-}
+export type { GetStageCb, GetStageActionCb } from "../flow-callbacks.js";
 
 /** Build the full task prompt with per-stage handoff context. */
 export interface BuildTaskCb {

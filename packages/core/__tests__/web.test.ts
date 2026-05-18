@@ -38,10 +38,9 @@ describe("web server", async () => {
   it("starts and serves dashboard HTML", async () => {
     const { existsSync } = await import("fs");
     const { join } = await import("path");
-    const distIndex = join(import.meta.dir, "../../../web/dist/index.html");
+    const distIndex = join(import.meta.dir, "../../web/dist/index.html");
     if (!existsSync(distIndex)) {
-      console.log("Skipping: packages/web/dist not built");
-      return;
+      throw new Error(`prereq missing: ${distIndex} -- run 'make build-web' before 'make test'`);
     }
     server = startWebServer(getApp(), { port: 18420 });
     const resp = await fetch("http://localhost:18420/");

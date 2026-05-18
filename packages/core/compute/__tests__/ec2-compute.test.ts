@@ -159,7 +159,7 @@ describe("EC2Compute", async () => {
     const c = new EC2Compute(app);
     expect(c.kind).toBe("ec2");
     expect(c.capabilities).toEqual({
-      snapshot: true,
+      snapshot: false,
       pool: true,
       networkIsolation: true,
       provisionLatency: "minutes",
@@ -522,9 +522,12 @@ describe("EC2Compute", async () => {
       (await expect(c.restore(snap))).rejects.toBeInstanceOf(NotSupportedError);
     });
 
-    it("still reports capabilities.snapshot = true so dispatch advertises the eventual shape", () => {
+    it("reports capabilities.snapshot = false until the feature ships", () => {
+      // Callers that gate on capabilities.snapshot before calling snapshot()
+      // would otherwise crash on the NotSupportedError above. Match the
+      // capability flag to the actual contract.
       const c = new EC2Compute(app);
-      expect(c.capabilities.snapshot).toBe(true);
+      expect(c.capabilities.snapshot).toBe(false);
     });
   });
 });

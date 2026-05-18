@@ -111,6 +111,28 @@ export function fromWire(ctx: WireTenantContext): TenantContext {
   return { ...ctx, isAdmin: ctx.role === "admin" };
 }
 
+/**
+ * Resolve the caller's most-real identity for audit columns
+ * (`created_by`, `updated_by`, `deleted_by`, `set_by`, `changed_by`,
+ * `sessions.user_id`, etc.) and for handlers that report "who am I"
+ * to a UI (e.g. `auth/whoami`).
+ *
+ * Prefer the bound real-user id (`scopingUserId`, populated by cookie
+ * auth AND by api-key auth when the key has a bound user). Fall back
+ * to `userId` for callers without a bound user (local-admin mode,
+ * service api-keys); this preserves the existing sentinel ("local",
+ * "ak-...") in audit rows for callers who genuinely have no human
+ * identity behind them.
+ *
+ * Returns `null` for fully anonymous callers (`anonymousContext()`);
+ * callers decide whether null is acceptable for their audit column.
+ * For columns that are NOT NULL (e.g. `skills.owner_user_id` for
+ * user-scope), gate on the value before writing.
+ */
+export function actorIdentity(ctx: TenantContext): string | null {
+  return ctx.scopingUserId ?? ctx.userId;
+}
+
 export interface MaterializeOptions {
   /** `true` in control-plane profile; `false` in local / test. */
   requireToken: boolean;

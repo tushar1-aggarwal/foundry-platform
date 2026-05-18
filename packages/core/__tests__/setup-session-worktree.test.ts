@@ -147,4 +147,35 @@ describe("setupSessionWorktree -- worktree isolation", async () => {
     expect(existsSync(wtDir)).toBe(false);
     expect(resolve(effectiveWorkdir)).toBe(resolve(nonGitDir));
   });
+
+  it("regression: creates a real worktree on ark-<sid> even when the session dir pre-exists empty (PR #571 cloneRemoteRepoIfNeeded side-effect)", async () => {
+    // cloneRemoteRepoIfNeeded (dispatch/guards.ts) creates
+    // <arkDir>/worktrees/<sid>/<repoBasename>/ as a side-effect,
+    // which materialises <arkDir>/worktrees/<sid>/ with no .git.
+    // The old existsSync(wtPath) guard short-circuited here, returning
+    // the bare path without ever calling `git worktree add`, so the
+    // agent ran on main and the push was a no-op.
+    const session = await app.sessions.create({
+      summary: "empty-dir-bypass regression",
+      repo: repoDir,
+    });
+
+    // Pre-create the session dir as EMPTY -- no .git inside.
+    const sessionDir = join(app.config.dirs.worktrees, session.id);
+    mkdirSync(sessionDir, { recursive: true });
+    expect(existsSync(sessionDir)).toBe(true);
+    expect(existsSync(join(sessionDir, ".git"))).toBe(false);
+
+    const effectiveWorkdir = await setupSessionWorktree(app, session, null);
+
+    // 1. Returned path must be a real git worktree (.git present).
+    expect(existsSync(join(effectiveWorkdir, ".git"))).toBe(true);
+
+    // 2. Must be on a per-session feature branch, NOT main.
+    const branch = execFileSync("git", ["-C", effectiveWorkdir, "branch", "--show-current"], {
+      encoding: "utf-8",
+    }).trim();
+    expect(branch).toBe(`ark-${session.id}`);
+    expect(branch).not.toBe("main");
+  });
 });

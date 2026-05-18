@@ -37,11 +37,6 @@ test.afterAll(async () => {
   if (ws) await ws.teardown();
 });
 
-async function goToDashboard() {
-  await page.click('nav button:has-text("Dashboard")');
-  await expect(page.locator("text=Loading dashboard...")).not.toBeVisible({ timeout: 10_000 });
-}
-
 test("dashboard/summary RPC returns the shape DashboardView consumes", async () => {
   // Contract check against packages/conductor/handlers/dashboard.ts:
   // returns { counts, costs, recentEvents, topCostSessions, system, activeCompute }.
@@ -63,13 +58,4 @@ test("dashboard/summary RPC returns the shape DashboardView consumes", async () 
   expect(summary.costs).toHaveProperty("byModel");
   expect(Array.isArray(summary.recentEvents)).toBe(true);
   expect(typeof summary.system.conductor).toBe("boolean");
-});
-
-// TODO(#175): Dashboard was removed from the top-level nav -- attention
-// items now live on the Sessions view. The RPC contract is still tested
-// above, but the nav-click path no longer exists.
-test.skip("clicking a Dashboard widget navigates to the linked view", async () => {
-  await goToDashboard();
-  await page.click('text="View all costs"');
-  await expect(page.locator("h1")).toContainText("Costs", { timeout: 5_000 });
 });

@@ -11,7 +11,7 @@ import { CostPolicy } from "./cost-policy.js";
 import { BalancedPolicy } from "./balanced-policy.js";
 
 export { PolicyRegistry, cheapest, highestQuality, type PolicySelector } from "./policy-selector.js";
-export { TierEscalator, defaultTierEscalator, type Tier } from "./tier-escalator.js";
+export { higherTiers, type Tier } from "./tier-escalator.js";
 export { QualityPolicy } from "./quality-policy.js";
 export { CostPolicy } from "./cost-policy.js";
 export { BalancedPolicy } from "./balanced-policy.js";

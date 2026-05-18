@@ -17,11 +17,12 @@
  * the channel-relay path respectively. See `arkd/routes/channel.ts` for
  * publishers and `arkd/routes/channels.ts` for the generic pub/sub.
  *
- * One reader per remote compute. Started when the compute becomes
- * reachable (right after the forward tunnel is up), stopped when the
- * compute is stopped. The map below is module-scoped because a
- * conductor process owns at most one reader per compute name; the
- * keying matches `app.computes` 1:1.
+ * One reader per remote compute, keyed by compute name. Started when the
+ * compute becomes reachable (right after the forward tunnel is up). The
+ * reader follows the compute's *current* arkd: if the underlying arkd URL
+ * changes (k8s provisions a fresh ephemeral pod per stage/session), the
+ * stale reader is torn down and a new one is bound to the new URL so the
+ * per-name keying never pins us to a dead pod.
  *
  * Resilience: the reader auto-reconnects with backoff on any error
  * other than an explicit stop. Failures are logged but never thrown --
@@ -39,6 +40,20 @@ import { ArkdClient } from "../../../arkd/client/index.js";
 
 interface ConsumerEntry {
   computeName: string;
+  /**
+   * The arkd base URL this consumer is bound to. Tracked so a compute
+   * whose underlying arkd moved (k8s provisions a fresh ephemeral pod ->
+   * fresh arkd URL per stage/session) re-targets instead of the
+   * per-computeName dedup pinning the consumer to a dead pod forever.
+   */
+  arkdUrl: string;
+  /**
+   * The session whose ensureReachable (re)started this consumer. Used only
+   * to attach durable subscribe/stream-error diagnostics to a session's
+   * event log so "did the consumer for my pod actually subscribe?" is
+   * answerable forever, not just from ephemeral process logs.
+   */
+  triggerSessionId?: string;
   abort: AbortController;
   stopped: boolean;
 }
@@ -86,14 +101,26 @@ export function startArkdEventsConsumer(
   computeName: string,
   arkdUrl: string,
   arkdToken: string | null,
+  triggerSessionId?: string,
 ): void {
   const existing = consumers.get(computeName);
   if (existing && !existing.stopped) {
-    logDebug("conductor", `arkd-events: already running for compute=${computeName}`);
-    return;
+    if (existing.arkdUrl === arkdUrl) {
+      logDebug("conductor", `arkd-events: already running for compute=${computeName}`);
+      return;
+    }
+    // The compute's arkd moved (k8s ephemeral pod-per-stage/session gives a
+    // fresh arkd URL each dispatch). The old loop is reconnecting against a
+    // dead pod and the per-computeName dedup would otherwise pin us there
+    // forever -- every later pod's hook stream (AgentMessage/PreToolUse/...)
+    // would never reach the conductor. Tear it down and re-target.
+    logInfo("conductor", `arkd-events: retargeting compute=${computeName} ${existing.arkdUrl} -> ${arkdUrl}`);
+    existing.stopped = true;
+    existing.abort.abort();
+    consumers.delete(computeName);
   }
   const abort = new AbortController();
-  const entry: ConsumerEntry = { computeName, abort, stopped: false };
+  const entry: ConsumerEntry = { computeName, arkdUrl, triggerSessionId, abort, stopped: false };
   consumers.set(computeName, entry);
   void runConsumerLoop(app, entry, arkdUrl, arkdToken);
   logInfo("conductor", `arkd-events: consumer started for compute=${computeName} url=${arkdUrl}`);
@@ -136,6 +163,17 @@ async function runConsumerLoop(
       if (entry.stopped) return;
       const msg = (err as { message?: string })?.message ?? String(err);
       logWarn("conductor", `arkd-events: stream error compute=${entry.computeName}: ${msg}`);
+      // Durable: a subscribe/stream failure against this pod's arkd is the
+      // single most common reason hooks never reach the timeline. Without
+      // this it's invisible (the loop just silently reconnect-backoffs).
+      if (entry.triggerSessionId) {
+        await app.events
+          .log(entry.triggerSessionId, "arkd_consumer_stream_error", {
+            actor: "system",
+            data: { compute: entry.computeName, arkdUrl: entry.arkdUrl, message: msg },
+          })
+          .catch(() => {});
+      }
     }
     if (entry.stopped) return;
     const jitter = Math.random() * 0.25 * backoff;
@@ -177,6 +215,18 @@ async function readHooksChannelOnce(
 
   const iterable = await client.subscribeToChannel("hooks", { signal: entry.abort.signal });
   logInfo("conductor", `arkd-events: ws connected compute=${entry.computeName}`);
+  // Durable proof the consumer actually subscribed (ack received) to this
+  // pod's hooks channel. arkd_consumer_attached + this + arkd_hook_received
+  // form the full causal chain in the session event log; a gap pinpoints
+  // the broken link without spelunking ephemeral process logs.
+  if (entry.triggerSessionId) {
+    await app.events
+      .log(entry.triggerSessionId, "arkd_consumer_subscribed", {
+        actor: "system",
+        data: { compute: entry.computeName, arkdUrl: entry.arkdUrl },
+      })
+      .catch(() => {});
+  }
 
   for await (const frame of iterable) {
     if (entry.stopped) return;
@@ -232,17 +282,38 @@ async function dispatchFrame(app: AppContext, line: string): Promise<void> {
       logWarn("conductor", `arkd-events: hook frame missing session param`);
       return;
     }
+    const payload = frame.body as Record<string, unknown>;
+    const hookEvent = typeof payload?.hook_event_name === "string" ? payload.hook_event_name : "unknown";
     try {
       const s = await app.sessions.get(sessionId);
       if (!s) {
         logDebug("conductor", `arkd-events: hook handler session not found session=${sessionId}`);
+        // Durable trace: a hook arrived for a session the conductor can't
+        // resolve. Without this the loss is silent and undiagnosable later.
+        await app.events
+          .log(sessionId, "arkd_hook_dropped", {
+            actor: "system",
+            data: { event: hookEvent, reason: "session_not_found" },
+          })
+          .catch(() => {});
         return;
       }
-      const payload = frame.body as Record<string, unknown>;
+      // Durable, session-attached proof the hook pipeline delivered this
+      // hook to the conductor (survives pod death; queryable via
+      // session/events forever). Pairs with arkd_consumer_attached.
+      await app.events
+        .log(sessionId, "arkd_hook_received", { actor: "system", data: { event: hookEvent } })
+        .catch(() => {});
       await processHookPayload(app, sessionId, s, payload);
+      await app.events
+        .log(sessionId, "arkd_hook_persisted", { actor: "system", data: { event: hookEvent } })
+        .catch(() => {});
     } catch (err: unknown) {
       const msg = (err as { message?: string })?.message ?? String(err);
       logWarn("conductor", `arkd-events: hook dispatch threw: ${msg}`);
+      await app.events
+        .log(sessionId, "arkd_hook_error", { actor: "system", data: { event: hookEvent, message: msg } })
+        .catch(() => {});
     }
     return;
   }

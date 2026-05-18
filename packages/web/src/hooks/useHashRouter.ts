@@ -10,6 +10,7 @@ const VALID_VIEWS = new Set([
   "schedules",
   "costs",
   "integrations",
+  "secrets",
   "settings",
   "admin",
   "_design",

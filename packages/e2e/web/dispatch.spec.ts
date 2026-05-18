@@ -31,7 +31,7 @@ test.setTimeout(120_000);
 
 async function goToSessions() {
   await page.click('nav button:has-text("Sessions")');
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 }
 
 /** Create a session via RPC and return the session ID */
@@ -112,34 +112,30 @@ test("stop session changes status", async () => {
 
 // -- Restart session ----------------------------------------------------------
 
-test("session/resume transitions a stopped session back to ready", async () => {
-  // Pure state-machine test: sessionService.resume() just sets status
-  // back to `ready` (it does NOT auto-dispatch, per services/session.ts
-  // line 125). So we can exercise the full stop -> resume -> ready
-  // round-trip without a real Claude binary. Seeding the `stopped`
-  // state directly via sqlite3 avoids the real-agent requirement of
-  // the dispatch pathway.
+test("session/resume re-runs a non-running session", async () => {
+  // session/start auto-dispatches atomically; under the test-mode noop
+  // executor the session settles into a non-running terminal state
+  // (`failed` -- the noop executor produces no real agent output).
+  //
+  // Real contract under test (services/session.ts `resume`): for a
+  // non-running, non-completed session it flips status to `ready`, logs a
+  // `session_resumed` event, then re-emits session_created so the default
+  // dispatcher re-runs the agent stage. The bare flow's single `work`
+  // stage is an agent stage, so under the noop executor it deterministically
+  // lands back at `failed` -- asserting a stable terminal `ready` here
+  // would be racing that re-dispatch. The durable, deterministic proof
+  // that resume did its job is the `session_resumed` event plus a clean
+  // ok=true. Exercised purely over RPC -- no direct DB poke.
   const id = await createSession("E2E restart test");
 
-  // Flip status to stopped via the DB (no real tmux needed). The ark
-  // server's _detectStaleState() only scans `running` rows, so a
-  // `stopped` row survives across boot.
-  const { execFileSync } = await import("node:child_process");
-  execFileSync("sqlite3", [`${ws.env.app.arkDir}/ark.db`, `UPDATE sessions SET status='stopped' WHERE id='${id}'`], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const settled = await waitForStatus(id, ["failed", "stopped", "completed"], 30_000);
+  expect(["failed", "stopped"]).toContain(settled);
 
-  // Confirm the seed landed.
-  const before = await ws.rpc<{ session: { status: string } }>("session/read", { sessionId: id });
-  expect(before.session.status).toBe("stopped");
-
-  // Resume -- handler path: session/resume -> sessionService.resume
-  // -> sessions.update({ status: "ready" }).
   const result = await ws.rpc<{ ok: boolean }>("session/resume", { sessionId: id });
   expect(result.ok).toBe(true);
 
-  const after = await ws.rpc<{ session: { status: string } }>("session/read", { sessionId: id });
-  expect(after.session.status).toBe("ready");
+  const { events } = await ws.rpc<{ events: { type: string }[] }>("session/events", { sessionId: id });
+  expect(events.some((e) => e.type === "session_resumed")).toBe(true);
 });
 
 // -- Verify dispatch shows in UI ----------------------------------------------
@@ -166,8 +162,10 @@ test("dispatched session shows in UI with updated status", async () => {
 
   // Click on the session to see detail
   await page.locator("text=E2E UI dispatch check").first().click();
-  // The detail pane renders a Conversation tab (unique to SessionDetail).
-  await expect(page.locator("text=Conversation").first()).toBeVisible({ timeout: 5_000 });
+  // The detail pane renders the conversation tab (id=tab-conversation, label
+  // "Session"). Asserting on the tab's stable DOM id avoids ambiguity with
+  // the "Sessions" h1 and the SessionList label.
+  await expect(page.locator("#tab-conversation")).toBeVisible({ timeout: 5_000 });
 
   // The status badge should not be "pending" or "ready" anymore
   // It could be running, waiting, failed, or stopped

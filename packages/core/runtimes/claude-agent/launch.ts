@@ -28,11 +28,27 @@ function resolveClaudeExecutable(): string | undefined {
   } catch {
     /* no vendored binary next to ark -- fall through */
   }
+  try {
+    const sdkPkg = require.resolve("@anthropic-ai/claude-agent-sdk/package.json");
+    const atAnthropic = join(dirname(sdkPkg), "..");
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    for (const suffix of [`linux-${arch}`, `linux-${arch}-musl`]) {
+      const p = join(atAnthropic, `claude-agent-sdk-${suffix}`, "claude");
+      try {
+        if (statSync(p).isFile()) return p;
+      } catch {
+        /* try next variant */
+      }
+    }
+  } catch {
+    /* SDK package not resolvable -- fall through to PATH lookup */
+  }
   return Bun.which("claude") ?? undefined;
 }
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { startInterventionTail } from "./intervention-tail.js";
 import { subscribeUserMessages } from "./user-message-stream.js";
+import { startCompatProxy, parseCompatModes, type CompatProxyHandle } from "./compat-proxy.js";
 import { createAskUserMcpServer } from "./mcp-ask-user.js";
 import { createStageControlMcpServer } from "./mcp-stage-control.js";
 
@@ -158,6 +174,14 @@ export interface RunAgentSdkLaunchOpts {
    * In production, read from ARK_API_TOKEN env var.
    */
   authToken?: string;
+  /**
+   * Direct conductor URL for the ask-user MCP server. This MCP needs an
+   * inbound RPC path back to the conductor and doesn't have a via-arkd
+   * route yet -- when only ARK_ARKD_URL is set (remote dispatch),
+   * ask-user is silently disabled by passing this as undefined.
+   * Read from ARK_CONDUCTOR_URL in `main()`.
+   */
+  conductorUrl?: string;
   /**
    * Fetch implementation. Defaults to the global fetch. Injected in tests
    * so no real HTTP connections are made.
@@ -495,6 +519,7 @@ async function drainStream(
   let exitCode = 0;
   let sdkSessionId: string | undefined;
   let outcome: StreamOutcome = "completed";
+  let launchError: string | null = null;
 
   try {
     for await (const message of stream) {
@@ -571,13 +596,28 @@ async function drainStream(
       return { outcome, sawResult, exitCode: 1, sdkSessionId };
     }
     const e = err as { message?: string } | null;
-    writeLine({ type: "error", source: "launch", message: String(e?.message ?? err) });
+    launchError = String(e?.message ?? err);
+    writeLine({ type: "error", source: "launch", message: launchError });
     exitCode = 1;
   }
 
   if (!sawResult && exitCode === 0 && outcome === "completed") {
-    writeLine({ type: "error", source: "launch", message: "stream ended without result message" });
+    launchError = "stream ended without result message";
+    writeLine({ type: "error", source: "launch", message: launchError });
     exitCode = 1;
+  }
+
+  // When the agent fails before the SDK emits a `result` (binary missing,
+  // auth rejected, stream died), no Stop/StopFailure hook is generated, so
+  // the conductor would only ever see a bare non-zero exit. Forward a
+  // synthetic is_error result through the same hook path the real
+  // is_error result uses -- this drives the StopFailure transition and
+  // lands the actual reason in session.error / the event log.
+  if (launchError) {
+    await forwardToConductor(
+      { type: "result", is_error: true, error: launchError, errors: [launchError], subtype: "launch_error" },
+      forwardDeps,
+    );
   }
 
   return { outcome, sawResult, exitCode, sdkSessionId };
@@ -705,143 +745,27 @@ export async function runAgentSdkLaunch(opts: RunAgentSdkLaunchOpts): Promise<Ru
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const baseURL = process.env.ANTHROPIC_BASE_URL;
   const customHeaders = process.env.ANTHROPIC_CUSTOM_HEADERS;
+  const claudeCodeOauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
-  // Gateway wire-format compat -------------------------------------------------
-  // ARK_COMPAT is a comma-separated list of compat modes set by the executor
-  // from the runtime's declared `compat:` field. No heuristics: callers opt in
-  // explicitly via the runtime YAML.
+  // Gateway wire-format compat. ARK_COMPAT is a comma-separated list of
+  // compat-mode tokens set by the executor from the runtime's `compat:`
+  // field. Each matched token contributes request-body / header transforms
+  // applied by a local proxy in front of the SDK. See compat-proxy.ts.
   //
-  // `bedrock` mode -- for gateways that transcode to AWS Bedrock (TrueFoundry,
-  // direct Bedrock proxies). Bedrock rejects several fields the Claude binary
-  // includes (e.g. `context_management`) and SNI-routes on Host, so we start a
-  // local Bun proxy that (a) strips those fields from request bodies,
-  // (b) drops the Host / hop-by-hop headers so fetch sets them correctly for
-  // the upstream, (c) expands short model slugs (e.g. `claude-sonnet-4-6`) to
-  // the full provider-qualified form the gateway expects.
-  const compatModes = new Set(
-    (process.env.ARK_COMPAT ?? "")
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter((s) => s.length > 0),
-  );
-
-  let proxyServer: ReturnType<typeof Bun.serve> | undefined;
-  let effectiveBaseURL = baseURL;
-  // The model slug reaches launch.ts pre-resolved: the dispatch pipeline turns
-  // the agent's catalog id/alias into the concrete provider slug for the
-  // gateway in play (e.g. `pi-agentic/global.anthropic.claude-sonnet-4-6` for
-  // TF-Bedrock, bare `claude-sonnet-4-6` for Anthropic-direct). This file must
-  // NEVER synthesise or rewrite a model slug -- that is the model catalog's
-  // job, and keeping the two concerns separate keeps launch.ts free of model
-  // knowledge.
+  // The model slug reaches launch.ts pre-resolved -- the dispatch pipeline
+  // turns the agent's catalog id/alias into the concrete provider slug for
+  // the gateway in play. This file must NEVER synthesise or rewrite model
+  // slugs; that's the model catalog's job.
   const effectiveModel = model;
-  const bedrockCompat = compatModes.has("bedrock");
+  const compatTransforms = parseCompatModes(process.env.ARK_COMPAT);
 
-  if (bedrockCompat && baseURL) {
-    // Fields that AWS Bedrock (via TF gateway) does not accept.
-    const BEDROCK_STRIP_FIELDS = new Set(["context_management"]);
-
-    // Resolve the forward URL once. The proxy receives requests at /v1/messages
-    // and forwards to <baseURL>/v1/messages.
-    const forwardBase = baseURL.endsWith("/") ? baseURL.slice(0, -1) : baseURL;
-
-    proxyServer = Bun.serve({
-      port: 0, // OS-assigned ephemeral port
-      // Generous idle timeout: a single Sonnet/Opus turn can stream for
-      // 60-120s before TF returns. Bun.serve's default of 10s tears the
-      // socket down mid-response and the SDK surfaces a "socket connection
-      // was closed unexpectedly" API error. Pin to 5 minutes -- the SDK's
-      // own per-turn timeout is the upper bound, this is just floor.
-      idleTimeout: 255,
-      async fetch(req) {
-        const url = new URL(req.url);
-        const targetUrl = `${forwardBase}${url.pathname}${url.search}`;
-
-        // Clone headers for forwarding. Remove hop-by-hop and routing headers
-        // that must not be forwarded verbatim: the binary sends "host: localhost:<proxyPort>"
-        // which causes TF's gateway to 404 (it routes on the Host header).
-        // Let fetch set the correct host for the upstream URL.
-        // Strip accept-encoding too so TF responds uncompressed -- the SDK
-        // can't decompress zstd (ZstdDecompressionError) and we'd otherwise
-        // need to decompress + re-encode in the proxy.
-        const SKIP_HEADERS = new Set(["host", "connection", "content-length", "transfer-encoding", "accept-encoding"]);
-        const headers: Record<string, string> = {};
-        req.headers.forEach((v, k) => {
-          if (!SKIP_HEADERS.has(k)) headers[k] = v;
-        });
-        // Force identity encoding upstream so TF doesn't pick zstd / br based
-        // on its own defaults.
-        headers["accept-encoding"] = "identity";
-
-        // Inject auth headers from ANTHROPIC_CUSTOM_HEADERS env if the inbound
-        // request didn't carry them. The SDK's bundled binary doesn't honor
-        // ANTHROPIC_CUSTOM_HEADERS (the standalone CLI does, but the SDK build
-        // we wrap does not), so it sends only `x-api-key: dummy` -- which TF
-        // rejects 401. We parse CUSTOM_HEADERS here and add the missing ones.
-        if (customHeaders) {
-          for (const line of customHeaders.split(/\r?\n/)) {
-            const idx = line.indexOf(":");
-            if (idx <= 0) continue;
-            const name = line.slice(0, idx).trim();
-            const value = line.slice(idx + 1).trim();
-            if (!name || !value) continue;
-            const lower = name.toLowerCase();
-            if (!(lower in headers)) headers[lower] = value;
-          }
-        }
-
-        let body: string | undefined;
-        if (req.method !== "GET" && req.method !== "HEAD") {
-          const raw = await req.text();
-          if (raw && headers["content-type"]?.includes("application/json")) {
-            try {
-              const parsed = JSON.parse(raw);
-              for (const field of BEDROCK_STRIP_FIELDS) {
-                if (field in parsed) {
-                  delete parsed[field];
-                }
-              }
-              body = JSON.stringify(parsed);
-            } catch {
-              body = raw; // non-JSON: forward as-is
-            }
-          } else {
-            body = raw;
-          }
-        }
-
-        let upstream: Response;
-        try {
-          upstream = await fetch(targetUrl, {
-            method: req.method,
-            headers,
-            body,
-            // Allow self-signed or SAN-mismatch certs for internal TF gateways.
-            tls: { rejectUnauthorized: false } as any,
-          });
-        } catch (err: any) {
-          const msg = err?.message ?? String(err);
-          console.error(`[agent-sdk launch] proxy fetch error for ${targetUrl}: ${msg}`);
-          return new Response(JSON.stringify({ error: msg }), {
-            status: 502,
-            headers: { "content-type": "application/json" },
-          });
-        }
-
-        return new Response(upstream.body, {
-          status: upstream.status,
-          headers: upstream.headers,
-        });
-      },
-    });
-
+  let proxyServer: CompatProxyHandle | undefined;
+  let effectiveBaseURL = baseURL;
+  if (compatTransforms.length > 0 && baseURL) {
+    proxyServer = startCompatProxy({ baseURL, customHeaders, transforms: compatTransforms });
     effectiveBaseURL = `http://localhost:${proxyServer.port}`;
-    console.error(`[agent-sdk launch] Bedrock-compat proxy started on port ${proxyServer.port}`);
-    // NOTE: model-slug expansion for bedrock gateways used to happen here
-    // (pi-agentic/global.anthropic.<x>). That logic moved upstream into the
-    // model catalog + resolve-stage pipeline -- by the time we get here the
-    // caller has already selected the correct provider slug. See the comment
-    // on `effectiveModel` above for why this file is model-agnostic.
+    const names = compatTransforms.map((t) => t.name).join(",");
+    console.error(`[agent-sdk launch] compat proxy started on port ${proxyServer.port} (modes: ${names})`);
   }
 
   // When custom auth headers are in play (typical for gateway routing like
@@ -858,13 +782,25 @@ export async function runAgentSdkLaunch(opts: RunAgentSdkLaunchOpts): Promise<Ru
   // the SDK's hardcoded `claude-haiku-4-5-20251001`. The executor sets
   // that env var from the agent-sdk runtime YAML's `default_haiku_model`
   // field, so we just propagate process.env without special-casing it.
+  // Gateway routing (base URL + custom headers) applies regardless of auth
+  // mode -- they describe where requests go, not how they authenticate. Only
+  // the credential branches on OAuth vs API key. When OAuth is present we
+  // also strip any inherited ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN from
+  // process.env so the SDK doesn't see conflicting credentials.
   const sdkEnv: Record<string, string | undefined> = {
     ...process.env,
-    ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
     ...(effectiveBaseURL ? { ANTHROPIC_BASE_URL: effectiveBaseURL } : {}),
     ...(customHeaders ? { ANTHROPIC_CUSTOM_HEADERS: customHeaders } : {}),
+    ...(claudeCodeOauthToken
+      ? { CLAUDE_CODE_OAUTH_TOKEN: claudeCodeOauthToken }
+      : apiKey
+        ? { ANTHROPIC_API_KEY: apiKey }
+        : {}),
   };
-  if (customHeaders) {
+  if (claudeCodeOauthToken) {
+    delete sdkEnv.ANTHROPIC_API_KEY;
+    delete sdkEnv.ANTHROPIC_AUTH_TOKEN;
+  } else if (customHeaders) {
     delete sdkEnv.ANTHROPIC_AUTH_TOKEN;
   }
 
@@ -946,12 +882,15 @@ export async function runAgentSdkLaunch(opts: RunAgentSdkLaunchOpts): Promise<Ru
     ],
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    executable: "bun",
     model: effectiveModel,
     maxTurns,
     maxBudgetUsd,
     systemPrompt: systemAppend ? { type: "preset", preset: "claude_code", append: systemAppend } : undefined,
-    ...(claudeExePath ? { pathToClaudeCodeExecutable: claudeExePath } : {}),
+    // claudeExePath is the bundled native standalone binary -- it self-execs,
+    // so spawn it directly (no `executable: bun`, which would make the SDK run
+    // `bun <native-elf>` and exit 1). Only fall back to bun-running the SDK's
+    // own JS CLI when no native binary was resolved.
+    ...(claudeExePath ? { pathToClaudeCodeExecutable: claudeExePath } : { executable: "bun" as const }),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     // Stop hook: gates the SDK's actual stop on the explicit-complete +
     // empty-queue contract above. Returning `decision: "block"` with a
@@ -1208,9 +1147,13 @@ async function main(): Promise<void> {
   const worktree = need("ARK_WORKTREE");
   const promptFile = need("ARK_PROMPT_FILE");
 
-  if (!process.env.ANTHROPIC_API_KEY && process.env.ARK_DEV_FORCE_DIRECT !== "1") {
+  if (
+    !process.env.ANTHROPIC_API_KEY &&
+    !process.env.CLAUDE_CODE_OAUTH_TOKEN &&
+    process.env.ARK_DEV_FORCE_DIRECT !== "1"
+  ) {
     console.error(
-      "[agent-sdk launch] ANTHROPIC_API_KEY is required. Set it in the environment or via StageSecretResolver.",
+      "[agent-sdk launch] one of ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN is required. Set it in the environment or via StageSecretResolver.",
     );
     process.exit(2);
   }

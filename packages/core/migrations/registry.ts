@@ -51,6 +51,23 @@ import * as m020 from "./020_compute_composite_pk.js";
 // for the admin write RPCs (Phase 2). Renumbered from 019 during the
 // Temporal Phase 3 merge so versions stay monotonic.
 import * as m021 from "./021_scoping_audit_columns.js";
+// Migration 022: Skill Hub -- skills + skill_versions tables for the
+// central skill registry. See docs/skillhub-rfc.md.
+import * as m022 from "./022_skills.js";
+// Migration 023: tenant_policies integration columns (router_*, auto_index_*,
+// tensorzero_enabled, allowed_k8s_contexts) -- previously created at runtime
+// by TenantPolicyManager._migrateIntegrationColumns, now owned by the
+// migration runner.
+import * as m023 from "./023_tenant_policies_integration_columns.js";
+// Migration 024: workers table for the hosted-mode worker registry --
+// previously created at runtime by WorkerRegistry.ensureSchema; no
+// migration had ever owned it.
+import * as m024 from "./024_workers_table.js";
+// Migration 025: instance_heartbeat table -- previously created at
+// runtime inside registerInstance() / activeInstanceCount() in
+// infra/instance-lock.ts. Postgres got it via initPostgresSchema;
+// SQLite had no migration coverage.
+import * as m025 from "./025_instance_heartbeat.js";
 
 export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m001.VERSION, name: m001.NAME, up: m001.up },
@@ -78,4 +95,8 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m019.VERSION, name: m019.NAME, up: m019.up },
   { version: m020.VERSION, name: m020.NAME, up: m020.up },
   { version: m021.VERSION, name: m021.NAME, up: m021.up },
+  { version: m022.VERSION, name: m022.NAME, up: m022.up },
+  { version: m023.VERSION, name: m023.NAME, up: m023.up },
+  { version: m024.VERSION, name: m024.NAME, up: m024.up },
+  { version: m025.VERSION, name: m025.NAME, up: m025.up },
 ];

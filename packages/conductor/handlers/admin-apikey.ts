@@ -32,7 +32,7 @@ import type { Router } from "../router.js";
 import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
-import { requireAdmin, requireSameTenant } from "../../core/auth/context.js";
+import { actorIdentity, requireAdmin, requireSameTenant } from "../../core/auth/context.js";
 import type { ApiKey } from "../../types/index.js";
 
 type ApiKeyRole = "admin" | "member" | "viewer";
@@ -96,8 +96,10 @@ export function registerAdminApiKeyHandlers(router: Router, app: AppContext): vo
 
   // ── delete (soft-delete) ───────────────────────────────────────────────
   //
-  // Records `ctx.userId` in `deleted_by` so the audit trail captures who
-  // turned the key off. Tenant scoping is delegated to `ApiKeyManager.revoke`
+  // Records `actorIdentity(ctx)` in `deleted_by` so the audit trail captures
+  // who turned the key off. `actorIdentity` prefers the bound real-user id
+  // (`scopingUserId`) so a key revoked via an api-key is attributed to the
+  // human, not the key sentinel. Tenant scoping is delegated to `ApiKeyManager.revoke`
   // -- callers with an explicit tenant_id cannot delete across tenants.
   //
   // `doDelete` matches the Handler shape (params, notify, ctx) so both
@@ -112,7 +114,7 @@ export function registerAdminApiKeyHandlers(router: Router, app: AppContext): vo
     requireAdmin(ctx);
     const { id, tenant_id } = extract<{ id: string; tenant_id?: string }>(p, ["id"]);
     if (tenant_id) requireSameTenant(ctx, tenant_id);
-    const ok = await app.apiKeys.revoke(id, ctx.tenantId, ctx.userId ?? null);
+    const ok = await app.apiKeys.revoke(id, ctx.tenantId, actorIdentity(ctx));
     return { ok };
   };
 

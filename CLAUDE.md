@@ -49,7 +49,7 @@ Use `AppContext.forTestAsync()` for test isolation (fresh arkDir + ephemeral por
 ## Structure
 
 ```
-packages/{cli,core,compute,arkd,router,conductor,protocol,web,desktop,types,workspace}
+packages/{cli,core,compute,arkd,router,conductor,protocol,web,types,workspace}
 agents/       -- Agent YAML definitions
 runtimes/     -- Runtime definitions (claude, codex, gemini, goose)
 flows/        -- Flow definitions (autonomous-sdlc, quick, fan-out, etc.)

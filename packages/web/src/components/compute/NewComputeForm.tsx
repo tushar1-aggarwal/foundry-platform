@@ -232,6 +232,7 @@ export function NewComputeForm({
             value={compute}
             onChange={(v) => setValue("compute", v, { shouldDirty: true })}
             options={computeKinds.map((k) => ({ value: k, label: k }))}
+            aria-label="Select compute kind"
           />
         </div>
         <div className="mb-3.5">
@@ -242,6 +243,7 @@ export function NewComputeForm({
             value={isolation}
             onChange={(v) => setValue("isolation", v, { shouldDirty: true })}
             options={isolationKinds.map((k) => ({ value: k, label: k }))}
+            aria-label="Select isolation kind"
           />
         </div>
         {compute === "ec2" && (

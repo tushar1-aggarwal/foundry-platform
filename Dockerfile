@@ -15,7 +15,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
+# --ignore-scripts: @optave/codegraph pulls in better-sqlite3 as a transitive
+# dep; its `prebuild-install` postinstall fetches a native binary from GitHub
+# releases, which Zscaler MITM corrupts during corporate-network builds.
+# better-sqlite3 is never imported in src; skipping postinstall is safe.
+RUN bun install --frozen-lockfile --production --ignore-scripts
+# Drop the musl variants of the Claude Code native binary -- this image
+# is glibc-based; keeping the musl variant causes the Agent SDK's libc
+# detector to pick a binary whose dynamic loader does not exist here.
+RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-*-musl
 
 # ── Stage 2: Build ───────────────────────────────────────────────────────────
 #
@@ -35,7 +43,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock tsconfig.json ./
-RUN bun install --frozen-lockfile
+# Same --ignore-scripts rationale as deps stage (see above).
+RUN bun install --frozen-lockfile --ignore-scripts
 
 # Copy source
 COPY packages/ packages/
@@ -43,6 +52,7 @@ COPY agents/ agents/
 COPY flows/ flows/
 COPY skills/ skills/
 COPY models/ models/
+COPY runtimes/ runtimes/
 COPY ark ./ark
 
 # Build web UI (Vite). Server code stays as .ts -- Bun runs it directly.
@@ -61,10 +71,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tmux \
     curl \
     ca-certificates \
+    jq \
     nodejs \
     npm \
   && rm -rf /var/lib/apt/lists/* \
-  && npm install -g @anthropic-ai/claude-code \
+  && npm install -g @anthropic-ai/claude-code@2.1.126 \
   && npm cache clean --force
 # Pull kubectl from a multi-arch image (Docker Hub is Zscaler-trusted, dl.k8s.io is MITM-blocked).
 COPY --from=bitnami/kubectl:latest /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/kubectl
@@ -78,14 +89,29 @@ COPY --from=build /app/tsconfig.json ./
 COPY --from=build /app/packages ./packages
 COPY --from=build /app/ark ./ark
 
-# Copy resource definitions (agents, flows, skills, models)
+# Copy resource definitions (agents, flows, skills, models, runtimes)
 COPY --from=build /app/agents ./agents
 COPY --from=build /app/flows ./flows
 COPY --from=build /app/skills ./skills
 COPY --from=build /app/models ./models
+COPY --from=build /app/runtimes ./runtimes
 
 # Copy web UI build output (if it exists)
 COPY --from=build /app/packages/web/dist ./packages/web/dist
+
+# arkd shim for the per-session pod K8sCompute provisions. K8sCompute
+# hardcodes `command: ["/bin/sh","-c","arkd || sleep infinity"]` and
+# expects `arkd` on PATH. Real binary doesn't exist -- arkd is a Bun
+# subcommand of the CLI. This shim execs the right thing.
+RUN printf '#!/bin/sh\nexec bun /app/packages/cli/index.ts arkd "$@"\n' > /usr/local/bin/arkd \
+ && chmod +x /usr/local/bin/arkd
+
+# `ark` CLI on PATH for in-pod launchers. claude-agent.ts launcher emits
+# `exec ark run-agent-sdk`; without this, the launcher exits 127 and the
+# session hangs until Temporal heartbeatTimeout (~10 min). Symlinks to
+# /app/ark (the bash shim copied in above, resolves to
+# `bun /app/packages/cli/index.ts "$@"`).
+RUN ln -sf /app/ark /usr/local/bin/ark
 
 # Create ark data directory
 RUN mkdir -p /root/.ark

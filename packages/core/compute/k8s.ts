@@ -44,7 +44,8 @@ import type {
 } from "./types.js";
 import { NotSupportedError } from "./types.js";
 import { cloneWorkspaceViaArkd } from "./workspace-clone.js";
-import { logDebug } from "../observability/structured-log.js";
+import { resolveAgentIdentityForRemoteCompute } from "./git-identity.js";
+import { logDebug, logError, logInfo } from "../observability/structured-log.js";
 import { provisionStep } from "../services/provisioning-steps.js";
 import { K8sPlacementCtx } from "./k8s-placement-ctx.js";
 import type { PlacementCtx } from "../secrets/placement-types.js";
@@ -59,6 +60,8 @@ export interface K8sComputeConfig {
   namespace?: string;
   /** Base image for the arkd container; defaults to "ubuntu:22.04". */
   image?: string;
+  /** Container imagePullPolicy. Defaults to "Always". */
+  imagePullPolicy?: string;
   /** Path to a kubeconfig file. If unset, loads default (in-cluster or ~/.kube/config). */
   kubeconfig?: string;
   /** Kata runtime class (set by KataCompute; leave unset for vanilla). */
@@ -78,7 +81,12 @@ export interface K8sHandleMeta {
   podName: string;
   /** Namespace the pod lives in. */
   namespace: string;
-  /** PID of the `kubectl port-forward` subprocess (null if currently stopped). */
+  /**
+   * PID of the `kubectl port-forward` subprocess on the current host.
+   * LOCAL-DEV ONLY -- this PID is not portable across worker pods or
+   * restarts and is always null in in-cluster mode (where pod IP is used
+   * directly). Never write this to a shared DB column in cluster mode.
+   */
   portForwardPid: number | null;
   /** Host-side loopback port mapped to arkd's :19300 inside the pod. */
   arkdLocalPort: number;
@@ -86,6 +94,23 @@ export interface K8sHandleMeta {
   kubeconfig?: string;
   /** The runtimeClassName that was set on the pod spec (KataCompute). */
   runtimeClassName?: string;
+  /** Pod IP address. Populated at provision time via K8s API. In-cluster mode uses this directly instead of port-forward. */
+  podIp?: string;
+}
+
+/**
+ * True when the conductor is running inside a Kubernetes pod AND Ark is
+ * configured in hosted mode. Both conditions must hold:
+ *   - KUBERNETES_SERVICE_HOST: injected by the kubelet into every pod.
+ *   - ARK_MODE=hosted: operator-set flag; prevents false positives when a
+ *     dev's shell inherits a kubeconfig that sets KUBERNETES_SERVICE_HOST.
+ */
+export function isInClusterHosted(): boolean {
+  return (
+    typeof process.env.KUBERNETES_SERVICE_HOST === "string" &&
+    process.env.KUBERNETES_SERVICE_HOST.length > 0 &&
+    process.env.ARK_MODE === "hosted"
+  );
 }
 
 /**
@@ -110,6 +135,12 @@ export interface K8sComputeDeps {
   isPidAlive(pid: number): boolean;
   /** Send SIGTERM to a PID; swallows ESRCH so a stale meta is safe. */
   killProcess(pid: number): void;
+  /**
+   * Probe arkd readiness inside the pod during provision. Default: runs
+   * `kubectl exec ... -- curl http://localhost:19300/health`. Tests inject
+   * a stub that returns true immediately to avoid real kubectl invocations.
+   */
+  probeArkdInPod?(podName: string, namespace: string, kubeconfig?: string): Promise<boolean>;
 }
 
 async function defaultFetchHealth(url: string, timeoutMs: number): Promise<boolean> {
@@ -132,11 +163,38 @@ function defaultKillProcess(pid: number): void {
 
 const DEFAULT_DEPS: K8sComputeDeps = {
   loadK8sModule: async () => await import("@kubernetes/client-node"),
-  spawnPortForward: (args) => spawn("kubectl", args, { stdio: "ignore", detached: false }),
+  spawnPortForward: (args) => {
+    const child = spawn("kubectl", args, { stdio: ["ignore", "pipe", "pipe"], detached: false });
+    child.stdout?.on("data", (b) => logInfo("compute", `kubectl pf stdout: ${b.toString().trim()}`));
+    child.stderr?.on("data", (b) => logInfo("compute", `kubectl pf stderr: ${b.toString().trim()}`));
+    child.on("error", (e) => logInfo("compute", `kubectl pf spawn error: ${e.message}`));
+    child.on("exit", (code, sig) => logInfo("compute", `kubectl pf exited code=${code} sig=${sig}`));
+    return child;
+  },
   allocatePort,
   fetchHealth: defaultFetchHealth,
   isPidAlive,
   killProcess: defaultKillProcess,
+  probeArkdInPod: async (podName: string, namespace: string, kubeconfig?: string): Promise<boolean> => {
+    return new Promise<boolean>((resolve) => {
+      const args = [
+        "exec",
+        "-n",
+        namespace,
+        podName,
+        "--",
+        "curl",
+        "-fsS",
+        "-m",
+        "2",
+        `http://localhost:${19300}/health`,
+      ];
+      if (kubeconfig) args.unshift("--kubeconfig", kubeconfig);
+      const probe = spawn("kubectl", args, { stdio: "ignore" });
+      probe.on("exit", (code) => resolve(code === 0));
+      probe.on("error", () => resolve(false));
+    });
+  },
 };
 
 const ARKD_POD_PORT = 19300;
@@ -224,11 +282,19 @@ export class K8sCompute implements Compute {
     }
 
     // Build the pod spec. The container runs arkd and exposes :19300.
+    //
+    // /workspace lives on an emptyDir volume so the agent's per-session worktree
+    // (cloned by `prepareWorkspace`) has a place to land that's writable by the
+    // non-root user the pod runs as. /workspace doesn't exist in the base image
+    // and / is root-owned, so without the volume mount, arkd's `mkdir -p
+    // /workspace/<sid>/<repo>` would fail under UID 1000.
     const containerSpec: Record<string, unknown> = {
       name: "arkd",
       image,
+      imagePullPolicy: cfg.imagePullPolicy ?? "Always",
       command: ["/bin/sh", "-c", "arkd || sleep infinity"],
       ports: [{ containerPort: ARKD_POD_PORT, name: "arkd" }],
+      volumeMounts: [{ name: "workspace", mountPath: "/workspace" }],
     };
     if (cfg.resources) {
       containerSpec.resources = {
@@ -237,9 +303,20 @@ export class K8sCompute implements Compute {
       };
     }
 
+    // Run non-root by default. The bundled `claude` binary (used by the
+    // claude-agent runtime SDK) refuses `--dangerously-skip-permissions`
+    // under root for security reasons. The `bun` user at UID 1000 ships
+    // in the base image; `fsGroup: 1000` makes the /workspace emptyDir
+    // owned by the bun group so the in-pod arkd can write into it.
     const podSpec: Record<string, unknown> = {
       restartPolicy: "Never",
+      securityContext: {
+        runAsUser: 1000,
+        runAsGroup: 1000,
+        fsGroup: 1000,
+      },
       containers: [containerSpec],
+      volumes: [{ name: "workspace", emptyDir: {} }],
     };
     if (cfg.serviceAccount) podSpec.serviceAccountName = cfg.serviceAccount;
 
@@ -257,6 +334,43 @@ export class K8sCompute implements Compute {
 
     await api.createNamespacedPod({ namespace, body: pod });
 
+    // kubectl port-forward refuses Pending pods AND silently dies if the
+    // forwarded port has nothing listening yet. Wait for two gates in order:
+    //   1. pod.status.phase === "Running" (kubelet has started the container)
+    //   2. arkd inside the pod actually accepts a TCP connection on :19300
+    //      (Bun + CLI cold-start takes ~5-15s after container start)
+    // Cap each at 2min and 1min respectively to cover slow image pulls.
+    let podIpAtProvision: string | undefined;
+    const podDeadline = Date.now() + 120_000;
+    while (Date.now() < podDeadline) {
+      try {
+        const cur = await api.readNamespacedPod({ name: podName, namespace });
+        const phase = (cur as { status?: { phase?: string; podIP?: string } })?.status?.phase;
+        if (phase === "Running") {
+          // Capture podIP for in-cluster direct routing (F3.3).
+          const podIpRaw = (cur as { status?: { podIP?: string } })?.status?.podIP;
+          if (podIpRaw) podIpAtProvision = podIpRaw;
+          break;
+        }
+        if (phase === "Failed" || phase === "Succeeded") {
+          throw new Error(`pod ${podName} reached terminal phase ${phase} before Running`);
+        }
+      } catch (e) {
+        logDebug("compute", `readNamespacedPod transient: ${(e as Error)?.message ?? e}`);
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    // Probe arkd readiness via `kubectl exec ... -- curl http://localhost:19300/health`.
+    // Spawns a one-shot subprocess per probe; doesn't matter for cold-start.
+    const probeArkdInPod = this.deps.probeArkdInPod ?? DEFAULT_DEPS.probeArkdInPod!;
+    const arkdDeadline = Date.now() + 60_000;
+    while (Date.now() < arkdDeadline) {
+      const ok = await probeArkdInPod(podName, namespace, cfg.kubeconfig);
+      if (ok) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
     // Build a partial meta -- transport fields (arkdLocalPort, portForwardPid)
     // are filled in by setupPortForward, called next. Done this way so
     // setupPortForward is shared between fresh-provision and rehydrate via
@@ -268,6 +382,7 @@ export class K8sCompute implements Compute {
         portForwardPid: null,
         arkdLocalPort: 0,
         kubeconfig: cfg.kubeconfig,
+        podIp: podIpAtProvision,
       },
       cfg,
     );
@@ -309,6 +424,7 @@ export class K8sCompute implements Compute {
         portForwardPid: typeof cfg.port_forward_pid === "number" ? (cfg.port_forward_pid as number) : null,
         arkdLocalPort: typeof cfg.arkd_local_port === "number" ? (cfg.arkd_local_port as number) : 0,
         kubeconfig: cfg.kubeconfig as string | undefined,
+        podIp: typeof cfg.pod_ip === "string" ? (cfg.pod_ip as string) : undefined,
       },
       cfg as K8sComputeConfig,
     );
@@ -336,6 +452,35 @@ export class K8sCompute implements Compute {
 
   async ensureReachable(h: ComputeHandle, opts: EnsureReachableOpts): Promise<void> {
     await this.setupPortForward(h, opts);
+    // Drain the agent pod's arkd hooks channel into the conductor, same as
+    // LocalCompute/EC2Compute. Without this the agent's StopFailure/SessionEnd
+    // hooks buffer on the pod and never reach session.error. Idempotent.
+    const arkdUrl = this.getArkdUrl(h);
+    if (arkdUrl) {
+      const { startArkdEventsConsumer } = await import("../services/channel/arkd-events-consumer.js");
+      startArkdEventsConsumer(opts.app, h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null, opts.sessionId);
+      // Durable, session-attached proof the conductor pointed a hooks
+      // consumer at THIS session's pod arkd. If a session's event log has
+      // no arkd_consumer_attached, ensureReachable never ran for it; if it
+      // has this but no arkd_hook_received, the consumer never delivered
+      // (subscribe failed / agent didn't publish / wrong arkd). Survives
+      // pod death; the decisive root-cause locator for the hook pipeline.
+      // `.catch` keeps a logging hiccup from breaking ensureReachable;
+      // app.events itself is a structural AppContext invariant.
+      await opts.app.events
+        .log(opts.sessionId, "arkd_consumer_attached", {
+          actor: "system",
+          data: { compute: h.name, arkdUrl },
+        })
+        .catch(() => {});
+    } else {
+      await opts.app.events
+        .log(opts.sessionId, "arkd_consumer_skipped", {
+          actor: "system",
+          data: { compute: h.name, reason: "no arkdUrl from getArkdUrl" },
+        })
+        .catch(() => {});
+    }
   }
 
   // ── setupPortForward (private; shared by provision + ensureReachable) ────
@@ -365,6 +510,34 @@ export class K8sCompute implements Compute {
     const stepCtx = { compute: h.name, podName: meta.podName, namespace: meta.namespace };
 
     const fn = async (): Promise<void> => {
+      // In-cluster: pod IP is directly routable. Probe it; throw on failure.
+      if (isInClusterHosted() && meta.podIp) {
+        const clusterProbeUrl = `http://${meta.podIp}:${ARKD_POD_PORT}/health`;
+        logInfo("compute", "k8s: in-cluster mode, probing pod IP directly", {
+          compute: h.name,
+          podName: meta.podName,
+          podIp: meta.podIp,
+          probeUrl: clusterProbeUrl,
+        });
+        const healthy = await this.deps.fetchHealth(clusterProbeUrl, 5000);
+        if (!healthy) {
+          logError("compute", "k8s: in-cluster pod IP probe failed", {
+            compute: h.name,
+            podName: meta.podName,
+            podIp: meta.podIp,
+          });
+          throw new Error(
+            `k8s in-cluster: pod ${meta.podName} not reachable at ${meta.podIp}:${ARKD_POD_PORT} -- ` +
+              `pod may be evicted, crash-looping, or IP changed. Re-provision required.`,
+          );
+        }
+        logInfo("compute", "k8s: in-cluster pod IP probe succeeded", {
+          compute: h.name,
+          podIp: meta.podIp,
+        });
+        return;
+      }
+
       // Idempotent reuse: PID alive AND arkd answers /health through the
       // recorded port. Either gate failing means we kill any orphan and
       // respawn.
@@ -388,10 +561,46 @@ export class K8sCompute implements Compute {
 
       const arkdLocalPort = await this.deps.allocatePort();
       const args = this.buildPortForwardArgs(meta.podName, meta.namespace, arkdLocalPort, meta.kubeconfig);
+      logInfo("compute", "k8s: spawning kubectl port-forward", {
+        compute: h.name,
+        podName: meta.podName,
+        namespace: meta.namespace,
+        hostPort: arkdLocalPort,
+      });
       const child = this.deps.spawnPortForward(args);
       meta.arkdLocalPort = arkdLocalPort;
-      meta.portForwardPid = child.pid ?? null;
+      // local-dev only: in-cluster mode never reaches this branch (early return above)
+      meta.portForwardPid = isInClusterHosted() ? null : (child.pid ?? null);
       this.writeMeta(h, meta);
+
+      // kubectl port-forward exits its CLI as soon as it spawns the bg
+      // goroutine, but the tunnel itself takes ~500ms-2s to establish AND
+      // arkd inside the pod takes ~10-30s to boot on first start (Bun cold
+      // start + `arkd` subcommand load). Returning here without probing
+      // means the caller's first POST to localhost:<port> races the tunnel
+      // and gets ECONNREFUSED. Probe /health until the tunnel answers
+      // (cap 60s -- generous for cold pod start).
+      const probeUrl = `http://localhost:${arkdLocalPort}/health`;
+      const deadline = Date.now() + 60_000;
+      while (Date.now() < deadline) {
+        if (await this.deps.fetchHealth(probeUrl, 1000)) {
+          logInfo("compute", "k8s: port-forward tunnel established", {
+            compute: h.name,
+            podName: meta.podName,
+            arkdLocalPort,
+            pid: meta.portForwardPid,
+          });
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      logError("compute", "k8s: port-forward failed to become reachable", {
+        compute: h.name,
+        podName: meta.podName,
+        arkdLocalPort,
+        pid: meta.portForwardPid,
+      });
+      throw new Error(`port-forward to ${meta.podName} did not become reachable on :${arkdLocalPort} within 60s`);
     };
 
     if (useStep) {
@@ -416,7 +625,18 @@ export class K8sCompute implements Compute {
 
   async stop(h: ComputeHandle): Promise<void> {
     const meta = this.readMeta(h);
+    // Tear down the hooks-channel consumer bound to this pod's arkd. Without
+    // this the consumer reconnect-loops against the dead pod forever and the
+    // per-computeName dedup blocks the next pod's consumer -- the agent's
+    // AgentMessage/PreToolUse stream never reaches the conductor again.
+    const { stopArkdEventsConsumer } = await import("../services/channel/arkd-events-consumer.js");
+    stopArkdEventsConsumer(h.name);
     if (meta.portForwardPid) {
+      logInfo("compute", "k8s: tearing down port-forward", {
+        compute: h.name,
+        podName: meta.podName,
+        pid: meta.portForwardPid,
+      });
       try {
         process.kill(meta.portForwardPid, "SIGTERM");
       } catch {
@@ -440,20 +660,32 @@ export class K8sCompute implements Compute {
 
   getArkdUrl(h: ComputeHandle): string {
     const meta = this.readMeta(h);
+    if (isInClusterHosted() && meta.podIp) {
+      // In-cluster: route directly to the pod IP. No port-forward needed.
+      return `http://${meta.podIp}:${ARKD_POD_PORT}`;
+    }
     return `http://localhost:${meta.arkdLocalPort}`;
   }
 
   // ── resolveWorkdir ───────────────────────────────────────────────────────
   //
-  // Pod-side mount layout is TBD: the legacy K8sProvider didn't implement
-  // this hook (sessions ran against a conductor-shared workdir under the
-  // local-host adapter), and the future plan for k8s-launched arkd has not
-  // yet committed to a layout (`/workspace/<sid>/<repo>` is the leading
-  // candidate but not wired). Returning null here lets the dispatcher fall
-  // back to `session.workdir` until the layout is decided.
-
-  resolveWorkdir(_h: ComputeHandle, _session: Session): string | null {
-    return null;
+  // Mirrors LocalCompute's layout, rooted at `/workspace/<sid>/<repo>` inside
+  // the per-session pod. Returning null here previously caused the
+  // prepare-workspace lifecycle step to be silently skipped (the guard at
+  // target-lifecycle.ts requires a non-null remoteWorkdir), leaving the pod
+  // with no checkout and the agent with nothing to edit. The `/workspace`
+  // prefix is the layout the K8s pod-template provisions writable space at.
+  // Bare-worktree dispatch (no session.repo) still returns null so the clone
+  // is honestly skipped rather than landing on a meaningless path.
+  resolveWorkdir(_h: ComputeHandle, session: Session): string | null {
+    const cloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo;
+    if (!cloneSource) return null;
+    const repoBasename =
+      cloneSource
+        .split("/")
+        .pop()
+        ?.replace(/\.git$/, "") ?? "project";
+    return `/workspace/${session.id}/${repoBasename}`;
   }
 
   // ── prepareWorkspace ─────────────────────────────────────────────────────
@@ -483,12 +715,29 @@ export class K8sCompute implements Compute {
     if (!opts.source || !opts.remoteWorkdir) return;
     const arkdUrl = this.getArkdUrl(h);
     const arkdToken = process.env.ARK_ARKD_TOKEN ?? null;
+    // Resolve the effective branch: explicit session.branch wins; otherwise
+    // a deterministic per-session default. Always pass a branch so the agent
+    // can't accidentally commit to upstream/main.
+    const branch = opts.branch ?? `ark-${opts.sessionId}`;
+    // Resolve the agent's commit identity (config → env → tenant secret →
+    // placeholder). cloneHelper pins it on the sandbox repo so the
+    // implement-stage commit and the PR-stage push carry a real author.
+    const identity = await resolveAgentIdentityForRemoteCompute(this.app, this.app.tenantId ?? "default");
     await this.cloneHelper({
       arkdUrl,
       arkdToken,
       source: opts.source,
       remoteWorkdir: opts.remoteWorkdir,
+      branch,
+      authorName: identity.name,
+      authorEmail: identity.email,
     });
+    // Persist the resolved workdir + branch on the session row so the
+    // conductor-side observers (PR action, status poller, web UI) see the
+    // pod's real checkout instead of null / a stale value. The conductor's
+    // setupSessionWorktree short-circuits for K8s, so this is the only
+    // place that writes these columns for hosted-mode sessions.
+    await this.app.sessions.update(opts.sessionId, { workdir: opts.remoteWorkdir, branch });
   }
 
   // ── flushPlacement ──────────────────────────────────────────────────────
@@ -558,7 +807,13 @@ export class K8sCompute implements Compute {
   }
 
   buildLaunchEnv(_session: Session): Record<string, string> {
-    return {};
+    // IS_SANDBOX=1 lets the claude binary accept --dangerously-skip-permissions
+    // when running as root. The per-session pod runs as root by default (the
+    // oven/bun base image's USER), and claude refuses that combination with
+    // "cannot be used with root/sudo privileges". K8s pods are isolated by
+    // construction (per-session pod, no host fs, no network to user infra),
+    // so the bypass is safe in this dispatch shape.
+    return { IS_SANDBOX: "1" };
   }
 
   // ── getAttachCommand ────────────────────────────────────────────────────

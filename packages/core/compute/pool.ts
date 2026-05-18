@@ -58,7 +58,6 @@ export async function initPoolSchema(db: { exec(sql: string): Promise<void> }): 
 
 export class ComputePoolManager {
   private tenantId: string = "default";
-  private _initialized: Promise<void> | null = null;
 
   constructor(private app: AppContext) {}
 
@@ -69,16 +68,8 @@ export class ComputePoolManager {
     return this.tenantId;
   }
 
-  /** Ensure the compute_pools table exists. Idempotent. */
-  async ensureSchema(): Promise<void> {
-    if (this._initialized) return this._initialized;
-    this._initialized = initPoolSchema(this.app.db);
-    return this._initialized;
-  }
-
   /** Create a pool definition. */
   async createPool(pool: ComputePool): Promise<ComputePool> {
-    await this.ensureSchema();
     const ts = new Date().toISOString();
     await this.app.db
       .prepare(
@@ -93,7 +84,6 @@ export class ComputePoolManager {
 
   /** Get a pool by name. Returns null if not found. */
   async getPool(name: string): Promise<ComputePool | null> {
-    await this.ensureSchema();
     const row = (await this.app.db
       .prepare("SELECT * FROM compute_pools WHERE name = ? AND tenant_id = ?")
       .get(name, this.tenantId)) as ComputePoolRow | undefined;
@@ -103,7 +93,6 @@ export class ComputePoolManager {
 
   /** Delete a pool definition. Returns true if deleted. */
   async deletePool(name: string): Promise<boolean> {
-    await this.ensureSchema();
     const result = await this.app.db
       .prepare("DELETE FROM compute_pools WHERE name = ? AND tenant_id = ?")
       .run(name, this.tenantId);
@@ -179,7 +168,6 @@ export class ComputePoolManager {
 
   /** List all pools with their current utilization. */
   async listPools(): Promise<ComputePoolStatus[]> {
-    await this.ensureSchema();
     const rows = (await this.app.db
       .prepare("SELECT * FROM compute_pools WHERE tenant_id = ? ORDER BY name")
       .all(this.tenantId)) as ComputePoolRow[];

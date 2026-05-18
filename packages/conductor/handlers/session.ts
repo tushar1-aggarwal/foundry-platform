@@ -4,8 +4,10 @@ import { Router } from "../router.js";
 import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
+import { actorIdentity } from "../../core/auth/context.js";
 import { resolveTenantApp } from "./scope-helpers.js";
 import { eventBus } from "../../core/hooks.js";
+import { isRepoUrl } from "../../core/repo-url.js";
 import type {
   SessionIdParams,
   SessionStartParams,
@@ -36,12 +38,16 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const scoped = resolveTenantApp(app, ctx);
 
     // Default `user_id` to the calling user's real users.id so the
-    // session row records who created it. Skip when the caller is the
-    // local-mode synthetic admin (`local`) or an API-key sentinel
-    // (starts with `ak-`) -- those don't point to a users row, so
-    // writing them would create a misleading audit trail.
-    if (!opts.user_id && ctx.userId && ctx.userId !== "local" && !ctx.userId.startsWith("ak-")) {
-      opts.user_id = ctx.userId;
+    // session row records who created it. `actorIdentity` prefers
+    // `scopingUserId` (set on cookie auth AND on api-key auth when the
+    // key has a bound user), so an api-key-spawned session correctly
+    // attributes to the human behind the key instead of being orphaned.
+    // The result may still be a non-user sentinel ("local", "ak-...")
+    // for callers with no bound user; skip those so the audit row only
+    // points to real users.id values.
+    const realActor = actorIdentity(ctx);
+    if (!opts.user_id && realActor && realActor !== "local" && !realActor.startsWith("ak-")) {
+      opts.user_id = realActor;
     }
 
     // Flow-level requires_repo gate (#416). Code-modifying flows declare
@@ -74,38 +80,22 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     }
 
     // Phase 1 scoping: resolve `runtime` override and stash a hint on
-    // session.config for dispatch. See commit body for full reasoning;
-    // load-bearing decisions captured here:
+    // session.config for dispatch. scoping_overrides rows are PREFERENCES
+    // (defaults), not POLICY -- a user-level row is a saved `--runtime`,
+    // team / tenant rows are the same one scope outward. Phase 2 may add
+    // a separate `policy_lock` mechanism if hard mandates are needed.
     //
-    // (1) Preference, not policy. scoping_overrides rows are READ as
-    //     defaults that fill in when the caller didn't choose. A
-    //     user-level row is functionally a "saved --runtime"; team
-    //     and tenant rows are the same shape one scope outward. They
-    //     are NOT mandates. Caller-explicit therefore wins over rows
-    //     at every scope -- the most-explicit/most-recent signal is
-    //     authoritative. (Considered: tenant=policy + user=preference
-    //     and all-scopes=policy; both rejected because they make
-    //     user-level rows philosophically awkward and bifurcate the
-    //     mental model. Phase 2 may add a separate `policy_lock`
-    //     mechanism if hard mandates are needed.)
+    // Fail-loud on unknown runtime: an override pointing at an
+    // unregistered runtime throws INVALID_PARAMS so a misconfigured row
+    // surfaces immediately instead of silently dropping. Phase 2 adds
+    // admin write-time validation so the bad row never lands.
     //
-    // (2) Caller-explicit short-circuits the resolver. When opts.runtime
-    //     is set we do NOT call resolve() at all. Validation cost saved
-    //     and the resolver cannot reject a request the caller already
-    //     answered. A bad scoping_overrides row will still surface --
-    //     just on the next default-using call rather than this one.
-    //
-    // (3) Fail-loud on unknown runtime. If the resolved override does
-    //     NOT match a registered runtime, throw INVALID_PARAMS rather
-    //     than logDebug + drop. Same fail-closed posture as the
-    //     team-chain cycle defense; debug logs are off in default
-    //     prod log levels and would hide the misconfigured row from
-    //     both the caller and ops. Phase 2 adds admin write-time
-    //     validation so the bad row never lands in the first place.
-    //
-    // (4) Agent-side opt-out (`runtime_locked: true` in agent YAML)
-    //     is enforced at DISPATCH, not here -- the agent isn't
-    //     resolved at session/start. See applyScopingRuntimeHint().
+    // Agent-side opt-out (`runtime_locked: true`) is enforced at DISPATCH
+    // -- the agent isn't resolved yet here. See applyScopingRuntimeHint().
+    // An explicit caller-chosen runtime (opts.runtime) wins outright: the
+    // tenant override is a preference/default, so a caller who already
+    // picked their runtime should neither be validated against nor have a
+    // hint stashed -- and a misconfigured override row must not block them.
     if (!opts.runtime) {
       const runtimeOverride = await app.scoping.resolve<string>(ctx, "runtime");
       if (runtimeOverride !== null) {
@@ -195,19 +185,40 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       }
     }
 
+    // Normalize the repo field: if a URL was passed as `opts.repo` (e.g.
+    // from the web New Session form's repo input), promote it to
+    // `config.remoteRepo` and synthesize a local basename for `session.repo`.
+    // This ensures the cloning guard (`cloneRemoteRepoIfNeeded`) triggers and
+    // the URL is never used as a filesystem path.
+    let normalizedOpts = opts;
+    if (opts.repo && isRepoUrl(opts.repo)) {
+      // Trailing slash is tolerated -- `https://host/owner/repo/` should
+      // resolve to "repo" the same as the un-slashed form. Without the
+      // optional `\/?` the regex misses and we fall back to the full URL,
+      // re-triggering the very bug this normaliser exists to prevent.
+      const basename = opts.repo.match(/\/([^/]+?)(?:\.git)?\/?$/)?.[1] ?? opts.repo;
+      normalizedOpts = {
+        ...opts,
+        repo: basename,
+        config: { ...(opts.config as Record<string, unknown> | null | undefined), remoteRepo: opts.repo },
+      };
+    }
+
     // Synthesize session.repo from config.remoteRepo when only the URL was
-    // passed. Mirrors the CLI's `--remote-repo` handling (formerly in
-    // packages/cli/services/session-start.ts) -- moved server-side so every
-    // entry point (CLI, web New Session form, MCP, raw JSON-RPC) produces an
-    // identical DB row. Downstream readers (`create_pr`, `merge`, ...) consult
+    // passed via config (CLI --remote-repo path). Mirrors the above but for
+    // the config-first entry point so every caller produces an identical DB
+    // row. Downstream readers (`create_pr`, `merge`, ...) consult
     // `session.repo` only; without this synthesis remote-first dispatches via
     // non-CLI callers leave the column null and the action stages bail with
     // "Session has no repo".
-    const cfg = (opts.config ?? null) as { remoteRepo?: string } | null;
+    const cfg = (normalizedOpts.config ?? null) as { remoteRepo?: string } | null;
     const startOpts: SessionStartParams =
-      cfg?.remoteRepo && !opts.repo
-        ? { ...opts, repo: cfg.remoteRepo.match(/\/([^/]+?)(?:\.git)?$/)?.[1] ?? cfg.remoteRepo }
-        : opts;
+      cfg?.remoteRepo && !normalizedOpts.repo
+        ? {
+            ...normalizedOpts,
+            repo: cfg.remoteRepo.match(/\/([^/]+?)(?:\.git)?$/)?.[1] ?? cfg.remoteRepo,
+          }
+        : normalizedOpts;
 
     // Atomic create + dispatch: splitting these across two RPCs used to force
     // every caller (CLI, web, tests) to remember the second call or live with
@@ -432,10 +443,11 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const scoped = resolveTenantApp(app, ctx);
     const session = await scoped.sessions.get(sessionId);
     if (!session) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
-    const { readForensicFile } = await import("../../core/services/session-forensic.js");
+    const { readSessionForensic } = await import("../../core/services/session-forensic.js");
     // Forensic files live under the daemon's tracks dir (not per-tenant on
-    // disk). Access control is via the tenant-scoped sessions lookup above.
-    const read = await readForensicFile(scoped.config.dirs.tracks, sessionId, "stdio.log", { tail });
+    // disk); in hosted mode the tee is skipped so this falls back to the
+    // durable blob snapshot. Access control is via the tenant-scoped lookup.
+    const read = await readSessionForensic(scoped, session, "stdio.log", { tail });
     if (read.tooLarge) {
       throw new RpcError(
         `stdio.log is ${read.size} bytes, over the 2MB cap -- pass tail=<N> to read the tail`,
@@ -450,8 +462,8 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const scoped = resolveTenantApp(app, ctx);
     const session = await scoped.sessions.get(sessionId);
     if (!session) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
-    const { readForensicFile, parseJsonl } = await import("../../core/services/session-forensic.js");
-    const read = await readForensicFile(scoped.config.dirs.tracks, sessionId, "transcript.jsonl");
+    const { readSessionForensic, parseJsonl } = await import("../../core/services/session-forensic.js");
+    const read = await readSessionForensic(scoped, session, "transcript.jsonl");
     if (read.tooLarge) {
       throw new RpcError(`transcript.jsonl is ${read.size} bytes, over the 2MB cap`, ErrorCodes.INVALID_PARAMS);
     }
@@ -627,62 +639,20 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   });
 
   // ── session/kill -- hard terminate, no grace ──────────────────────────────
-  //
-  // Goes straight to SIGKILL (skips the SIGTERM grace that session/stop uses).
-  // Marks session `failed` with reason `killed` and runs D2 cleanup
-  // synchronously so post-conditions are reliable for the caller.
 
   router.handle("session/kill", async (params, notify, ctx) => {
     const { sessionId } = extract<{ sessionId: string }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
 
-    const s = await scoped.sessions.get(sessionId);
-    if (!s) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
-
-    const terminalStatuses = ["completed", "failed", "archived", "stopped"];
-    if (terminalStatuses.includes(s.status)) {
-      return { ok: false, message: `session already terminal (status=${s.status})` };
-    }
-
-    // Find the executor handle and call terminate (SIGKILL-first).
-    const handle = s.session_id;
-    if (handle) {
-      const { getExecutor } = await import("../../core/executor.js");
-      const executorName = (s.config as Record<string, unknown> | null)?.launch_executor as string | undefined;
-      const executor = executorName ? getExecutor(executorName) : undefined;
-
-      if (executor) {
-        if (executor.terminate) {
-          await executor.terminate(handle);
-        } else {
-          await executor.kill(handle);
-        }
-      }
-    }
-
-    // Mark session failed with reason "killed".
-    await scoped.sessions.update(sessionId, {
-      status: "failed",
-      error: "killed",
-      session_id: null,
-    } as Partial<import("../../types/index.js").Session>);
-
-    await scoped.events.log(sessionId, "session_killed", {
-      actor: "user",
-      data: { handle: handle ?? null },
-    });
-
-    // Run D2 cleanup synchronously so the caller can rely on post-conditions.
-    const updated = (await scoped.sessions.get(sessionId))!;
-    if (updated) {
-      const { cleanupSession } = await import("../../core/services/session/cleanup.js");
-      await cleanupSession(scoped, updated);
+    const result = await scoped.sessionLifecycle.kill(sessionId);
+    if (result.ok === false && result.message.includes("not found")) {
+      throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
 
     const final = await scoped.sessions.get(sessionId);
     if (final) notify("session/updated", { session: final });
 
-    return { ok: true, terminated_at: Date.now(), cleaned_up: true };
+    return result;
   });
 
   router.handle("session/archive", async (params, notify, ctx) => {
@@ -976,9 +946,12 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const fileName = file === "stdio" ? "stdio.log" : "transcript.jsonl";
     const filePath = join(scoped.config.dirs.tracks, sessionId, fileName);
 
-    // Read current contents up to the 2MB cap.
-    const { readForensicFile } = await import("../../core/services/session-forensic.js");
-    const initial = await readForensicFile(scoped.config.dirs.tracks, sessionId, fileName);
+    // Read current contents up to the 2MB cap. Falls back to the durable
+    // blob snapshot in hosted mode (no local tee); the live-follow watcher
+    // below then simply has nothing to tail, which is correct -- there is no
+    // local file to follow when the worker pod owns the only live copy.
+    const { readSessionForensic } = await import("../../core/services/session-forensic.js");
+    const initial = await readSessionForensic(scoped, session, fileName);
 
     // Track the byte offset after the initial read so we only push new bytes.
     let offset = initial.exists ? initial.size : 0;

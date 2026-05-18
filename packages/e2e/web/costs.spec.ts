@@ -141,13 +141,13 @@ async function goToCostsFresh(): Promise<void> {
   await page.goto(ws.baseUrl);
   await page.waitForSelector("nav", { timeout: 30_000 });
   await page.click('nav button:has-text("Costs")');
-  await expect(page.locator("h1")).toContainText("Costs");
+  await expect(page.locator("h1", { hasText: "Costs" })).toBeVisible();
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 test("3 usage records aggregate to the correct total via RPC and DOM", async () => {
-  const arkDir = ws.env.app.arkDir;
+  const arkDir = ws.env.arkDir;
   resetCosts(arkDir);
   // Seeded costs: 1.50 + 2.75 + 0.25 = 4.50 total
   seedUsageRecord(arkDir, {
@@ -190,8 +190,10 @@ test("3 usage records aggregate to the correct total via RPC and DOM", async () 
   await goToCostsFresh();
   // Hero renders fmtCost(total) = "$4.50"
   await expect(page.locator("text=$4.50").first()).toBeVisible({ timeout: 10_000 });
-  // The "(N sessions with usage data)" label reflects the seeded row count.
-  await expect(page.locator("text=/3 sessions with usage data/i")).toBeVisible();
+  // The KPI delta row under "Total spend" shows "{N} sessions" -- this is
+  // the populated-state CostsView (the old "(N sessions with usage data)"
+  // wording was replaced when the dashboard was rebuilt).
+  await expect(page.locator("text=/3 sessions/i").first()).toBeVisible();
   // And at least one seeded session summary renders in the left-pane list.
   await expect(page.locator("body")).toContainText("first task");
   await expect(page.locator("body")).toContainText("second task");
@@ -199,7 +201,7 @@ test("3 usage records aggregate to the correct total via RPC and DOM", async () 
 });
 
 test("per-model breakdown aggregates records grouped by model", async () => {
-  const arkDir = ws.env.app.arkDir;
+  const arkDir = ws.env.arkDir;
   resetCosts(arkDir);
   // Seeded: claude-sonnet-4-6 totals $3.00 (1.25 + 1.75), gpt-5 totals $2.00
   seedUsageRecord(arkDir, {
@@ -258,7 +260,7 @@ test("per-model breakdown aggregates records grouped by model", async () => {
 });
 
 test("cost_mode=subscription/free contribute zero dollars even with tokens", async () => {
-  const arkDir = ws.env.app.arkDir;
+  const arkDir = ws.env.arkDir;
   resetCosts(arkDir);
   // One billed record ($1.00) + one subscription record (cost_usd=0, tokens>0)
   // + one free record (cost_usd=0, tokens>0). Total must equal $1.00.
@@ -319,7 +321,7 @@ test("cost_mode=subscription/free contribute zero dollars even with tokens", asy
 });
 
 test("per-session attribution: 2 sessions aggregate their own records", async () => {
-  const arkDir = ws.env.app.arkDir;
+  const arkDir = ws.env.arkDir;
   resetCosts(arkDir);
   // Session alpha: two records totaling $2.50
   seedUsageRecord(arkDir, {

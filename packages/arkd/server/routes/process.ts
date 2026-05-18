@@ -24,7 +24,7 @@ import { json } from "../helpers.js";
 import { requireSafeTmuxName } from "../../common/validation.js";
 import { SAFE_TMUX_NAME_RE } from "../../common/constants.js";
 import { type RouteCtx } from "../route-ctx.js";
-import { logDebug, logInfo, logWarn } from "../../../core/observability/structured-log.js";
+import { logDebug, logError, logInfo, logWarn } from "../../../core/observability/structured-log.js";
 import type {
   ProcessSpawnReq,
   ProcessSpawnRes,
@@ -160,12 +160,18 @@ async function spawnProcess(req: ProcessSpawnReq): Promise<ProcessSpawnRes> {
   }
 
   const wantPipes = Boolean(req.logPath);
+  // Minimal EC2 / systemd unit environments often inherit a PATH-less
+  // process.env. The spawned child then can't find `git`, `bash`, or any
+  // other tool resolved by name. Fall back to a standard system PATH so
+  // arkd's `Bun.spawn` works on stripped-down hosts.
+  const baseEnv = { ...process.env, ...(req.env ?? {}) } as Record<string, string>;
+  if (!baseEnv.PATH) baseEnv.PATH = "/usr/local/bin:/usr/bin:/bin";
   let child: SpawnedProc;
   try {
     child = Bun.spawn({
       cmd: [req.cmd, ...req.args],
       cwd: req.workdir,
-      env: { ...process.env, ...(req.env ?? {}) } as Record<string, string>,
+      env: baseEnv,
       stdout: wantPipes ? "pipe" : "ignore",
       stderr: wantPipes ? "pipe" : "ignore",
     });
@@ -202,11 +208,21 @@ async function spawnProcess(req: ProcessSpawnReq): Promise<ProcessSpawnRes> {
   void child.exited.then((code) => {
     entry.exited = true;
     entry.exitCode = typeof code === "number" ? code : null;
-    logInfo("compute", "arkd /process/spawn: child exited", {
-      handle: req.handle,
-      pid: child.pid,
-      exitCode: entry.exitCode,
-    });
+    if (entry.exitCode !== null && entry.exitCode !== 0) {
+      logError("compute", "arkd /process/spawn: child exited with non-zero code", {
+        handle: req.handle,
+        pid: child.pid,
+        exitCode: entry.exitCode,
+        cmd: req.cmd,
+        workdir: req.workdir,
+      });
+    } else {
+      logInfo("compute", "arkd /process/spawn: child exited", {
+        handle: req.handle,
+        pid: child.pid,
+        exitCode: entry.exitCode,
+      });
+    }
   });
 
   // Drain stdout / stderr to the log file when requested. We write both

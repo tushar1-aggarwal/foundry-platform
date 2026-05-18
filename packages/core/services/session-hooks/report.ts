@@ -27,6 +27,30 @@ export class ReportApplier {
     }
     const result: ReportResult = { updates: {}, logEvents: [], busEvents: [] };
 
+    // Mirror of hook-status TERMINAL_STATUSES guard. A late `completed` /
+    // `error` / `progress` report from an agent process that outlived the
+    // stage's terminal transition (e.g. a still-running EC2 agent after
+    // archive(), or a stale channel-relay drained after auto_merge failure)
+    // must not flip a terminal session back to `ready`/`failed`/`waiting`.
+    // Log the event for the audit trail but emit no state transitions and
+    // no chat message.
+    const TERMINAL_STATUSES = ["completed", "failed", "stopped", "archived"] as const;
+    if ((TERMINAL_STATUSES as readonly string[]).includes(session.status)) {
+      result.logEvents!.push({
+        type: "report_stale",
+        opts: {
+          stage: report.stage,
+          actor: "system",
+          data: {
+            report_type: report.type,
+            session_status: session.status,
+            reason: "report arrived after session reached terminal state",
+          },
+        },
+      });
+      return result;
+    }
+
     // Log event
     result.logEvents!.push({
       type: `agent_${report.type}`,

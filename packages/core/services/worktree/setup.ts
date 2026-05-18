@@ -12,6 +12,7 @@ import { promisify } from "util";
 import { execFile } from "child_process";
 
 import type { AppContext } from "../../app.js";
+import { isRepoUrl } from "../../repo-url.js";
 import type { Session, Compute } from "../../../types/index.js";
 import * as claude from "../../claude/claude.js";
 import { loadRepoConfig } from "../../repo-config.js";
@@ -71,21 +72,62 @@ export async function setupSessionWorktree(
   // would chase a dangling reference.
   const repoRaw = session.repo;
   const workdirRaw = session.workdir;
-  const hasExplicitRepo = repoRaw && repoRaw !== "." && repoRaw.trim() !== "";
+  // Only treat session.repo as a local path when it's an actual existing
+  // directory. A URL string or a bare basename from a remote-repo session
+  // (e.g. "recharge-h5-mobile") must not be passed to resolve() -- the
+  // resulting mangled path (/cwd/https:/host/... or /cwd/basename) doesn't
+  // exist and arkd /process/spawn rejects it. Existence check is the oracle:
+  // - real local repos: directory exists → use it
+  // - remote-repo basenames: directory doesn't exist → fall through to workdir
+  // - URLs: caught by isRepoUrl first so we never call resolve() on them
+  const repoCandidate =
+    repoRaw && repoRaw !== "." && repoRaw.trim() !== "" && !isRepoUrl(repoRaw) ? resolve(repoRaw) : null;
+  const hasExplicitRepo = repoCandidate !== null && existsSync(repoCandidate);
   const hasExplicitWorkdir = workdirRaw && workdirRaw !== "." && workdirRaw.trim() !== "";
-  const repoSource = hasExplicitRepo ? resolve(repoRaw!) : hasExplicitWorkdir ? resolve(workdirRaw!) : resolve(".");
+  const repoSource = hasExplicitRepo ? repoCandidate : hasExplicitWorkdir ? resolve(workdirRaw!) : resolve(".");
 
   let effectiveWorkdir = repoSource;
 
-  // Create git worktree unless the registered Compute doesn't support it
-  // or session config explicitly disables it. We worktree when repoSource
-  // is a real git repo -- even if it resolves to the current cwd (that is
-  // precisely when isolation matters most for the self-dogfood loop).
-  //
-  // Capability lives on `Compute.capabilities.supportsWorktree` now; we
-  // read off the registered Compute keyed by the row's `compute_kind`.
+  // Capability lives on `Compute.capabilities.supportsWorktree`; read off
+  // the registered Compute keyed by the row's `compute_kind`.
   const computeImpl = compute ? app.getCompute(compute.compute_kind) : app.getCompute("local");
   const supportsWorktree = computeImpl?.capabilities.supportsWorktree === true;
+
+  // Short-circuit for remote computes (K8s, EC2, shared-host EC2, ...). The
+  // conductor cannot touch a remote box's filesystem; the compute's own
+  // `prepareWorkspace` lifecycle step owns clone + branch + workdir for
+  // those. Without this guard, the conductor would persist `resolve(".")`
+  // (or similar bogus path) into session.workdir and pre-empt the compute
+  // side, leaving the pod with no checkout and the agent in /app. See
+  // s-hi1cr8wz4g (2026-05-15).
+  //
+  // We still need to RETURN a workdir so the executor can thread it into
+  // `runTargetLifecycle.workspace.remoteWorkdir` -- otherwise prepareWorkspace
+  // skips (its guard requires non-null source AND remoteWorkdir). Ask the
+  // compute via resolveWorkdir using a synthetic handle. resolveWorkdir is
+  // expected to derive the path from `session` + compute config alone
+  // (K8s + EC2 + Firecracker all do; they read handle.meta only for
+  // optional overrides with defaults). Without this, stage-1 dispatch hit
+  // a chicken-and-egg: attachExistingHandle returns null pre-provision, so
+  // the executor's previewHandle was null, resolveWorkdir was skipped, and
+  // prepareWorkspace got remoteWorkdir=null and silently no-op'd. See
+  // s-w6212tpa72 (2026-05-15).
+  if (!supportsWorktree) {
+    if (computeImpl?.resolveWorkdir && compute) {
+      const fakeHandle = {
+        kind: compute.compute_kind,
+        name: compute.name,
+        meta: {},
+      } as unknown as Parameters<NonNullable<typeof computeImpl.resolveWorkdir>>[0];
+      return computeImpl.resolveWorkdir(fakeHandle, session);
+    }
+    return session.workdir ?? null;
+  }
+
+  // Create git worktree unless session config explicitly disables it. We
+  // worktree when repoSource is a real git repo -- even if it resolves to
+  // the current cwd (that is precisely when isolation matters most for the
+  // self-dogfood loop).
   const wantWorktree = supportsWorktree && session.config?.worktree !== false;
   if (wantWorktree && existsSync(join(repoSource, ".git"))) {
     log("Setting up git worktree...");
@@ -237,7 +279,7 @@ async function setupWorktree(
   branch?: string,
 ): Promise<string | null> {
   const wtPath = join(app.config.dirs.worktrees, sessionId);
-  if (existsSync(wtPath)) {
+  if (existsSync(join(wtPath, ".git"))) {
     await applyWorktreeGitIdentity(app, wtPath);
     return wtPath;
   }

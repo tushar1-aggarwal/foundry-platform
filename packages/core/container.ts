@@ -56,7 +56,7 @@ import type { SessionDrain } from "./infra/session-drain.js";
 import type { WorkerRegistry } from "./hosted/worker-registry.js";
 import type { SessionScheduler } from "./hosted/scheduler.js";
 import type { TenantPolicyManager, ApiKeyManager, TenantManager, TeamManager, UserManager } from "./auth/index.js";
-import type { TenantClaudeAuthManager } from "./auth/tenant-claude-auth.js";
+import type { TenantClaudeAuthRepository } from "./repositories/tenant_claude_auth.js";
 import type { TicketProviderRegistry } from "./tickets/registry.js";
 import type { McpPool } from "./mcp-pool.js";
 
@@ -177,7 +177,7 @@ export interface Cradle {
   tenants: TenantManager;
   teams: TeamManager;
   users: UserManager;
-  tenantClaudeAuth: TenantClaudeAuthManager;
+  tenantClaudeAuth: TenantClaudeAuthRepository;
   tenantPolicyManager: TenantPolicyManager;
 
   // Loaded master KEK. Registered as a value during AppContext.boot().

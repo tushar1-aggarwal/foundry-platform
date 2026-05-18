@@ -30,9 +30,9 @@
  *   destroy: TerminateInstances (via `destroyStack`), kill the port
  *            forward, drop the security group the stack created.
  *
- * Snapshot / restore: deferred. Both throw NotSupportedError with
- * `capabilities.snapshot = true` still reported so dispatch can hint
- * at the eventual shape -- tests assert both.
+ * Snapshot / restore: deferred. Both throw NotSupportedError; the
+ * capability is reported false until the feature ships so callers
+ * that guard on `capabilities.snapshot` don't crash.
  *
  * Isolation composition: EC2Compute pairs with any Isolation (DirectIsolation,
  * DockerIsolation, DevcontainerIsolation, DockerComposeIsolation). The
@@ -72,6 +72,7 @@ import type {
 import { NotSupportedError } from "../types.js";
 import { REMOTE_HOME } from "./constants.js";
 import { cloneWorkspaceViaArkd } from "../workspace-clone.js";
+import { resolveAgentIdentityForRemoteCompute } from "../git-identity.js";
 import { logDebug, logInfo } from "../../observability/structured-log.js";
 import { provisionStep } from "../../services/provisioning-steps.js";
 import { startArkdEventsConsumer } from "../../services/channel/arkd-events-consumer.js";
@@ -346,7 +347,7 @@ const DEFAULT_HELPERS: EC2ComputeHelpers = {
 export class EC2Compute implements Compute {
   readonly kind: ComputeKind = "ec2";
   readonly capabilities: ComputeCapabilities = {
-    snapshot: true,
+    snapshot: false,
     pool: true,
     networkIsolation: true,
     provisionLatency: "minutes",
@@ -892,12 +893,23 @@ export class EC2Compute implements Compute {
     if (!opts.source || !opts.remoteWorkdir) return;
     const arkdUrl = this.getArkdUrl(h);
     const arkdToken = process.env.ARK_ARKD_TOKEN ?? null;
+    // Resolve effective branch: explicit session.branch wins; otherwise
+    // a deterministic per-session default keeps EC2 sessions off main.
+    const branch = opts.branch ?? `ark-${opts.sessionId}`;
+    const identity = await resolveAgentIdentityForRemoteCompute(this.app, this.app.tenantId ?? "default");
     await this.cloneHelper({
       arkdUrl,
       arkdToken,
       source: opts.source,
       remoteWorkdir: opts.remoteWorkdir,
+      branch,
+      authorName: identity.name,
+      authorEmail: identity.email,
     });
+    // Persist resolved workdir + branch on the session row -- conductor's
+    // setupSessionWorktree short-circuits for remote computes, so this is
+    // the authoritative write site for hosted-mode EC2 sessions.
+    await this.app.sessions.update(opts.sessionId, { workdir: opts.remoteWorkdir, branch });
   }
 
   // ── flushPlacement ──────────────────────────────────────────────────────

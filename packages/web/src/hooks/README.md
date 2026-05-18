@@ -36,7 +36,8 @@ useQuery { refetchInterval } -----> JSON-RPC /api    (poll)
    |
    +- useSessionStream         (5s/2s based on session state)
    +- useDashboardSummaryQuery (5s)
-   +- useRunningSessionsQuery  (5s)
+   +- useAllSessionsQuery      (5s, dashboard fleet view)
+   +- useRunningSessionsQuery  (15s, compute panel, status: running only)
    +- useMessages              (5s while active, shares queryKey with useSessionStream)
    +- useDaemonStatus          (15s)
 ```

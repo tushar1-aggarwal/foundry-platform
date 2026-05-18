@@ -21,6 +21,7 @@ import { join } from "path";
 
 import type { Executor, LaunchOpts, LaunchResult, ExecutorStatus } from "../executor.js";
 import { logInfo, logWarn, logError } from "../observability/structured-log.js";
+import { buildAuthedHttpsUrl } from "../services/git/auth-url.js";
 
 /**
  * Project the claude-agent runtime YAML's optional fields into the env vars
@@ -69,33 +70,29 @@ export const claudeAgentExecutor: Executor = {
       return { ok: false, handle: "", message: `Session ${opts.sessionId} not found` };
     }
 
-    if (app.mode.kind === "hosted" && process.env.ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE !== "1") {
-      return {
-        ok: false,
-        handle: "",
-        message:
-          "claude-agent executor is local-mode only -- per-session state writes to the conductor's " +
-          "tracks dir which lives on the pod's ephemeral disk in hosted mode. Use claude-code on a " +
-          "real compute target for hosted deployments. " +
-          "For laptop dev (docker-compose), set ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE=1.",
-      };
-    }
-
     // Conductor-side session dir for the executor's log tee (stdio.log) so
     // `ark session output` and the dashboard's Logs tab have something to
     // read while arkd is still being provisioned. The agent's own
     // transcript.jsonl + stdio.log live on the WORKER under /tmp/ark-<sid>
     // and are surfaced via arkd /file/read.
-    const sessionDir = join(app.config.dirs.tracks, session.id);
-    mkdirSync(sessionDir, { recursive: true });
-    const stdioPath = join(sessionDir, "stdio.log");
+    //
+    // In hosted mode the dispatcher pod is ephemeral and shared across
+    // tenants -- per-session state must NOT land on its local disk. Skip
+    // the local tee and rely on opts.onLog for in-flight visibility; the
+    // durable transcript lives on the compute pod via arkd.
+    const writeLocalTee = app.mode.kind !== "hosted";
+    const sessionDir = writeLocalTee ? join(app.config.dirs.tracks, session.id) : null;
+    if (sessionDir) mkdirSync(sessionDir, { recursive: true });
+    const stdioPath = sessionDir ? join(sessionDir, "stdio.log") : null;
 
     const log = (msg: string): void => {
       if (opts.onLog) opts.onLog(msg);
-      try {
-        appendFileSync(stdioPath, `[exec ${new Date().toISOString()}] ${msg}\n`);
-      } catch {
-        /* stdio.log not writable yet -- the upstream onLog still fired */
+      if (stdioPath) {
+        try {
+          appendFileSync(stdioPath, `[exec ${new Date().toISOString()}] ${msg}\n`);
+        } catch {
+          /* tee best-effort; opts.onLog already fired */
+        }
       }
     };
 
@@ -132,11 +129,25 @@ export const claudeAgentExecutor: Executor = {
     // computation; falls back to effectiveWorkdir when the row hasn't been
     // provisioned yet (the lifecycle below will provision and re-resolve).
     const workerSessionDir = `/tmp/ark-${session.id}`;
-    const previewHandle = target.compute.attachExistingHandle?.({
-      name: compute.name,
-      status: compute.status,
-      config: (compute.config ?? {}) as Record<string, unknown>,
-    });
+    // Mirror the pr.ts / status-poller.ts / claude-code.ts fallback: when
+    // session.compute_name points at the K8s template, attachExistingHandle
+    // returns null (no pod_name on the template row). Fall back to the
+    // per-session handle persisted on session.config.compute_handle by
+    // runTargetLifecycle. Without this fallback, previewHandle is null and
+    // workerWorkdir falls through to effectiveWorkdir (today covered by the
+    // setupSessionWorktree short-circuit's resolveWorkdir call, but kept
+    // explicit here for parity with other call sites).
+    const persistedHandle = (
+      session.config as { compute_handle?: import("../compute/types.js").ComputeHandle } | null | undefined
+    )?.compute_handle;
+    const previewHandle =
+      target.compute.attachExistingHandle?.({
+        name: compute.name,
+        status: compute.status,
+        config: (compute.config ?? {}) as Record<string, unknown>,
+      }) ??
+      persistedHandle ??
+      null;
     const workerWorkdir =
       (previewHandle && target.compute.resolveWorkdir?.(previewHandle, session)) ?? effectiveWorkdir ?? null;
     const workerPromptFile = `${workerSessionDir}/task.txt`;
@@ -157,7 +168,7 @@ export const claudeAgentExecutor: Executor = {
       // rejected silently as "not for me".
       ARK_SESSION_HANDLE: handle,
       ARK_SESSION_DIR: workerSessionDir,
-      ARK_WORKTREE: workerWorkdir ?? session.workdir ?? session.repo ?? "",
+      ARK_WORKTREE: workerWorkdir ?? session.workdir ?? session.repo ?? workerSessionDir,
       ARK_PROMPT_FILE: workerPromptFile,
       ARK_ARKD_URL: process.env.ARK_ARKD_URL ?? `http://localhost:${app.config.ports.arkd}`,
     };
@@ -190,6 +201,27 @@ export const claudeAgentExecutor: Executor = {
     // Secrets (ANTHROPIC_API_KEY etc.) take precedence -- last-write-wins.
     const secretEnv = opts.env ?? {};
 
+    // Durable precondition signal. An empty CLAUDE_CODE_OAUTH_TOKEN /
+    // ANTHROPIC_API_KEY is the single most common silent-hang cause: the
+    // agent launches, calls the SDK query, and waits on auth forever with
+    // no error. Record auth presence on the session event log BEFORE the
+    // launch so "MISSING" is a loud, queryable signal instead of a hang
+    // that has to be found by grepping launcher.sh inside a dead pod.
+    const trimmed = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+    const auth = trimmed(secretEnv.CLAUDE_CODE_OAUTH_TOKEN)
+      ? "oauth"
+      : trimmed(secretEnv.ANTHROPIC_API_KEY)
+        ? "api_key"
+        : process.env.ARK_DEV_FORCE_DIRECT === "1" || arkEnv.ARK_DEV_FORCE_DIRECT === "1"
+          ? "dev_direct"
+          : "MISSING";
+    await app.events
+      .log(session.id, "agent_launch", {
+        actor: "system",
+        data: { runtime: "claude-agent", compute: compute.name, handle, auth },
+      })
+      .catch(() => {});
+
     // Launcher script: write task.txt, export env, exec ark run-agent-sdk.
     // No `exec bash` keepalive -- the headless SDK loop exits on end_turn,
     // arkd reaps the process, and the next stage's spawn happens cleanly
@@ -213,6 +245,12 @@ export const claudeAgentExecutor: Executor = {
     ].join("\n");
 
     log(`Launching claude-agent via ${compute.compute_kind} -> arkd /process/spawn (handle=${handle})`);
+    logInfo("compute", "claude-agent: spawning launcher", {
+      sessionId: session.id,
+      handle,
+      computeKind: compute.compute_kind,
+      workerWorkdir: workerWorkdir ?? "(none)",
+    });
 
     // Run the provisioning lifecycle (compute-start / ensure-reachable /
     // flush-secrets / prepare-workspace / isolation-prepare) and spawn
@@ -226,6 +264,13 @@ export const claudeAgentExecutor: Executor = {
     if (!lifecycleTarget || !computeHandle) {
       return { ok: false, handle: "", message: "no compute target resolved for claude-agent dispatch" };
     }
+
+    // Inject tenant-scoped basic-auth into private HTTPS remotes so the
+    // in-pod arkd's `git clone` authenticates -- it has no git credential
+    // helper. buildAuthedHttpsUrl returns the URL unchanged for non-https
+    // or unknown hosts. Mirrors claude-code executor's clone-source path.
+    const rawCloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo ?? null;
+    const cloneSource = rawCloneSource ? await buildAuthedHttpsUrl(app, session, rawCloneSource) : null;
 
     try {
       await runTargetLifecycle(
@@ -244,10 +289,7 @@ export const claudeAgentExecutor: Executor = {
         },
         {
           prepareCtx: { workdir: workerWorkdir ?? "", onLog: log },
-          workspace: {
-            source: (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo ?? null,
-            remoteWorkdir: workerWorkdir,
-          },
+          workspace: { source: cloneSource, remoteWorkdir: workerWorkdir, branch: session.branch ?? null },
           placement: opts.placement,
           computeStatus: compute.status,
           launchOverride: async () => {
@@ -349,11 +391,28 @@ export const claudeAgentExecutor: Executor = {
     const tenantApp = session.tenant_id ? app.forTenant(session.tenant_id) : app;
     const { target, compute } = await tenantApp.resolveComputeTarget(session);
     if (!target || !compute) return { state: "running" };
-    const computeHandle = target.compute.attachExistingHandle?.({
-      name: compute.name,
-      status: compute.status,
-      config: (compute.config ?? {}) as Record<string, unknown>,
-    });
+    // When session.compute_name points at a TEMPLATE compute row (e.g.
+    // "docs-k8s"), the template config has no pod_name, so
+    // K8sCompute.attachExistingHandle returns null. The actual pod metadata
+    // was persisted to session.config.compute_handle by runTargetLifecycle at
+    // provision time. That persisted handle is JSON-only (method closures
+    // don't survive JSON.stringify -- see target-resolver.ts:115-133), so we
+    // can't call statusProcess on it directly; we must rehydrate via
+    // Compute.rehydrateHandle to re-attach behaviour. Without this fallback
+    // probeStatus stalls at "running" forever even after the agent exits
+    // non-zero, hanging the session until the workflow's heartbeatTimeout.
+    const persistedState = ((session.config as { compute_handle?: unknown } | null | undefined)?.compute_handle ??
+      undefined) as import("../compute/types.js").PersistedComputeHandleState | undefined;
+    const validPersistedState =
+      persistedState && typeof persistedState.kind === "string" && typeof persistedState.name === "string"
+        ? persistedState
+        : undefined;
+    const computeHandle =
+      target.compute.attachExistingHandle?.({
+        name: compute.name,
+        status: compute.status,
+        config: (compute.config ?? {}) as Record<string, unknown>,
+      }) ?? (validPersistedState ? target.compute.rehydrateHandle(validPersistedState) : null);
     if (!computeHandle?.statusProcess) {
       // Compute handle can't tell us about processes -- safest answer is
       // "still running" so we don't false-positive into completed.

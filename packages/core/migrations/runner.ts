@@ -43,17 +43,17 @@ export class MigrationRunner {
    * no-op when the apply log already covers the target.
    */
   async apply(opts: MigrationRunOptions = {}): Promise<void> {
-    // Postgres boot: take a session-level advisory lock so two instances
-    // colliding at startup don't double-apply the same migration. The lock
-    // key is a stable hash of a fixed string so every instance agrees. The
-    // lock is released in a `finally` -- even if a migration throws, another
-    // booting instance must be able to retry after we exit.
+    // Take the global migration lock so two instances colliding at startup
+    // (control-plane daemon + hosted server + Temporal workers all boot
+    // against the same Postgres) don't double-apply. The adapter owns lock
+    // mechanics: Postgres pins pg_advisory_lock to one reserved connection
+    // (a pooled lock/unlock split silently leaks the lock and deadlocks
+    // every other booting instance); SQLite is a process-local pass-through.
     //
-    // SQLite doesn't need this because bun:sqlite is process-local: the only
-    // concurrent writers are inside one process, already serialized by the
-    // apply loop below.
-    const released = await this.acquireAdvisoryLock();
-    try {
+    // Concurrent callers block inside withMigrationLock until the holder's
+    // apply loop finishes, then run their own loop and find every migration
+    // already applied (a no-op). Migrations execute exactly once.
+    const runApply = async () => {
       await this.ensureMigrationsTable();
       await this.absorbLegacyInstall();
       const current = await this.currentVersion();
@@ -63,6 +63,18 @@ export class MigrationRunner {
         if (opts.targetVersion !== undefined && m.version > opts.targetVersion) break;
         await this.applyOne(m, ctx);
       }
+    };
+
+    if (this.db.withMigrationLock) {
+      await this.db.withMigrationLock(runApply);
+      return;
+    }
+
+    // Adapter without dedicated-connection locking (test mock adapters).
+    // These are SQLite-dialect; acquireAdvisoryLock is a no-op there.
+    const released = await this.acquireAdvisoryLock();
+    try {
+      await runApply();
     } finally {
       await released();
     }

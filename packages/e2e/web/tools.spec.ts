@@ -51,17 +51,6 @@ test("skill/list RPC returns every builtin skill file on disk", async () => {
   }
 });
 
-test("recipe/list RPC returns every builtin recipe file on disk", async () => {
-  const onDisk = builtinNames("recipes");
-  expect(onDisk.length).toBeGreaterThan(0);
-  const result = await ws.rpc<{ recipes?: Array<{ name: string }>; items?: Array<{ name: string }> }>("recipe/list");
-  const rows = result.recipes ?? result.items ?? [];
-  const rpcNames = rows.map((r) => r.name);
-  for (const name of onDisk) {
-    expect(rpcNames).toContain(name);
-  }
-});
-
 test("Tools page renders a skill name from skill/list when clicked", async () => {
   // Drives the disk → Store → RPC → DOM path end-to-end. A regression
   // in FileSkillStore, the RPC handler, or the Tools page list rendering

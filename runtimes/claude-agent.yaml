@@ -22,7 +22,7 @@ interactive: false
 #             SNI routing works. The agent's model catalog entry supplies the
 #             concrete provider slug for the gateway -- launch.ts never
 #             synthesises one.
-compat: [bedrock]
+compat: []
 # Optional: override the bundled claude binary's default haiku model id used
 # by built-in subagents (Explore etc.). Built-in subagents cannot be
 # reconfigured via the SDK's `agents` option per the SDK docs, but the
@@ -33,10 +33,10 @@ compat: [bedrock]
 # Anthropic-direct (the SDK's bundled id works there).
 #
 # Lives under runtime_config so runtime-specific knobs don't leak onto the
-# generic RuntimeDefinition shape:
-# runtime_config:
-#   claude-agent:
-#     default_haiku_model: pi-agentic/global.anthropic.claude-haiku-4-5
+# generic RuntimeDefinition shape.
+runtime_config:
+  claude-agent:
+    default_haiku_model: pi-agentic/global.anthropic.claude-haiku-4-5-20251001-v1-0
 billing:
   mode: api
   transcript_parser: agent-sdk

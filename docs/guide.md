@@ -20,7 +20,7 @@ This guide covers every user-visible concept. Start at the top for the 60-second
 12. Auth and Multi-Tenancy
 13. Git Worktrees
 14. Search
-15. Dashboards (CLI, Web, Desktop)
+15. Dashboards (CLI, Web)
 16. Knowledge Export and Import
 17. MCP Integration
 18. Remote Client Mode
@@ -61,7 +61,7 @@ ark session start \
   --dispatch
 
 # 4. Watch it work
-ark web               # web dashboard (or launch the Electron desktop app)
+ark web               # web dashboard
 # or
 ark session list
 ark session events <sessionId>
@@ -75,8 +75,6 @@ You now have:
 - events streaming to the CLI and Web dashboards
 
 Requirements: tmux, git, and (for auto-PR) the `gh` CLI. The tarball install bundles everything else. If installing from source, you also need [Bun](https://bun.sh). Ark is bun-only -- it uses `bun:sqlite`, `Bun.serve`, and Bun FFI.
-
-You can also install the [Ark Desktop app](packages/desktop/INSTALL.md) for a native window experience (macOS, Windows, Linux).
 
 ---
 
@@ -837,7 +835,7 @@ Search uses FTS5 when the `transcript_index` virtual table exists, and falls bac
 
 ---
 
-## 15. Dashboards (CLI, Web, Desktop)
+## 15. Dashboards (CLI, Web)
 
 Ark has three UI surfaces. Surface parity is a hard rule -- every feature that exists in one surface must exist in the others.
 
@@ -875,19 +873,6 @@ Key web features (v0.18):
 - **SSE live updates**: real-time event streaming, Recharts cost charts, conversation messages with typing indicators.
 
 The `--with-daemon` flag starts the conductor and arkd in-process so you get a fully working instance with a single command. If daemons are already running on those ports, Ark detects them via a `/health` probe and reuses them.
-
-### Desktop
-
-The Electron desktop app wraps the web dashboard with native window chrome and auto-starts all daemons on launch -- zero configuration needed.
-
-```bash
-make desktop            # launches Electron wrapper (dev)
-make desktop-build      # packages for distribution
-```
-
-As of v0.17, the desktop app is **fully self-contained** -- it bundles the `ark-native` binary inside the installer. Users download, install, and launch with no separate CLI install required. On first launch (macOS), a dialog offers to create a `/usr/local/bin/ark` symlink for terminal access.
-
-See [packages/desktop/INSTALL.md](../packages/desktop/INSTALL.md) for platform-specific install instructions and the macOS Gatekeeper workaround for the unsigned build.
 
 ---
 
@@ -1062,7 +1047,7 @@ helm install ark .infra/helm/ark \
 
 ## 21. Daemon Architecture
 
-Ark uses a daemon-client architecture. The server daemon runs on port 19400 and manages all state. The web dashboard and desktop app connect as thin WebSocket clients -- they do not run an in-process AppContext.
+Ark uses a daemon-client architecture. The server daemon runs on port 19400 and manages all state. The web dashboard connects as a thin WebSocket client -- it does not run an in-process AppContext.
 
 ### Managing the daemon
 
@@ -1072,11 +1057,11 @@ ark conductor stop         # stop a running daemon
 ark conductor status       # check if the daemon is running
 ```
 
-### Auto-start with web and desktop
+### Auto-start with web
 
-`ark web --with-daemon` starts the conductor (:19100) and arkd (:19300) in-process alongside the web server. The desktop app does this by default, so launching Ark Desktop gives you a fully working instance with no manual daemon management.
+`ark web --with-daemon` starts the conductor (:19100) and arkd (:19300) in-process alongside the web server, giving you a fully working instance with no manual daemon management.
 
-If the daemon is already running on those ports, both `ark web` and the desktop app detect it via a `/health` probe and reuse it instead of starting a second instance.
+If the daemon is already running on those ports, `ark web` detects it via a `/health` probe and reuses it instead of starting a second instance.
 
 ### Port summary
 
@@ -1248,4 +1233,4 @@ ark --server https://ark.company.com --token ark_default_xxx web
 
 ---
 
-That is the full tour. Every concept is documented here: sessions (with replay), 14 flows (including autonomous-sdlc and conditional routing), 13 agents, 6 runtimes (Claude Code, Claude Agent SDK, Claude Max, Codex, Gemini, Goose), skills, 10 recipes, all 11 compute providers, compute templates, the ops-codegraph knowledge graph, universal cost tracking with cost modes, the LLM router with optional TensorZero backend, multi-tenant auth, git worktrees, search, dashboards across CLI/Web/Desktop (with pipeline visualization, deep links, and keyboard shortcuts), knowledge export/import, MCP integration with socket pooling, remote client mode, the hosted control plane, deployment via Dockerfile/docker-compose/Helm, daemon architecture, messaging bridges (Telegram/Slack/Discord), profiles, schedules, and CLI utilities.
+That is the full tour. Every concept is documented here: sessions (with replay), 14 flows (including autonomous-sdlc and conditional routing), 13 agents, 6 runtimes (Claude Code, Claude Agent SDK, Claude Max, Codex, Gemini, Goose), skills, 10 recipes, all 11 compute providers, compute templates, the ops-codegraph knowledge graph, universal cost tracking with cost modes, the LLM router with optional TensorZero backend, multi-tenant auth, git worktrees, search, dashboards across CLI/Web (with pipeline visualization, deep links, and keyboard shortcuts), knowledge export/import, MCP integration with socket pooling, remote client mode, the hosted control plane, deployment via Dockerfile/docker-compose/Helm, daemon architecture, messaging bridges (Telegram/Slack/Discord), profiles, schedules, and CLI utilities.

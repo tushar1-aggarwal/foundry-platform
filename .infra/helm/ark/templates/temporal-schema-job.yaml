@@ -1,4 +1,14 @@
-{{- if and .Values.temporal.enabled .Values.temporal.schemaJob.enabled }}
+{{- /*
+Temporal schema setup + migration. Always emitted -- the server cannot start
+without its schema.
+
+post-install,post-upgrade hook (weight 0, after temporal-db-bootstrap at -5).
+The temporal databases exist by now (bootstrap created them, or the operator
+pre-provisioned them for external postgres). temporal-sql-tool fails fast if
+the database is briefly unreachable; the Job's backoffLimit is the k8s-native
+retry. setup-schema is idempotent and update-schema is a no-op when current,
+so re-runs on upgrade are safe (and required, to pick up new schema versions).
+*/ -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -8,17 +18,15 @@ metadata:
     {{- include "ark.labels" . | nindent 4 }}
     app.kubernetes.io/component: temporal-schema
   annotations:
-    # Run before any server pods come up, on every install and upgrade.
-    # update-schema is a no-op when schema is already current, so re-runs
-    # are cheap and safe.
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "argocd.argoproj.io/hook": PreSync
-    "argocd.argoproj.io/sync-wave": "-10"
+    "argocd.argoproj.io/hook": PostSync
+    "argocd.argoproj.io/sync-wave": "0"
     "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
 spec:
   backoffLimit: {{ .Values.temporal.schemaJob.backoffLimit }}
+  activeDeadlineSeconds: 600
   template:
     metadata:
       labels:
@@ -38,16 +46,10 @@ spec:
             - name: SQL_TLS_DISABLE_HOST_VERIFICATION
               value: "true"
             {{- end }}
-            # DDL (CREATE TABLE / CREATE INDEX) breaks under pgbouncer
-            # transaction-pool mode, so the schema tool MUST connect directly to
-            # the RDS endpoint, not via the runtime pgbouncer host that the
-            # server uses. For pilots without pgbouncer the two values are the
-            # same -- but this isolation makes the chart correct for any account
-            # that adds pgbouncer later.
             - name: SQL_HOST
-              value: {{ .Values.postgresql.external.host | quote }}
+              value: {{ include "ark.postgresqlHost" . | quote }}
             - name: SQL_PORT
-              value: {{ .Values.postgresql.external.port | quote }}
+              value: {{ include "ark.postgresqlPort" . | quote }}
             - name: SQL_USER
               valueFrom:
                 secretKeyRef:
@@ -65,24 +67,19 @@ spec:
               set -e
               DB={{ .Values.temporal.persistence.database }}
               VDB={{ .Values.temporal.persistence.visibilityDatabase }}
-              {{ if .Values.temporal.server.tls.enabled }}# RDS requires SSL: --tls --tls-disable-host-verification passed to every sql-tool call below.{{ end }}
+              {{ if .Values.temporal.server.tls.enabled }}# TLS: --tls --tls-disable-host-verification on every sql-tool call below.{{ end }}
 
-              # Idempotent setup helper: succeed cleanly if the schema_version
-              # table already exists; surface any other error (perms,
-              # connectivity, syntax) loudly so the Job fails for a real cause
-              # rather than silently swallowing it.
+              # Idempotent setup: succeed cleanly if schema_version already
+              # exists; surface any other error loudly so the Job fails for a
+              # real cause (perms, connectivity, syntax) and the controller
+              # retries via backoffLimit.
               run_setup() {
-                local db="$1"
-                local out
+                db="$1"
                 if out=$(temporal-sql-tool {{ if .Values.temporal.server.tls.enabled }}--tls --tls-disable-host-verification {{ end }}--db "$db" setup-schema -v 0.0 2>&1); then
-                  echo "$out"
-                  return 0
+                  echo "$out"; return 0
                 fi
-                # `setup-schema` errors with `relation "schema_version" already exists`
-                # (or close variants) on already-initialized databases.
                 if echo "$out" | grep -qiE 'already exists|already initialized'; then
-                  echo "Schema for $db already initialized, skipping setup."
-                  return 0
+                  echo "Schema for $db already initialized, skipping setup."; return 0
                 fi
                 echo "ERROR: setup-schema failed for $db:" >&2
                 echo "$out" >&2
@@ -94,4 +91,3 @@ spec:
               run_setup "$VDB"
               temporal-sql-tool {{ if .Values.temporal.server.tls.enabled }}--tls --tls-disable-host-verification {{ end }}--db "$VDB" update-schema --schema-dir schema/postgresql/v12/visibility/versioned
               echo "Schema setup + update complete for $DB and $VDB."
-{{- end }}

@@ -79,7 +79,6 @@ services:
       ARK_PROFILE: control-plane
       ARK_LOG_LEVEL: info
       ARK_BLOB_BACKEND: local
-      ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE: "1"
       ARK_SECRETS_BACKEND: file
       ARK_AUTH_REQUIRE_TOKEN: "false"
       ARK_DEFAULT_TENANT: default

@@ -4,13 +4,11 @@ import { PageShell } from "../components/PageShell.js";
 import { AgentsView } from "../components/AgentsView.js";
 import type { AgentsSubTab } from "../components/agents/SubTabBar.js";
 import { Button } from "../components/ui/button.js";
-import type { DaemonStatus } from "../hooks/useDaemonStatus.js";
 
 interface AgentsPageProps {
   view: string;
   onNavigate: (view: string) => void;
   readOnly: boolean;
-  daemonStatus?: DaemonStatus | null;
   initialSelectedId?: string | null;
   onSelectedChange?: (id: string | null) => void;
   tab?: string | null;
@@ -21,7 +19,6 @@ export function AgentsPage({
   view,
   onNavigate,
   readOnly,
-  daemonStatus,
   initialSelectedId,
   onSelectedChange,
   tab,
@@ -38,7 +35,7 @@ export function AgentsPage({
   );
 
   return (
-    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly} daemonStatus={daemonStatus}>
+    <Layout view={view} onNavigate={onNavigate} readOnly={readOnly}>
       <PageShell
         title="Agents"
         padded={false}

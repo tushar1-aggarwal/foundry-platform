@@ -215,22 +215,31 @@ describe("H6 -- hosted mode requires storage.blobBackend=s3", () => {
 
 // ── H7 ─ di/runtime snapshot store ──────────────────────────────────────────
 
-describe("H7 -- hosted mode rejects FsSnapshotStore", () => {
-  it("AppContext.boot throws because snapshotStore factory refuses fs in hosted", async () => {
+describe("H7 -- hosted mode snapshot store is lazy", () => {
+  it("boots cleanly in hosted+s3 without an S3SnapshotStore impl (snapshot store is lazy)", async () => {
+    // No compute target in this deployment advertises capabilities.snapshot=true,
+    // so the snapshot store is never read. Boot must not eagerly construct it.
     const ctx = await forHostedTestAsync({
-      // s3 blob is configured (and the blobStore stub satisfies H6 too), so
-      // H7's snapshotStore guard is the one that fires.
       storage: { blobBackend: "s3", s3: { bucket: "b", region: "us-east-1", prefix: "p" } },
       stubBlobStore: true,
     });
-    let err: unknown = null;
-    try {
-      await ctx.boot();
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toMatch(/snapshotStore.*hosted/i);
+    await ctx.boot();
+    await ctx.shutdown();
+    delete process.env.ARK_MODE;
+  });
+
+  it("accessing snapshotStore in hosted returns FsSnapshotStore (hosted gate deliberately removed)", async () => {
+    // Commit 4c973cbc deleted the devAllowLocalHostedStorage flag and the
+    // snapshot-store hosted gate: snapshotStore is now an unconditional
+    // FsSnapshotStore in every mode (no Firecracker/snapshot use cases yet,
+    // so the old hosted-throw safety net was intentionally dropped). This
+    // asserts the new contract so the decision can't silently regress.
+    const ctx = await forHostedTestAsync({
+      storage: { blobBackend: "s3", s3: { bucket: "b", region: "us-east-1", prefix: "p" } },
+      stubBlobStore: true,
+    });
+    await ctx.boot();
+    expect(ctx.snapshotStore.constructor.name).toBe("FsSnapshotStore");
     await ctx.shutdown();
     delete process.env.ARK_MODE;
   });
@@ -376,14 +385,16 @@ describe("M6 -- seedBuiltinResources is strict in hosted mode", () => {
   });
 });
 
-// ── M7 ─ claude-agent executor refusal ─────────────────────────────────────
+// ── M7 ─ claude-agent executor in hosted mode ──────────────────────────────
 
-describe("M7 -- claude-agent executor refuses launch in hosted mode", () => {
-  it("returns ok: false with a clear message in hosted mode", async () => {
+describe("M7 -- claude-agent executor in hosted mode is stateless", () => {
+  it("does NOT refuse with the legacy local-mode message", async () => {
+    // The old contract refused hosted mode at the front door. The new
+    // contract is: launch proceeds into compute resolution (and may fail
+    // for other reasons in this test setup where no compute is wired),
+    // but the executor must not return the legacy "local-mode only"
+    // refusal.
     const ctx = await forHostedTestAsync();
-    // We don't need a fully booted hosted stack -- the executor only needs
-    // app.mode + app.sessions. Build a minimal session row through the
-    // SQLite DB by booting in local mode first then flipping mode.
     await ctx.shutdown().catch(() => undefined);
     delete process.env.ARK_MODE;
 
@@ -401,8 +412,42 @@ describe("M7 -- claude-agent executor refuses launch in hosted mode", () => {
       initialPrompt: "test",
       agent: { name: "test", model: "claude-3" } as any,
     });
-    expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/claude-agent executor is local-mode only/);
+    // Result may be ok:false for other reasons (no compute target wired
+    // in this minimal test), but the message MUST NOT be the legacy
+    // local-mode refusal.
+    if (result.message) {
+      expect(result.message).not.toMatch(/local-mode only/);
+    }
+
+    await local.shutdown();
+  });
+
+  it("does NOT write per-session stdio.log to conductor's tracks dir in hosted mode", async () => {
+    // The executor used to mkdir <tracks>/<session.id> and append stdio.log
+    // there. In hosted mode the dispatcher pod is ephemeral and shared, so
+    // per-session state must not land on its local disk.
+    const local = await AppContext.forTestAsync();
+    await local.boot();
+    const session = await local.sessions.create({ summary: "hosted-tracks-test" });
+    const hostedMode = buildHostedAppMode({ dialect: "postgres", url: "postgres://x" }, local.config as any);
+    (local as any)._container.register({ mode: asValue(hostedMode) });
+
+    const expectedSessionDir = join(local.config.dirs.tracks, session.id);
+    // Stamp pre-state -- ensure dir doesn't already exist from prior test.
+    expect(existsSync(expectedSessionDir)).toBe(false);
+
+    const { claudeAgentExecutor } = await import("../executors/claude-agent.js");
+    await claudeAgentExecutor.launch({
+      app: local,
+      sessionId: session.id,
+      task: "test",
+      initialPrompt: "test",
+      agent: { name: "test", model: "claude-3" } as any,
+    });
+
+    // After launch in hosted mode, the per-session dir under tracks must
+    // NOT have been created.
+    expect(existsSync(expectedSessionDir)).toBe(false);
 
     await local.shutdown();
   });

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useApi } from "../hooks/useApi.js";
 import { useSessionDetail } from "../hooks/useSessionDetail.js";
 import { useSessionActions } from "../hooks/useSessionActions.js";
-import { useModelsQuery } from "../hooks/useRuntimeQueries.js";
+import { useModelsQuery } from "../hooks/useCatalogQueries.js";
 import { fmtCost, fmtTokens } from "../util.js";
 import { friendlyAgentName } from "../lib/inline-display.js";
 
@@ -147,7 +147,6 @@ export function SessionDetail({
   const headerActions = (
     <HeaderActions
       status={session.status}
-      isActive={d.isActive}
       canShowGate={canShowGate}
       actionLoading={actionLoading}
       onAction={handleAction}

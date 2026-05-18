@@ -6,9 +6,6 @@
  * first-class entity with a slug, a human name, and a lifecycle status
  * ("active" | "suspended" | "archived").
  *
- * Mirrors `TenantPolicyManager`: lazy `ensureSchema()` guarded by a cached
- * promise, every public method async, no sync ctor work.
- *
  * Soft-delete: `delete(id)` is now a soft-delete (see migration 004).
  * Hard DELETE is gone -- we set `deleted_at` so downstream rows keep their
  * referential integrity and the audit trail is preserved. The old cascade
@@ -26,7 +23,6 @@ import { TenantRepository, type ListOptions, type TenantRow, type TenantStatus }
 export type { ListOptions } from "../repositories/tenants.js";
 import { TeamRepository } from "../repositories/teams.js";
 import { MembershipRepository } from "../repositories/memberships.js";
-import { logDebug } from "../observability/structured-log.js";
 
 export type Tenant = TenantRow;
 export type { TenantStatus };
@@ -40,7 +36,6 @@ function assertSlug(slug: string): void {
 }
 
 export class TenantManager {
-  private _initialized: Promise<void> | null = null;
   private _repo: TenantRepository;
   private _teams: TeamRepository;
   private _memberships: MembershipRepository;
@@ -51,42 +46,17 @@ export class TenantManager {
     this._memberships = new MembershipRepository(db);
   }
 
-  private async ensureSchema(): Promise<void> {
-    if (this._initialized) return this._initialized;
-    this._initialized = (async () => {
-      try {
-        const ddl =
-          "CREATE TABLE IF NOT EXISTS tenants (" +
-          "id TEXT PRIMARY KEY, " +
-          "slug TEXT NOT NULL, " +
-          "name TEXT NOT NULL, " +
-          "status TEXT NOT NULL DEFAULT 'active', " +
-          "deleted_at TEXT, " +
-          "deleted_by TEXT, " +
-          "created_at TEXT NOT NULL, " +
-          "updated_at TEXT NOT NULL)";
-        await this.db.exec(ddl);
-      } catch {
-        logDebug("general", "tenants table exists");
-      }
-    })();
-    return this._initialized;
-  }
-
   async list(opts: ListOptions = {}): Promise<Tenant[]> {
-    await this.ensureSchema();
     return this._repo.list(opts);
   }
 
   async get(idOrSlug: string, opts: ListOptions = {}): Promise<Tenant | null> {
-    await this.ensureSchema();
     const byId = await this._repo.get(idOrSlug, opts);
     if (byId) return byId;
     return this._repo.getBySlug(idOrSlug, opts);
   }
 
   async create(opts: { slug: string; name: string; id?: string; status?: TenantStatus }): Promise<Tenant> {
-    await this.ensureSchema();
     assertSlug(opts.slug);
     const existing = await this._repo.getBySlug(opts.slug);
     if (existing) throw new Error(`Tenant with slug '${opts.slug}' already exists`);
@@ -95,7 +65,6 @@ export class TenantManager {
   }
 
   async update(id: string, fields: Partial<Pick<Tenant, "slug" | "name" | "status">>): Promise<Tenant | null> {
-    await this.ensureSchema();
     // Mirror the deletion guard: 'default' is the seeded landing tenant
     // for new sign-ups (auth/login.ts JIT-flow); a slug rename or
     // status change would silently mismatch the hardcoded id the
@@ -119,7 +88,6 @@ export class TenantManager {
    * it) means "system" deleter.
    */
   async delete(id: string, userId: string | null = null): Promise<boolean> {
-    await this.ensureSchema();
     // 'default' is the seeded landing tenant for new sign-ups. Deleting
     // it breaks the JIT-membership path in the login flow.
     if (id === "default") {
@@ -149,12 +117,10 @@ export class TenantManager {
    * old shape back.
    */
   async restore(id: string): Promise<boolean> {
-    await this.ensureSchema();
     return this._repo.restore(id);
   }
 
   async setStatus(id: string, status: TenantStatus): Promise<Tenant | null> {
-    await this.ensureSchema();
     if (id === "default") {
       throw new Error(
         "Cannot change status of the 'default' tenant: it is the seeded landing target for new sign-ups.",

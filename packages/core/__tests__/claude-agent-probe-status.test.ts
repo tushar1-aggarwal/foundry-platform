@@ -137,4 +137,83 @@ describe("claude-agent.probeStatus (#435)", () => {
 
     expect(result.state).toBeDefined();
   });
+
+  it("falls back to session.config.compute_handle when attachExistingHandle returns null (template-row bug)", async () => {
+    // Regression for the docs-flow EKS hang: session.compute_name points at
+    // a TEMPLATE compute row (e.g. "docs-k8s") whose config has no pod_name.
+    // K8sCompute.attachExistingHandle returns null for that template row, so
+    // probeStatus previously hit the `!computeHandle?.statusProcess` guard
+    // and returned { state: "running" } forever even though arkd in the pod
+    // had { running: false, exitCode: 1 } ready under ark-s-<sid>.
+    //
+    // Strategy: stub app.resolveComputeTarget to return a target whose
+    // compute.attachExistingHandle is a stub returning null AND whose
+    // compute.rehydrateHandle is a stub returning a methoded handle. The
+    // session carries a RAW persisted compute_handle (kind/name/meta only --
+    // no method closures, because JSON.stringify drops them; target-resolver.ts
+    // documents this). The fix must call rehydrateHandle on the persisted
+    // state to re-attach statusProcess, not pass the raw handle directly.
+    // See status-poller.ts:129-137 for the precedent pattern.
+    const session = await makeSessionPinnedToLocal("template-row-phantom-handle");
+
+    // Persist a RAW handle on session.config -- kind/name/meta only, no
+    // statusProcess closure. This is what runTargetLifecycle writes via
+    // persistHandleState (target-resolver.ts) after stripping method closures.
+    const sessionWithHandle = {
+      ...session,
+      config: {
+        ...(session.config as object),
+        compute_handle: {
+          kind: "local" as const,
+          name: "local",
+          meta: { mock_pod: "ark-mock-pod" },
+        },
+      },
+    };
+
+    // Track whether rehydrateHandle is called -- the fix must use it to
+    // re-attach methods. We supply a methoded handle so statusProcess works.
+    let rehydrateCalled = false;
+    const methodedHandle = {
+      kind: "local" as const,
+      name: "local",
+      meta: { mock_pod: "ark-mock-pod" },
+      statusProcess: async (_h: string) => ({ running: false as const, exitCode: 1 }),
+    } as any;
+
+    const origResolve = app.resolveComputeTarget.bind(app);
+    (app as any).resolveComputeTarget = async (s: any) => {
+      const result = await origResolve(s);
+      if (result?.target?.compute) {
+        result.target.compute = {
+          ...result.target.compute,
+          // Simulate template row: attachExistingHandle sees no pod_name -> null
+          attachExistingHandle: (_row: any) => null,
+          // Rehydrate the raw persisted state into a methoded handle. This is
+          // what the fix must call to recover statusProcess.
+          rehydrateHandle: (state: any) => {
+            rehydrateCalled = true;
+            return { ...methodedHandle, meta: state.meta ?? methodedHandle.meta };
+          },
+        } as any;
+      }
+      return result;
+    };
+
+    try {
+      const probeResult = await claudeAgentExecutor.probeStatus!({
+        app,
+        session: sessionWithHandle as any,
+        handle: `ark-${session.id}`,
+      });
+
+      // Without the fix this returns { state: "running" } silently.
+      // With the fix it must rehydrate the persisted handle and return failed.
+      expect(rehydrateCalled).toBe(true);
+      expect(probeResult.state).toBe("failed");
+      expect((probeResult as { error?: string }).error).toMatch(/exit.*1/i);
+    } finally {
+      (app as any).resolveComputeTarget = origResolve;
+    }
+  });
 });

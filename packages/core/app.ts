@@ -40,6 +40,8 @@ import type {
   FlowStateRepository,
   LedgerRepository,
   ScopingOverrideRepository,
+  SkillRepository,
+  SkillVersionRepository,
 } from "./repositories/index.js";
 import type { ScopingResolver } from "./scoping/index.js";
 import { ComputeTemplateRepository as ComputeTemplateRepositoryCtor } from "./repositories/index.js";
@@ -65,7 +67,7 @@ import type {
   AuthSessionManager,
   LoginManager,
 } from "./auth/index.js";
-import type { TenantClaudeAuthManager } from "./auth/tenant-claude-auth.js";
+import type { TenantClaudeAuthRepository } from "./repositories/tenant_claude_auth.js";
 import type { WorkerRegistry } from "./hosted/worker-registry.js";
 import type { SessionScheduler } from "./hosted/scheduler.js";
 import type { PricingRegistry } from "./observability/pricing.js";
@@ -194,15 +196,25 @@ export class AppContext {
       this._container.register(wrapped);
     }
 
-    // Eagerly resolve the cluster of stores whose hosted-mode contract is
-    // "no local-disk fallback" so a misconfigured deployment fails at boot
-    // with a clear error rather than at first session/pause or first input
-    // upload (potentially under load). The factories themselves contain the
-    // real configuration check; we just trip them here so awilix surfaces
-    // the throw before lifecycle.start() spins up the conductor.
+    // Eagerly resolve the blob store at boot: it's used on every session
+    // (tracks, inputs, transcripts), so a misconfigured deployment is better
+    // off failing here than at first upload under load.
+    //
+    // The snapshot store stays lazy. Today's hosted deployments run on
+    // K8sCompute, which advertises capabilities.snapshot=false and throws
+    // NotSupportedError from snapshot()/restore(). The pause-with-snapshot
+    // path short-circuits before touching the store, so the store is never
+    // read. Eagerly resolving it here was a defensive sanity check that
+    // turned out to guard an unreachable door -- it forced every hosted
+    // deployment to either implement S3SnapshotStore (still TODO) or carry
+    // the ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE bypass.
+    //
+    // The factory's throw at di/runtime.ts is preserved: any future caller
+    // that actually invokes app.snapshotStore on a snapshot-capable compute
+    // will get the same operator-facing error this eager resolve used to
+    // produce.
     if (this.mode.kind === "hosted") {
       this._container.resolve("blobStore");
-      this._container.resolve("snapshotStore");
     }
 
     await this._container.cradle.lifecycle.start();
@@ -450,9 +462,9 @@ export class AppContext {
           // Read the canonical launch_executor (set by post-launch when the
           // session was dispatched), with the agent-definition runtime as
           // fallback for legacy sessions. Defaulting to "claude-code" was a
-          // mix of concerns: each runtime needs its own probeStatus path
-          // (#435) -- claude-agent uses /process/status, not tmux. A wrong
-          // runtime here makes the poller probe the wrong endpoint.
+          // mix of concerns: each runtime needs its own probeStatus path --
+          // claude-agent uses /process/status, not tmux. A wrong runtime
+          // here makes the poller probe the wrong endpoint.
           const tenantApp = this.forTenant(session.tenant_id);
           const runtime = await resolveSessionExecutor(tenantApp, session);
           if (!runtime) {
@@ -518,24 +530,6 @@ export class AppContext {
     // arkDir so subsequent writes land on disk.
     if (this.mode.kind === "hosted") {
       process.env.ARK_MODE = "hosted";
-      // Laptop hosted dev: when ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE=1 is set,
-      // the operator is running hosted mode against Docker Compose on a real
-      // laptop filesystem (not an ephemeral pod). Materialise the arkDir and
-      // bind the structured log so logInfo/logDebug calls become visible at
-      // ${arkDir}/ark.jsonl. NEVER set this env in real k8s deployments --
-      // the file sink stays null there, matching the original contract.
-      if (process.env.ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE === "1") {
-        for (const dir of [
-          this.config.dirs.ark,
-          this.config.dirs.tracks,
-          this.config.dirs.worktrees,
-          this.config.dirs.logs,
-        ]) {
-          mkdirSync(dir, { recursive: true });
-        }
-        setLogArkDir(this.config.dirs.ark);
-        setProfilesArkDir(this.config.dirs.ark);
-      }
       return;
     }
 
@@ -695,8 +689,8 @@ export class AppContext {
     return this._resolve("users");
   }
 
-  /** Per-tenant Claude credential binding manager. Available after boot. */
-  get tenantClaudeAuth(): TenantClaudeAuthManager {
+  /** Per-tenant Claude credential binding repository. Available after boot. */
+  get tenantClaudeAuth(): TenantClaudeAuthRepository {
     return this._resolve("tenantClaudeAuth");
   }
 
@@ -735,6 +729,20 @@ export class AppContext {
    */
   get scopingOverrides(): ScopingOverrideRepository {
     return this._resolve("scopingOverrides");
+  }
+
+  /**
+   * Skill Hub registry: tenant-scoped CRUD-with-history for user / team /
+   * tenant skills users push from the CLI. Distinct from `skills` (the
+   * builtin file-backed skill resource store, defined below).
+   */
+  get skillHub(): SkillRepository {
+    return this._resolve("skillHub");
+  }
+
+  /** Ancestor body lookups for the 3-way merge protocol (skill/get_with_ancestor). */
+  get skillVersions(): SkillVersionRepository {
+    return this._resolve("skillVersions");
   }
 
   get sessionService(): SessionService {

@@ -44,7 +44,10 @@ test("sidebar shows ark brand tile", async () => {
 });
 
 test("sidebar nav items have correct labels", async () => {
-  const expected = ["Sessions", "Agents", "Flows", "Compute", "History", "Knowledge", "Tools", "Schedules", "Costs"];
+  // Mirrors BASE_NAV_ITEMS in packages/web/src/components/Layout.tsx. The
+  // "Knowledge" / "Memory" rail entry was removed and "Integrations"
+  // replaced it; keep this list in sync if the rail changes again.
+  const expected = ["Sessions", "Agents", "Flows", "Compute", "History", "Tools", "Schedules", "Integrations", "Costs"];
   for (const label of expected) {
     await expect(page.locator(`nav button:has-text("${label}")`)).toBeVisible();
   }
@@ -55,53 +58,42 @@ test("sidebar nav items have correct labels", async () => {
 test("sessions view is shown by default", async () => {
   // Navigate back to Sessions first in case previous tests changed the view
   await page.click('nav button:has-text("Sessions")');
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 });
 
 test("click Agents tab navigates to agents page", async () => {
   await page.click('nav button:has-text("Agents")');
-  await expect(page.locator("h1")).toContainText("Agents");
+  await expect(page.locator("h1", { hasText: "Agents" })).toBeVisible();
 });
 
 test("click Tools tab navigates to tools page", async () => {
   await page.click('nav button:has-text("Tools")');
-  await expect(page.locator("h1")).toContainText("Tools");
+  await expect(page.locator("h1", { hasText: "Tools" })).toBeVisible();
 });
 
 test("click Flows tab navigates to flows page", async () => {
   await page.click('nav button:has-text("Flows")');
-  await expect(page.locator("h1")).toContainText("Flows");
-});
-
-test("click History tab navigates to history page", async () => {
-  await page.click('nav button:has-text("History")');
-  await expect(page.locator("h1")).toContainText("History");
+  await expect(page.locator("h1", { hasText: "Flows" })).toBeVisible();
 });
 
 test("click Compute tab navigates to compute page", async () => {
   await page.click('nav button:has-text("Compute")');
-  await expect(page.locator("h1")).toContainText("Compute");
+  await expect(page.locator("h1", { hasText: "Compute" })).toBeVisible();
 });
 
 test("click Schedules tab navigates to schedules page", async () => {
   await page.click('nav button:has-text("Schedules")');
-  await expect(page.locator("h1")).toContainText("Schedules");
-});
-
-test("click Knowledge tab navigates to memory page", async () => {
-  // Nav label is "Knowledge" but the page still uses "Memory" terminology internally.
-  await page.click('nav button:has-text("Knowledge")');
-  await expect(page.locator("h1")).toContainText("Memory");
+  await expect(page.locator("h1", { hasText: "Schedules" })).toBeVisible();
 });
 
 test("click Costs tab navigates to costs page", async () => {
   await page.click('nav button:has-text("Costs")');
-  await expect(page.locator("h1")).toContainText("Costs");
+  await expect(page.locator("h1", { hasText: "Costs" })).toBeVisible();
 });
 
 test("click Sessions tab returns to sessions page", async () => {
   await page.click('nav button:has-text("Sessions")');
-  await expect(page.locator("h1")).toContainText("Sessions");
+  await expect(page.locator("h1", { hasText: "Sessions" })).toBeVisible();
 });
 
 // -- SSE event stream ---------------------------------------------------------

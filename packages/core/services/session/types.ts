@@ -45,6 +45,9 @@ export interface GcComputeIfTemplateCb {
 export interface ResolveComputeTargetCb {
   (session: Session): Promise<{ target: ComputeTarget | null; compute: Compute | null }>;
 }
+export interface CleanupSessionCb {
+  (session: Session): Promise<void>;
+}
 export interface AdvanceCb {
   (sessionId: string, force?: boolean): Promise<{ ok: boolean; message: string }>;
 }
@@ -112,6 +115,8 @@ export interface SessionLifecycleDeps {
   resolveComputeTarget: ResolveComputeTargetCb;
   /** Stage-advance callback. Used by approveReviewGate to force-advance past a gate. */
   advance: AdvanceCb;
+  /** Full post-terminal cleanup (worktree + creds + event log). Used by kill(). */
+  cleanupSession: CleanupSessionCb;
   /** Workspace provisioner (takes AppContext upstream; passed as a callback). */
   provisionWorkspaceWorkdir: (
     session: Session,
