@@ -135,14 +135,17 @@ dev-temporal-down: ## Stop and remove the local Temporal cluster + its data volu
 # ship as `docker-compose`. Some laptop setups have only one of the two.
 DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 
-dev-docker: ## Sub-target: Postgres :15433 + Redis :6379 containers (factored out of dev-control-plane)
+dev-docker: ## Sub-target: Postgres :15433 + Redis :6379 + LocalStack :4566 containers (factored out of dev-control-plane)
 	@command -v docker >/dev/null 2>&1 || { echo "Docker required. Install Docker Desktop."; exit 1; }
-	@echo "\033[1mStarting Ark dev docker (Postgres + Redis)...\033[0m"
-	# Scope to postgres+redis only. The compose file also defines `temporal-worker`,
-	# but that service depends on the Temporal server (separate `ark-temporal` project)
-	# being up at host.docker.internal:7233. `dev-control-plane` brings the worker up
-	# explicitly after `dev-temporal`; running it here would fail `--wait`.
-	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d --wait postgres redis
+	@echo "\033[1mStarting Ark dev docker (Postgres + Redis + LocalStack)...\033[0m"
+	# Scope to postgres+redis+localstack only. The compose file also defines
+	# `temporal-worker`, but that service depends on the Temporal server
+	# (separate `ark-temporal` project) being up at host.docker.internal:7233.
+	# `dev-control-plane` brings the worker up explicitly after `dev-temporal`;
+	# running it here would fail `--wait`. LocalStack must be up before the
+	# server because hosted-mode boot eagerly resolves blobStore (see
+	# packages/core/app.ts:176) and a missing endpoint fails the throw.
+	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d --wait postgres redis localstack
 	@echo ""
 	@echo "  Postgres:  postgres://ark:ark@localhost:15433/ark"
 	@echo "  Redis:     redis://localhost:6379"

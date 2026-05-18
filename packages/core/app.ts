@@ -173,7 +173,7 @@ export class AppContext {
     // read. Eagerly resolving it here was a defensive sanity check that
     // turned out to guard an unreachable door -- it forced every hosted
     // deployment to either implement S3SnapshotStore (still TODO) or carry
-    // the ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE bypass.
+    // a dev-only bypass that has since been removed (commit 4c973cbc).
     //
     // The factory's throw at di/runtime.ts is preserved: any future caller
     // that actually invokes app.snapshotStore on a snapshot-capable compute
