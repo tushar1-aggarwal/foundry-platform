@@ -279,7 +279,10 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       stage: sessForLog?.stage ?? undefined,
       data: { force: force ?? false },
     });
-    const result = await scoped.stageAdvance.advance(sessionId, force ?? false);
+    // Temporal owns gates/routing; a manual advance just signals the
+    // current stage done (the `force` flag is moot -- there is no
+    // conductor-side gate to bypass any more).
+    const result = await scoped.sessionProgression.stageDone(sessionId);
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -288,11 +291,12 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/complete", async (params, notify, ctx) => {
     const { sessionId } = extract<SessionIdParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
+    // sessionService.complete already writes the Temporal stage-done
+    // contract (status:"ready" + cleared session_id); the workflow's
+    // awaitStageCompletionActivity picks that up and advances. No separate
+    // advance call is needed under Temporal.
     const result = await scoped.sessionService.complete(sessionId);
     if (!result.ok) throw new RpcError(result.message ?? "Complete failed", SESSION_NOT_FOUND);
-    // Advance the flow after completing the stage -- without this, sessions
-    // get stuck at "ready" instead of progressing to the next stage or "completed".
-    await scoped.stageAdvance.advance(sessionId, true);
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -480,7 +484,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/handoff", async (params, notify, ctx) => {
     const { sessionId, agent, instructions } = extract<SessionHandoffParams>(params, ["sessionId", "agent"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.stageAdvance.handoff(sessionId, agent, instructions);
+    const result = await scoped.sessionProgression.handoff(sessionId, agent, instructions);
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;

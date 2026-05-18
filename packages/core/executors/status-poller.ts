@@ -335,9 +335,9 @@ async function _handleStatus(
     const session = await app.sessions.get(sessionId);
     if (!session || session.status !== "running") return;
 
-    // Defensive guard: with explicit stopStatusPoller calls in stage-advance,
-    // this branch should never fire on a healthy stage handoff. Kept as a
-    // safety net for direct sessions.update() calls that bypass StageAdvanceService.
+    // Defensive guard: the lifecycle seam stops the poller explicitly on
+    // stage entry, so this branch should never fire on a healthy handoff.
+    // Kept as a safety net for direct sessions.update() that bypass it.
     if (session.session_id && session.session_id !== handle) return;
 
     // `not_found` means the handle is gone. That happens cleanly when the

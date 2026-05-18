@@ -9,7 +9,6 @@
 
 import { asFunction, Lifetime } from "awilix";
 import type { AppContainer } from "../container.js";
-import type { DatabaseAdapter } from "../database/index.js";
 import type { AppContext } from "../app.js";
 import type { ArkConfig } from "../config.js";
 import type { SessionRepository } from "../repositories/session.js";
@@ -40,14 +39,13 @@ import {
 import type { SessionLifecycleDeps } from "../services/session/index.js";
 import { SessionAttachService } from "../services/session/attach.js";
 import { DispatchService } from "../services/dispatch/index.js";
-import { StageAdvanceService } from "../services/stage-advance/index.js";
+import { SessionProgression } from "../services/session-progression.js";
 import { executeAction } from "../services/actions/index.js";
 import { depsFromApp } from "../services/deps.js";
 import { getOutput } from "../services/session-output.js";
 import { removeSessionWorktree } from "../services/worktree/index.js";
 import { deletePerSessionCredsSecret, materializeClaudeAuthForDispatch } from "../services/dispatch-claude-auth.js";
 import { garbageCollectComputeIfTemplate } from "../services/compute-lifecycle.js";
-import { capturePlanMdIfPresent } from "../services/plan-artifact.js";
 import { saveCheckpoint } from "../session/checkpoint.js";
 import { provisionWorkspaceWorkdir } from "../workspace/provisioner.js";
 import { buildFlowCallbacks } from "../services/flow-callbacks.js";
@@ -111,7 +109,7 @@ function buildSessionLifecycleDeps(c: SessionLifecycleCradle): SessionLifecycleD
     deleteCredsSecret: (session, compute) => deletePerSessionCredsSecret(depsFromApp(c.app), session, compute),
     gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(depsFromApp(c.app), computeName ?? null),
     resolveComputeTarget: (session) => c.app.resolveComputeTarget(session),
-    advance: (id, force) => c.app.stageAdvance.advance(id, force),
+    advance: (id) => c.app.sessionProgression.stageDone(id),
     cleanupSession: async (session) => {
       const { cleanupSession } = await import("../services/session/cleanup.js");
       await cleanupSession(depsFromApp(c.app), session);
@@ -178,9 +176,9 @@ export function registerServices(
           flows: c.flows,
           usageRecorder: c.usageRecorder,
           transcriptParsers: c.transcriptParsers,
-          advance: (id, force, outcome) => c.app.stageAdvance.advance(id, force, outcome),
+          advance: (id) => c.app.sessionProgression.stageDone(id),
           dispatch: (id) => c.app.dispatchService.dispatch(id),
-          executeAction: (id, action) => c.app.stageAdvance.executeAction(id, action),
+          executeAction: (id, action) => executeAction(depsFromApp(c.app), id, action),
           runVerification: (id) => c.app.sessionReviewer.runVerification(id),
           recordSessionUsage: (session, usage, provider, source) =>
             c.app.sessionCreator.recordUsage(session, usage, provider, source),
@@ -272,7 +270,7 @@ export function registerServices(
           checkpoint: (sessionId) => {
             void saveCheckpoint({ sessions: c.sessions, events: c.events }, sessionId);
           },
-          executeAction: (sessionId, action) => c.app.stageAdvance.executeAction(sessionId, action),
+          executeAction: (sessionId, action) => executeAction(depsFromApp(c.app), sessionId, action),
           dispatchChild: (childId) => c.app.dispatchService.dispatch(childId),
           fork: (parentId, task, opts) => forkFn(depsFromApp(c.app), parentId, task, opts),
           startStatusPoller: (sessionId, tmuxName, runtime) => startStatusPoller(c.app, sessionId, tmuxName, runtime),
@@ -284,51 +282,19 @@ export function registerServices(
       { lifetime },
     ),
 
-    // StageAdvanceService -- RF-3 narrow deps. No AppContext. Callbacks break
-    // the StageAdvance <-> SessionLifecycle cycle (clone / runVerification /
-    // recordSessionUsage) and keep the class free of back-refs.
-    stageAdvance: asFunction(
-      (c: {
-        sessions: SessionRepository;
-        events: EventRepository;
-        messages: MessageRepository;
-        todos: TodoRepository;
-        flowStates: FlowStateRepository;
-        flows: FlowStore;
-        runtimes: RuntimeStore;
-        transcriptParsers: TranscriptParserRegistry;
-        usageRecorder: UsageRecorder;
-        config: ArkConfig;
-        db: DatabaseAdapter;
-        app: AppContext;
-      }) =>
-        new StageAdvanceService({
+    // SessionProgression -- the out-of-workflow driver for Temporal
+    // sessions. Replaces the bespoke StageAdvanceService: the running
+    // workflow owns stage iteration/routing/gates/fan-out; this only
+    // exposes stageDone (the status:"ready" signal) + handoff
+    // (clone+dispatch). All advance side-effects now live in the Temporal
+    // lifecycle seam (temporal/activities/project-lifecycle.ts).
+    sessionProgression: asFunction(
+      (c: { sessions: SessionRepository; events: EventRepository; app: AppContext }) =>
+        new SessionProgression({
           sessions: c.sessions,
           events: c.events,
-          messages: c.messages,
-          todos: c.todos,
-          flowStates: c.flowStates,
-          flows: c.flows,
-          runtimes: c.runtimes,
-          transcriptParsers: c.transcriptParsers,
-          usageRecorder: c.usageRecorder,
-          config: c.config,
-          db: c.db,
+          sessionClone: (id, instructions) => c.app.sessionForker.clone(id, instructions),
           dispatch: (id) => c.app.dispatchService.dispatch(id),
-          executeAction: (id, action, opts) => executeAction(depsFromApp(c.app), id, action, opts),
-          runVerification: (id) => c.app.sessionReviewer.runVerification(id),
-          recordSessionUsage: (session, usage, provider, source) =>
-            c.app.sessionCreator.recordUsage(session, usage, provider, source),
-          sessionClone: (id, newName) => c.app.sessionForker.clone(id, newName),
-          capturePlanMd: (session) => capturePlanMdIfPresent(depsFromApp(c.app), session),
-          gcComputeIfTemplate: (computeName) =>
-            garbageCollectComputeIfTemplate(depsFromApp(c.app), computeName ?? null),
-          saveCheckpoint: (sessionId) => saveCheckpoint({ sessions: c.sessions, events: c.events }, sessionId),
-          ...buildFlowCallbacks(c.app),
-          // Stop the previous stage's poller before sessions.update clears
-          // session_id. Closes the stale-handle race documented at
-          // executors/status-poller.ts#L205.
-          stopStatusPoller: (sessionId) => c.app.statusPollers.stop(sessionId),
         }),
       { lifetime },
     ),

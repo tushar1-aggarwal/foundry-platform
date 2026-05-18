@@ -56,7 +56,7 @@ import type {
 } from "./services/session/index.js";
 import type { SessionAttachService } from "./services/session/attach.js";
 import type { DispatchService } from "./services/dispatch/index.js";
-import type { StageAdvanceService } from "./services/stage-advance/index.js";
+import type { SessionProgression } from "./services/session-progression.js";
 import type { FlowStore, SkillStore, AgentStore, RuntimeStore, ModelStore } from "./stores/index.js";
 import type { WorkspaceStore } from "./workspace/store.js";
 import { ComputeRegistries } from "./compute-registries.js";
@@ -784,8 +784,8 @@ export class AppContext {
   get dispatchService(): DispatchService {
     return this._resolve("dispatchService");
   }
-  get stageAdvance(): StageAdvanceService {
-    return this._resolve("stageAdvance");
+  get sessionProgression(): SessionProgression {
+    return this._resolve("sessionProgression");
   }
 
   // ── Resource stores ────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ const {
   projectSessionActivity,
   projectStageActivity,
   loadFlowActivity,
+  applyReviewRejectActivity,
 } = proxyActivities<typeof acts>({
   startToCloseTimeout: "1 hour",
   heartbeatTimeout: "60 seconds",
@@ -112,35 +113,77 @@ export async function sessionWorkflow(input: SessionWorkflowInput): Promise<void
       // gate state apart by `stage.type === "review_gate"` (or `gate === "manual"`)
       // rather than a status flag.
       if (kind === "review_gate") {
-        await projectStageActivity({
-          sessionId: input.sessionId,
-          stageIdx,
-          patch: { status: "ready" },
-        });
-        await condition(() => approved || rejected !== null);
-        if (rejected !== null) {
+        // Park on the approve/reject signal, durable across restarts. On
+        // reject, the rework-loop policy (on_reject prompt + max_rejections)
+        // is applied by applyReviewRejectActivity; a non-capped reject
+        // re-dispatches the stage agent for rework and we re-park here for
+        // re-review. Loop until approved or the rejection cap fails it.
+        for (;;) {
           await projectStageActivity({
             sessionId: input.sessionId,
             stageIdx,
-            patch: { status: "rejected", error: rejected },
+            patch: { status: "ready" },
           });
-          await projectSessionActivity({
+          await condition(() => approved || rejected !== null);
+
+          if (rejected !== null) {
+            const reason = rejected;
+            // Reset both gate signals before re-parking (forgetting this
+            // makes the next park exit immediately on the stale value).
+            approved = false;
+            rejected = null;
+
+            const { outcome } = await applyReviewRejectActivity({
+              sessionId: input.sessionId,
+              reason,
+            });
+            if (outcome === "failed") {
+              // max_rejections exceeded -- reject() already failed the row.
+              await projectStageActivity({
+                sessionId: input.sessionId,
+                stageIdx,
+                patch: { status: "rejected", error: reason },
+              });
+              await projectSessionActivity({
+                sessionId: input.sessionId,
+                patch: { status: "failed", error: reason },
+              });
+              return;
+            }
+
+            // Rework: reject() set rework_prompt + status:"ready" and
+            // re-dispatched the stage agent. Await that rework run, then
+            // loop back to re-park the gate for re-review.
+            const result = await awaitStageCompletionActivity({
+              sessionId: input.sessionId,
+              stageIdx,
+              timeoutMs: 3_600_000,
+            });
+            await projectStageActivity({
+              sessionId: input.sessionId,
+              stageIdx,
+              patch: { status: result.status, ...(result.error ? { error: result.error } : {}) },
+            });
+            if (result.status !== "completed") {
+              await projectSessionActivity({
+                sessionId: input.sessionId,
+                patch: { status: result.status, ...(result.error ? { error: result.error } : {}) },
+              });
+              return;
+            }
+            continue; // re-park the gate for re-review
+          }
+
+          // Approved.
+          approved = false;
+          rejected = null;
+          await projectStageActivity({
             sessionId: input.sessionId,
-            patch: { status: "failed", error: rejected },
+            stageIdx,
+            patch: { status: "completed" },
           });
-          return;
+          break;
         }
-        // Reset both gate signals for the next review_gate in the same flow.
-        // Forgetting `rejected = null` makes the next gate exit immediately
-        // via the `rejected !== null` branch since the variable still holds
-        // the prior gate's reason.
-        approved = false;
-        rejected = null;
-        await projectStageActivity({
-          sessionId: input.sessionId,
-          stageIdx,
-          patch: { status: "completed" },
-        });
         continue;
       }
 

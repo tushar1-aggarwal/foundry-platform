@@ -29,12 +29,11 @@ export async function dispatchStageActivity(input: {
   // Synchronise session.stage with the workflow's stageIdx before dispatching.
   // The dispatch chain reads `session.stage` (set at session create from
   // flow.stages[0].name) -- without this update, every workflow iteration
-  // dispatches the same first stage and never advances. The bespoke engine's
-  // StageAdvanceService keeps these in sync; under Temporal the workflow
-  // tracks stageIdx and is responsible for projecting it onto the row.
+  // dispatches the same first stage and never advances. The workflow owns
+  // stageIdx and projects it onto the row here.
   //
-  // Retry-recovery: when a prior attempt failed (action raised, the bespoke
-  // path in `maybeHandleActionStage` wrote status="failed" directly to the
+  // Retry-recovery: when a prior attempt failed (action raised and
+  // `maybeHandleActionStage` wrote status="failed" directly to the
   // session row), Temporal silently retries the activity. Without resetting
   // the row here, the retry can succeed but `awaitStageCompletionActivity`
   // still reads the stale "failed" status and the workflow gives up. Clearing

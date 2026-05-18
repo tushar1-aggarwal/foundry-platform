@@ -106,8 +106,12 @@ export async function joinFork(
   }
 
   await deps.events.log(parentId, "fork_joined", { actor: "user", data: { children: children.length } });
-  await deps.sessions.update(parentId, { status: "ready", fork_group: null });
-  return await deps.app!.stageAdvance.advance(parentId, true);
+  // status:"ready" is the Temporal stage-done signal -- the parent's
+  // workflow awaitStageCompletionActivity observes it and advances past
+  // the fan-out stage. (Clearing session_id mirrors signalStageDone; the
+  // parent never had a live handle while waiting.)
+  await deps.sessions.update(parentId, { status: "ready", session_id: null, fork_group: null });
+  return { ok: true, message: "Joined" };
 }
 
 /**
@@ -138,8 +142,9 @@ export async function checkAutoJoin(deps: OrchestrationDeps, childSessionId: str
     actor: "system",
     data: { children: children.length, failed: failed.length },
   });
-  await deps.sessions.update(parent.id, { status: "ready", fork_group: null });
-  await deps.app!.stageAdvance.advance(parent.id, true);
+  // status:"ready" is the Temporal stage-done signal (see signalStageDone) --
+  // the parent workflow advances past the fan-out stage on its own.
+  await deps.sessions.update(parent.id, { status: "ready", session_id: null, fork_group: null });
   return true;
 }
 

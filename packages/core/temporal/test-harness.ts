@@ -197,6 +197,7 @@ async function injectAllActivities(app: AppContext): Promise<void> {
   const projSession = await import("./activities/project-session.js");
   const projStage = await import("./activities/project-stage.js");
   const loadFlow = await import("./activities/load-flow.js");
+  const reject = await import("./activities/apply-review-reject.js");
 
   provision.injectDeps(deps);
   destroy.injectDeps(deps);
@@ -207,6 +208,7 @@ async function injectAllActivities(app: AppContext): Promise<void> {
   projSession.injectDeps(deps);
   projStage.injectDeps(deps);
   loadFlow.injectDeps(deps);
+  reject.injectDeps(deps);
 
   _activities = {
     provisionComputeActivity: provision.provisionComputeActivity,
@@ -218,6 +220,7 @@ async function injectAllActivities(app: AppContext): Promise<void> {
     projectSessionActivity: projSession.projectSessionActivity,
     projectStageActivity: projStage.projectStageActivity,
     loadFlowActivity: loadFlow.loadFlowActivity,
+    applyReviewRejectActivity: reject.applyReviewRejectActivity,
   };
 }
 

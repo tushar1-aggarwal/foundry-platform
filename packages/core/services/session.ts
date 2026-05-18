@@ -477,8 +477,8 @@ export class SessionService {
       return { ok: true, message: "OK", sessionId: id };
     }
 
-    const { approveReviewGate: legacyApprove } = await import("./review-gate.js");
-    return legacyApprove(this.app, id);
+    // Temporal is the sole orchestrator; a session without it is corrupt.
+    return { ok: false, message: `Session ${id} is not Temporal-orchestrated` };
   }
 
   /**
@@ -505,10 +505,8 @@ export class SessionService {
       return { ok: true, message: "OK", sessionId: id };
     }
 
-    const { rejectReviewGate: legacyReject } = await import("./review-gate.js");
-    const r = await legacyReject(this.app, id, reason ?? "");
-    // review-gate returns { ok, message } without sessionId; widen to SessionOpResult.
-    return { ...r, sessionId: id } as SessionOpResult;
+    // Temporal is the sole orchestrator; a session without it is corrupt.
+    return { ok: false, message: `Session ${id} is not Temporal-orchestrated` };
   }
 
   // ── Query helpers ─────────────────────────────────────────────────────────

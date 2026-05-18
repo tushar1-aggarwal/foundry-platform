@@ -108,10 +108,10 @@ export async function processReviewFeedback(
       },
     });
 
-    // Advance the review gate
+    // Advance the review gate via the Temporal approve signal (the
+    // sessionService method routes to handle.signal("approveReviewGate")).
     try {
-      const { approveReviewGate } = await import("../services/review-gate.js");
-      await approveReviewGate(app, session.id);
+      await app.sessionService.approveReviewGate(session.id);
     } catch {
       logDebug("bridge", "gate may already be advanced");
     }

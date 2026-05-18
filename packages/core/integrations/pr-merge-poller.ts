@@ -103,8 +103,9 @@ export async function checkSessionMerge(app: AppContext, session: Session, opts?
       data: { pr_url: session.pr_url, merged_at: data.mergedAt },
     });
 
-    // Advance past the merge stage -- advance() will see no next stage and mark session completed
-    await app.stageAdvance.advance(session.id, true);
+    // Signal the merge stage done; the Temporal workflow advances past it
+    // and -- the merge stage being terminal -- completes the session.
+    await app.sessionProgression.stageDone(session.id);
     return;
   }
 
