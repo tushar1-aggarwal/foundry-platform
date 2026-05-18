@@ -82,12 +82,12 @@ export async function validateSessionForDispatch(
  * return immediately; returns null when the stage is not an action.
  */
 export async function maybeHandleActionStage(
-  deps: Pick<DispatchDeps, "sessions" | "getStageAction" | "executeAction" | "mediateStageHandoff">,
+  deps: Pick<DispatchDeps, "sessions" | "getStageAction" | "executeAction">,
   session: Session,
 ): Promise<DispatchResult | null> {
   const sessionId = session.id;
   const stage = session.stage!;
-  const earlyAction = deps.getStageAction(session.flow, stage);
+  const earlyAction = await deps.getStageAction(session.flow, stage);
   if (earlyAction.type !== "action") return null;
 
   const result = await deps.executeAction(sessionId, earlyAction.action ?? "");
@@ -98,10 +98,7 @@ export async function maybeHandleActionStage(
     });
     return { ok: false, message: result.message };
   }
-  const postAction = await deps.sessions.get(sessionId);
-  if (postAction?.status === "ready") {
-    await deps.mediateStageHandoff(sessionId, { autoDispatch: true, source: "dispatch_action" });
-  }
+  // On success the Temporal workflow drives the post-action handoff.
   return {
     ok: true,
     launched: false,

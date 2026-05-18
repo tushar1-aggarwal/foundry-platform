@@ -130,7 +130,11 @@ function pickProviderKey(runtime: RuntimeDefinition, model: ModelDefinition): st
  * ModelDefinition. String refs hit the catalog; object refs are validated and
  * returned verbatim.
  */
-function resolveModelRef(app: AppContext, ref: string | InlineModelSpec, projectRoot?: string): ModelDefinition {
+async function resolveModelRef(
+  app: AppContext,
+  ref: string | InlineModelSpec,
+  projectRoot?: string,
+): Promise<ModelDefinition> {
   if (typeof ref === "string") {
     return resolveModelFromStore(app.models, ref, projectRoot);
   }
@@ -154,17 +158,11 @@ function resolveModelRef(app: AppContext, ref: string | InlineModelSpec, project
  * named runtimes throw; inline runtimes pass through with only the required
  * fields checked.
  */
-function resolveRuntimeRef(app: AppContext, ref: string | InlineRuntimeSpec): RuntimeDefinition {
+async function resolveRuntimeRef(app: AppContext, ref: string | InlineRuntimeSpec): Promise<RuntimeDefinition> {
   if (typeof ref === "string") {
-    const hit = app.runtimes.get(ref);
+    const hit = await app.runtimes.get(ref);
     if (!hit) {
-      // Sync stores return null synchronously; promise-returning hosted stores
-      // are a distinct branch but the dispatch path already serializes on a
-      // cached lookup via FlowStore.get() before we reach here.
-      const list = app.runtimes
-        .list()
-        .map((r) => r.name)
-        .sort();
+      const list = (await app.runtimes.list()).map((r) => r.name).sort();
       throw new Error(`Runtime "${ref}" not found. Available: [${list.join(", ")}]`);
     }
     return hit;
@@ -195,12 +193,12 @@ function resolveRuntimeRef(app: AppContext, ref: string | InlineRuntimeSpec): Ru
  *   - `_resolved_runtime_type` is set to the runtime's `type`.
  *   - `runtime_overrides[<runtime.name>]` is shallow-merged if present.
  */
-function buildAgent(
+async function buildAgent(
   app: AppContext,
   stage: StageDefinition,
   session: Session,
   projectRoot: string | undefined,
-): { agentBase: AgentDefinition; agentRef: string | ExtendedInlineAgentSpec } {
+): Promise<{ agentBase: AgentDefinition; agentRef: string | ExtendedInlineAgentSpec }> {
   const ref = stage.agent;
   if (ref === undefined || ref === null) {
     throw new Error(`Stage '${stage.name}' has no agent reference`);
@@ -210,7 +208,7 @@ function buildAgent(
   const vars = buildSessionVars(sessionRecord);
 
   if (typeof ref === "string") {
-    const agent = app.agents.get(ref, projectRoot);
+    const agent = await app.agents.get(ref, projectRoot);
     if (!agent) {
       throw new Error(`Agent "${ref}" not found`);
     }
@@ -262,9 +260,9 @@ function buildAgent(
  * Entry point. Resolves the full binding chain for a single stage and returns
  * a ready-to-dispatch `ResolvedStage`.
  */
-export function resolveStage(app: AppContext, session: Session, stage: StageDefinition): ResolvedStage {
+export async function resolveStage(app: AppContext, session: Session, stage: StageDefinition): Promise<ResolvedStage> {
   const projectRoot = findProjectRoot(session.workdir || session.repo || undefined) ?? undefined;
-  const { agentBase, agentRef } = buildAgent(app, stage, session, projectRoot);
+  const { agentBase, agentRef } = await buildAgent(app, stage, session, projectRoot);
 
   // Runtime ref: either the agent's string name OR an inline object smuggled
   // through an inline agent.
@@ -274,7 +272,7 @@ export function resolveStage(app: AppContext, session: Session, stage: StageDefi
     throw new Error(`Agent "${agentBase.name}" has no runtime`);
   }
 
-  const runtime = resolveRuntimeRef(app, runtimeRef);
+  const runtime = await resolveRuntimeRef(app, runtimeRef);
 
   // Runtime merge: env + type hint. Runtime's values fill gaps that the
   // agent didn't set; agent wins on conflict (matching the legacy contract).
@@ -312,7 +310,7 @@ export function resolveStage(app: AppContext, session: Session, stage: StageDefi
   if (!resolvedModelRef) {
     throw new Error(`Agent "${mergedAgent.name}" has no model and no stage.model override`);
   }
-  const model = resolveModelRef(app, resolvedModelRef, projectRoot);
+  const model = await resolveModelRef(app, resolvedModelRef, projectRoot);
 
   // Replace the agent.model with the concrete catalog id so downstream code
   // (executors, hooks) sees a canonical, unambiguous string.

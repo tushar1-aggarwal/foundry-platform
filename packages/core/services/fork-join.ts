@@ -10,7 +10,7 @@ import { randomUUID } from "crypto";
 import type { OrchestrationDeps } from "./deps.js";
 import * as flow from "./flow.js";
 import { logWarn } from "../observability/structured-log.js";
-import { markDispatchFailedShared } from "./session-dispatch-listeners.js";
+import { markDispatchFailedShared } from "./dispatch/mark-failed.js";
 
 type SessionOpResult = Promise<{ ok: true; sessionId: string } | { ok: false; message: string }>;
 

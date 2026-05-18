@@ -105,7 +105,7 @@ function rowToSession(row: DrizzleSelectSession): Session {
     user_id: row.userId,
     tenant_id: row.tenantId,
     workspace_id: row.workspaceId,
-    orchestrator: (row.orchestrator ?? "custom") as Session["orchestrator"],
+    orchestrator: (row.orchestrator ?? "temporal") as Session["orchestrator"],
     workflow_id: row.workflowId ?? null,
     workflow_run_id: row.workflowRunId ?? null,
     created_at: row.createdAt,
@@ -286,7 +286,7 @@ export class SessionRepository {
       userId: opts.user_id ?? null,
       tenantId: this.tenantId,
       workspaceId: opts.workspace_id ?? null,
-      orchestrator: opts.orchestrator ?? "custom",
+      orchestrator: opts.orchestrator ?? "temporal",
       createdAt: ts,
       updatedAt: ts,
     });

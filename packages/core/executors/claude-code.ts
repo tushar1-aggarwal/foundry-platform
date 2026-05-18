@@ -202,8 +202,8 @@ export const claudeCodeExecutor: Executor = {
     // merge rules.
     const runtimeName = opts.agent.runtime;
     const { collectMcpEntries, flowConnectorsFor } = await import("../connectors/index.js");
-    const flowConnectors = flowConnectorsFor(app, session.flow);
-    const runtimeMcpServers = collectMcpEntries(app, session, { runtimeName, flowConnectors });
+    const flowConnectors = await flowConnectorsFor(app, session.flow);
+    const runtimeMcpServers = await collectMcpEntries(app, session, { runtimeName, flowConnectors });
     const { resolveMcpConfigsDir } = await import("../install-paths.js");
 
     // Capability lives on Compute now; the registered impl for this row's

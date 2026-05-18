@@ -33,10 +33,10 @@ const DEFAULTS: Omit<AgentDefinition, "name"> = {
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export interface AgentStore {
-  list(projectRoot?: string): AgentDefinition[];
-  get(name: string, projectRoot?: string): AgentDefinition | null;
-  save(name: string, agent: AgentDefinition, scope?: "global" | "project", projectRoot?: string): void;
-  delete(name: string, scope?: "global" | "project", projectRoot?: string): boolean;
+  list(projectRoot?: string): Promise<AgentDefinition[]>;
+  get(name: string, projectRoot?: string): Promise<AgentDefinition | null>;
+  save(name: string, agent: AgentDefinition, scope?: "global" | "project", projectRoot?: string): Promise<void>;
+  delete(name: string, scope?: "global" | "project", projectRoot?: string): Promise<boolean>;
 }
 
 // ── File-backed implementation ──────────────────────────────────────────────
@@ -58,7 +58,7 @@ export class FileAgentStore implements AgentStore {
     this.projectDir = opts.projectDir;
   }
 
-  get(name: string, projectRoot?: string): AgentDefinition | null {
+  async get(name: string, projectRoot?: string): Promise<AgentDefinition | null> {
     const dirs: [string, AgentDefinition["_source"]][] = [];
     const projDir = projectRoot ? join(projectRoot, ".ark", "agents") : this.projectDir;
     if (projDir) dirs.push([projDir, "project"]);
@@ -74,7 +74,7 @@ export class FileAgentStore implements AgentStore {
     return null;
   }
 
-  list(projectRoot?: string): AgentDefinition[] {
+  async list(projectRoot?: string): Promise<AgentDefinition[]> {
     const agents = new Map<string, AgentDefinition>();
     const dirs: [string, AgentDefinition["_source"]][] = [
       [this.builtinDir, "builtin"],
@@ -94,7 +94,12 @@ export class FileAgentStore implements AgentStore {
     return [...agents.values()];
   }
 
-  save(name: string, agent: AgentDefinition, scope: "global" | "project" = "global", projectRoot?: string): void {
+  async save(
+    name: string,
+    agent: AgentDefinition,
+    scope: "global" | "project" = "global",
+    projectRoot?: string,
+  ): Promise<void> {
     const projDir = projectRoot ? join(projectRoot, ".ark", "agents") : this.projectDir;
     const dir = scope === "project" && projDir ? projDir : this.userDir;
     mkdirSync(dir, { recursive: true });
@@ -102,7 +107,7 @@ export class FileAgentStore implements AgentStore {
     writeFileSync(join(dir, `${name}.yaml`), YAML.stringify(data));
   }
 
-  delete(name: string, scope: "global" | "project" = "global", projectRoot?: string): boolean {
+  async delete(name: string, scope: "global" | "project" = "global", projectRoot?: string): Promise<boolean> {
     const projDir = projectRoot ? join(projectRoot, ".ark", "agents") : this.projectDir;
     const dir = scope === "project" && projDir ? projDir : this.userDir;
     const path = join(dir, `${name}.yaml`);

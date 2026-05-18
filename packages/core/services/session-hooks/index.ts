@@ -1,28 +1,26 @@
 /**
  * SessionHooks -- inbound event processing (hook status, channel reports,
- * stage handoffs, failure retries). Composes three internal appliers over a
- * shared `SessionHooksDeps` cradle-slice.
+ * failure retries). Composes the hook-status + report appliers over a
+ * shared `SessionHooksDeps` cradle-slice. Stage advancement is driven by
+ * the Temporal session-workflow, not here.
  */
 
-import type { Session } from "../../../types/index.js";
+import type { Session, SessionStatus } from "../../../types/index.js";
 import type { OutboundMessage } from "../channel/channel-types.js";
 import { HookStatusApplier } from "./hook-status.js";
 import { ReportApplier } from "./report.js";
-import { HandoffMediator } from "./handoff.js";
-import type { HookStatusResult, ReportResult, StageHandoffResult, SessionHooksDeps } from "./types.js";
+import type { HookStatusResult, ReportResult, SessionHooksDeps } from "./types.js";
 
-export type { HookStatusResult, ReportResult, StageHandoffResult, SessionHooksDeps } from "./types.js";
+export type { HookStatusResult, ReportResult, SessionHooksDeps } from "./types.js";
 export { parseOnFailure } from "./types.js";
 
 export class SessionHooks {
   private readonly hookStatus: HookStatusApplier;
   private readonly report: ReportApplier;
-  private readonly handoff: HandoffMediator;
 
   constructor(private readonly deps: SessionHooksDeps) {
     this.hookStatus = new HookStatusApplier(deps);
     this.report = new ReportApplier(deps);
-    this.handoff = new HandoffMediator(deps);
   }
 
   /**
@@ -119,18 +117,30 @@ export class SessionHooks {
   }
 
   /**
-   * Verify -> advance -> optional dispatch. Single entry point for stage
-   * transitions after an agent completes.
+   * Reset a failed session to `ready` for re-dispatch, gated on max retries.
+   * Stage advancement itself is driven by the Temporal session-workflow loop;
+   * this only flips a failed session back to `ready` so the workflow's next
+   * dispatchStageActivity can re-run the current stage.
    */
-  mediateStageHandoff(
-    sessionId: string,
-    opts?: { autoDispatch?: boolean; source?: string; outcome?: string },
-  ): Promise<StageHandoffResult> {
-    return this.handoff.mediate(sessionId, opts);
-  }
+  async retryWithContext(sessionId: string, opts?: { maxRetries?: number }): Promise<{ ok: boolean; message: string }> {
+    const { sessions, events } = this.deps;
+    const s = await sessions.get(sessionId);
+    if (!s) return { ok: false, message: "Session not found" };
+    if (s.status !== "failed") return { ok: false, message: "Session is not in failed state" };
 
-  /** Reset a failed session to `ready` for re-dispatch, gated on max retries. */
-  retryWithContext(sessionId: string, opts?: { maxRetries?: number }): Promise<{ ok: boolean; message: string }> {
-    return this.handoff.retryWithContext(sessionId, opts);
+    const maxRetries = opts?.maxRetries ?? 3;
+    const priorRetries = (await events.list(sessionId)).filter((e) => e.type === "retry_with_context").length;
+    if (priorRetries >= maxRetries) {
+      return { ok: false, message: `Max retries (${maxRetries}) reached` };
+    }
+
+    await events.log(sessionId, "retry_with_context", {
+      actor: "system",
+      data: { attempt: priorRetries + 1, error: s.error, stage: s.stage },
+    });
+
+    await sessions.update(sessionId, { status: "ready" as SessionStatus, error: null } as Partial<Session>);
+
+    return { ok: true, message: `Retry ${priorRetries + 1}/${maxRetries} queued` };
   }
 }

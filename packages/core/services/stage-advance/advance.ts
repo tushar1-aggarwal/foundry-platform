@@ -43,7 +43,7 @@ export class StageAdvanceService {
     if (!stage) return { ok: false, message: "No current stage. The session may have completed its flow." };
 
     if (!force) {
-      const { canProceed, reason } = deps.evaluateGate(flowName, stage, session);
+      const { canProceed, reason } = await deps.evaluateGate(flowName, stage, session);
       if (!canProceed) return { ok: false, message: reason };
     }
 
@@ -58,7 +58,7 @@ export class StageAdvanceService {
 
     // Graph flow routing: if the flow defines edges or depends_on, use DAG conditional routing.
     try {
-      const flowDef = deps.flows.get(flowName);
+      const flowDef = await deps.flows.get(flowName);
       const hasDependsOn = flowDef?.stages?.some((s) => s.depends_on?.length > 0);
       if (flowDef && (flowDef.edges?.length > 0 || hasDependsOn)) {
         const graphResult = await this.advanceGraph(session, flowName, stage, force);
@@ -81,7 +81,7 @@ export class StageAdvanceService {
   ): Promise<StageOpResult | null> {
     const { deps } = this;
     const sessionId = session.id;
-    const flowDef = deps.flows.get(flowName);
+    const flowDef = await deps.flows.get(flowName);
     if (!flowDef) return null;
 
     const graphFlow = parseGraphFlow(flowDef);
@@ -120,9 +120,9 @@ export class StageAdvanceService {
       }
 
       // Stage isolation: clear runtime handles so next stage gets a fresh runtime.
-      const graphNextStageDef = deps.getStage(flowName, graphNextStage);
+      const graphNextStageDef = await deps.getStage(flowName, graphNextStage);
       const graphIsolation = graphNextStageDef?.isolation ?? "fresh";
-      const graphNextAction = deps.getStageAction(flowName, graphNextStage);
+      const graphNextAction = await deps.getStageAction(flowName, graphNextStage);
       const graphSessionUpdates: Partial<Session> = { stage: graphNextStage, status: "ready", session_id: null };
       if (graphNextAction.agent) {
         // session.agent is `string | null` -- when the next stage's agent
@@ -155,7 +155,7 @@ export class StageAdvanceService {
         },
       });
       emitStageSpanEnd(sessionId, { status: "completed" });
-      const graphStageDef = deps.getStage(flowName, graphNextStage);
+      const graphStageDef = await deps.getStage(flowName, graphNextStage);
       emitStageSpanStart(sessionId, {
         stage: graphNextStage,
         agent: graphNextAction?.agent,
@@ -204,7 +204,7 @@ export class StageAdvanceService {
     const { deps } = this;
     const sessionId = session.id;
 
-    const nextStage = deps.resolveNextStage(flowName, stage, outcome);
+    const nextStage = await deps.resolveNextStage(flowName, stage, outcome);
     if (!nextStage) {
       // Flow complete -- persist final stage completion and tear down.
       try {
@@ -229,8 +229,8 @@ export class StageAdvanceService {
       logDebug("session", "flow-state persistence is best-effort -- stage still advances");
     }
 
-    const nextAction = deps.getStageAction(flowName, nextStage);
-    const nextStageDef = deps.getStage(flowName, nextStage);
+    const nextAction = await deps.getStageAction(flowName, nextStage);
+    const nextStageDef = await deps.getStage(flowName, nextStage);
     const isolation = nextStageDef?.isolation ?? "fresh";
     const sessionUpdates: Partial<Session> = { stage: nextStage, status: "ready", error: null, session_id: null };
     if (nextAction.agent) {
@@ -328,7 +328,7 @@ export class StageAdvanceService {
     if (!opts?.force) {
       const hasTodos = (await deps.todos.list(sessionId)).length > 0;
       const stageVerify =
-        session.stage && session.flow ? deps.getStage(session.flow, session.stage)?.verify : undefined;
+        session.stage && session.flow ? (await deps.getStage(session.flow, session.stage))?.verify : undefined;
       const repoVerify = session.workdir ? loadRepoConfig(session.workdir).verify : undefined;
       const hasScripts = (stageVerify ?? repoVerify ?? []).length > 0;
 
@@ -349,7 +349,7 @@ export class StageAdvanceService {
 
     // Parse agent transcript for token usage (non-Claude agents). Claude
     // usage is captured via hooks in applyHookStatus(); this handles codex/gemini.
-    this.parseNonClaudeTranscript(session);
+    await this.parseNonClaudeTranscript(session);
 
     await deps.sessions.update(sessionId, { status: "ready", session_id: null });
     // Internal cascade -- the outer complete() already keyed on idempotencyKey,
@@ -394,12 +394,12 @@ export class StageAdvanceService {
 
   // ── non-Claude transcript parsing (used by complete()) ─────────────────────
 
-  private parseNonClaudeTranscript(session: Session): void {
+  private async parseNonClaudeTranscript(session: Session): Promise<void> {
     const { deps } = this;
     try {
       const runtimeName = (session.config?.runtime as string | undefined) ?? session.agent;
       if (!runtimeName) return;
-      const runtime = deps.runtimes.get(runtimeName);
+      const runtime = await deps.runtimes.get(runtimeName);
       const parserKind = runtime?.billing?.transcript_parser;
       // Only handle non-Claude kinds here; Claude is handled via hooks in applyHookStatus.
       if (!parserKind || parserKind === "claude") return;
@@ -422,7 +422,7 @@ export class StageAdvanceService {
       const result = parser.parse(transcriptPath);
       if (result.usage.input_tokens > 0 || result.usage.output_tokens > 0) {
         const provider = parserKind === "codex" ? "openai" : parserKind === "gemini" ? "google" : parserKind;
-        deps.recordSessionUsage(session, result.usage, provider, "transcript");
+        await deps.recordSessionUsage(session, result.usage, provider, "transcript");
       }
     } catch (e: any) {
       logError("session", "non-Claude transcript parsing failed", {

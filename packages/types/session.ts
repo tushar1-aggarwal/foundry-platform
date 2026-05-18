@@ -176,8 +176,8 @@ export interface Session {
   updated_at: string;
 }
 
-/** Enum of supported orchestrators. `custom` is the in-tree engine; `temporal` routes through a Temporal workflow. */
-export type SessionOrchestrator = "custom" | "temporal";
+/** Enum of supported orchestrators. Temporal is the sole orchestrator -- every session routes through a Temporal workflow. */
+export type SessionOrchestrator = "temporal";
 
 export interface SessionInputs {
   /** Role-keyed absolute paths to files the session should consume. */

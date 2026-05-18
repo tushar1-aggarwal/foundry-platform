@@ -117,26 +117,23 @@ function buildSessionLifecycleDeps(c: SessionLifecycleCradle): SessionLifecycleD
       await cleanupSession(depsFromApp(c.app), session);
     },
     provisionWorkspaceWorkdir: (session, ws, opts) => provisionWorkspaceWorkdir(c.app, session, ws, opts),
-    // Wire Temporal workflow starter when hosted mode + flag enabled.
-    // Uses a lazy async import so the @temporalio packages are only
-    // loaded when actually needed (avoids startup cost in local mode).
-    startTemporalWorkflow:
-      c.config.features.temporalOrchestration && (c.config.database?.url?.startsWith("postgres") ?? false)
-        ? async (sessionId: string, flowName: string, tenantId: string) => {
-            const { getTemporalClient } = await import("../temporal/client.js");
-            const client = await getTemporalClient(c.config.temporal);
-            const wfId = `session-${sessionId}`;
-            const handle = await client.workflow.start("sessionWorkflow", {
-              taskQueue: `ark.${tenantId}.stages`,
-              workflowId: wfId,
-              // Hard wall-clock cap so a stuck workflow eventually closes
-              // itself. See SessionService.start() for rationale.
-              workflowExecutionTimeout: (c.config.temporal?.workflowExecutionTimeout ?? "24h") as any,
-              args: [{ sessionId, tenantId, flowName }],
-            });
-            return { workflowId: wfId, runId: handle.firstExecutionRunId };
-          }
-        : undefined,
+    // Temporal is the sole orchestrator: every session is driven by a
+    // sessionWorkflow. Lazy async import so the @temporalio packages load
+    // only when a session is actually created.
+    startTemporalWorkflow: async (sessionId: string, flowName: string, tenantId: string) => {
+      const { getTemporalClient } = await import("../temporal/client.js");
+      const client = await getTemporalClient(c.config.temporal);
+      const wfId = `session-${sessionId}`;
+      const handle = await client.workflow.start("sessionWorkflow", {
+        taskQueue: `ark.${tenantId}.stages`,
+        workflowId: wfId,
+        // Hard wall-clock cap so a stuck workflow eventually closes
+        // itself. See SessionService.start() for rationale.
+        workflowExecutionTimeout: (c.config.temporal?.workflowExecutionTimeout ?? "24h") as any,
+        args: [{ sessionId, tenantId, flowName }],
+      });
+      return { workflowId: wfId, runId: handle.firstExecutionRunId };
+    },
   };
 }
 
@@ -275,7 +272,6 @@ export function registerServices(
           checkpoint: (sessionId) => {
             void saveCheckpoint({ sessions: c.sessions, events: c.events }, sessionId);
           },
-          mediateStageHandoff: (sessionId, opts) => c.app.sessionHooks.mediateStageHandoff(sessionId, opts),
           executeAction: (sessionId, action) => c.app.stageAdvance.executeAction(sessionId, action),
           dispatchChild: (childId) => c.app.dispatchService.dispatch(childId),
           fork: (parentId, task, opts) => forkFn(depsFromApp(c.app), parentId, task, opts),

@@ -42,7 +42,7 @@ const agentShow: ToolDef = {
   inputSchema: z.object({ name: z.string() }),
   handler: async (input, { app }) => {
     const parsed = input as { name: string };
-    const agent = app.agents.get(parsed.name);
+    const agent = await app.agents.get(parsed.name);
     if (!agent) throw new Error(`Agent not found: ${parsed.name}`);
     return agent;
   },
@@ -55,8 +55,8 @@ const agentCreate: ToolDef = {
   handler: async (input, { app }) => {
     const parsed = input as { definition: { name: string } & Record<string, unknown> };
     const def = parsed.definition;
-    if (app.agents.get(def.name)) throw new Error(`Agent already exists: ${def.name}`);
-    app.agents.save(def.name, def as never, "global");
+    if (await app.agents.get(def.name)) throw new Error(`Agent already exists: ${def.name}`);
+    await app.agents.save(def.name, def as never, "global");
     return { name: def.name };
   },
 };
@@ -67,10 +67,10 @@ const agentUpdate: ToolDef = {
   inputSchema: z.object({ name: z.string(), patch: z.record(z.string(), z.unknown()) }),
   handler: async (input, { app }) => {
     const parsed = input as { name: string; patch: Record<string, unknown> };
-    const existing = app.agents.get(parsed.name);
+    const existing = await app.agents.get(parsed.name);
     if (!existing) throw new Error(`Agent not found: ${parsed.name}`);
     const merged = { ...existing, ...parsed.patch, name: parsed.name };
-    app.agents.save(parsed.name, merged as never, "global");
+    await app.agents.save(parsed.name, merged as never, "global");
     return { name: parsed.name };
   },
 };

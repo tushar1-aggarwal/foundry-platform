@@ -58,7 +58,6 @@ export function registerServerCommands(program: Command) {
 
       const server = new ArkServer();
       registerAllHandlers(server.router, serverApp);
-      server.attachLifecycle(serverApp);
       server.attachAuth(serverApp);
       server.attachApp(serverApp);
 

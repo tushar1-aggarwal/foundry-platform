@@ -56,7 +56,7 @@ export class SessionReviewer {
 
     const flowShim = { flows: d.flows } as unknown as Parameters<typeof flow.getStage>[0];
     const stageVerify =
-      session.stage && session.flow ? flow.getStage(flowShim, session.flow, session.stage)?.verify : undefined;
+      session.stage && session.flow ? (await flow.getStage(flowShim, session.flow, session.stage))?.verify : undefined;
     const repoConfig = session.workdir ? loadRepoConfig(session.workdir) : {};
     const scripts: string[] = stageVerify ?? repoConfig.verify ?? [];
 
@@ -133,7 +133,7 @@ export class SessionReviewer {
     if (!stageName) return { ok: false, message: "Session has no current stage" };
 
     const flowShim = { flows: d.flows } as unknown as Parameters<typeof flow.getStage>[0];
-    const stageDef = flow.getStage(flowShim, session.flow, stageName);
+    const stageDef = await flow.getStage(flowShim, session.flow, stageName);
     if (!stageDef) return { ok: false, message: `Stage '${stageName}' not found in flow '${session.flow}'` };
 
     if (stageDef.gate !== "review" && stageDef.gate !== "manual") {

@@ -19,8 +19,8 @@ import type { ModelDefinition } from "../../types/model.js";
 // ── Interface ───────────────────────────────────────────────────────────────
 
 export interface ModelStore {
-  list(projectRoot?: string): ModelDefinition[];
-  get(idOrAlias: string, projectRoot?: string): ModelDefinition | null;
+  list(projectRoot?: string): Promise<ModelDefinition[]>;
+  get(idOrAlias: string, projectRoot?: string): Promise<ModelDefinition | null>;
   /**
    * The canonical default model for boot-time seeding. Resolves the alias
    * "sonnet" against the catalog so operators can swap the default by
@@ -28,7 +28,7 @@ export interface ModelStore {
    * alias. Throws if the catalog has no "sonnet" alias -- a fresh install
    * with no model catalog is a broken install.
    */
-  default(projectRoot?: string): ModelDefinition;
+  default(projectRoot?: string): Promise<ModelDefinition>;
 }
 
 /** Alias used by `default()`. Hosted agent-store seeding calls this. */
@@ -178,16 +178,16 @@ export class FileModelStore implements ModelStore {
     return catalog;
   }
 
-  get(idOrAlias: string, projectRoot?: string): ModelDefinition | null {
+  async get(idOrAlias: string, projectRoot?: string): Promise<ModelDefinition | null> {
     return this.catalog(projectRoot).byKey.get(normaliseKey(idOrAlias)) ?? null;
   }
 
-  list(projectRoot?: string): ModelDefinition[] {
+  async list(projectRoot?: string): Promise<ModelDefinition[]> {
     return Array.from(this.catalog(projectRoot).byId.values());
   }
 
-  default(projectRoot?: string): ModelDefinition {
-    const hit = this.get(DEFAULT_MODEL_ALIAS, projectRoot);
+  async default(projectRoot?: string): Promise<ModelDefinition> {
+    const hit = await this.get(DEFAULT_MODEL_ALIAS, projectRoot);
     if (!hit) {
       throw new Error(
         `ModelStore: no catalog entry for alias "${DEFAULT_MODEL_ALIAS}". ` +

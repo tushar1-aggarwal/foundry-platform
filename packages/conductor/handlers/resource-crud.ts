@@ -220,7 +220,7 @@ export function registerResourceCrudHandlers(router: Router, app: AppContext): v
     const params = extract<{ name: string; yaml?: string; scope?: Scope } & Partial<SkillDefinition>>(p, ["name"]);
     const name = requireName(params.name);
     const projectRoot = resolveProjectRoot();
-    const existing = app.skills.get(name, projectRoot);
+    const existing = await app.skills.get(name, projectRoot);
     if (existing && existing._source !== "builtin") {
       throw new RpcError(`Skill '${name}' already exists`, ErrorCodes.INVALID_PARAMS);
     }
@@ -242,7 +242,7 @@ export function registerResourceCrudHandlers(router: Router, app: AppContext): v
 
     const skill = buildSkill(name, body);
     const resolved = resolveScope(params.scope, null, projectRoot);
-    app.skills.save(skill.name, skill, resolved, projectArg(resolved, projectRoot));
+    await app.skills.save(skill.name, skill, resolved, projectArg(resolved, projectRoot));
     return { ok: true, name: skill.name, scope: resolved };
   });
 
@@ -250,11 +250,11 @@ export function registerResourceCrudHandlers(router: Router, app: AppContext): v
     const { name, scope } = extract<{ name: string; scope?: Scope }>(p, ["name"]);
     const resolvedName = requireName(name);
     const projectRoot = resolveProjectRoot();
-    const existing = app.skills.get(resolvedName, projectRoot);
+    const existing = await app.skills.get(resolvedName, projectRoot);
     if (!existing) throw new RpcError(`Skill '${resolvedName}' not found`, ErrorCodes.SESSION_NOT_FOUND);
     guardBuiltin(existing, "Skill", resolvedName, "delete");
     const resolved = resolveScope(scope, existing, projectRoot);
-    const ok = app.skills.delete(resolvedName, resolved, projectArg(resolved, projectRoot));
+    const ok = await app.skills.delete(resolvedName, resolved, projectArg(resolved, projectRoot));
     return { ok };
   });
 }

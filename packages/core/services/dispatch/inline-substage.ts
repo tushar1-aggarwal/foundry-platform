@@ -98,7 +98,7 @@ export async function dispatchInlineSubStage(
   let agentName: string;
 
   if (typeof agentRef === "object" && agentRef !== null) {
-    agent = buildInlineAgent(deps.getApp(), agentRef, sessionAsVars(session));
+    agent = await buildInlineAgent(deps.getApp(), agentRef, sessionAsVars(session));
     agentName = agent?.name ?? "inline";
     if (!agent) return { ok: false, message: `Inline agent build failed for sub-stage '${subStage.name}'` };
   } else {
@@ -106,7 +106,7 @@ export async function dispatchInlineSubStage(
     // session's projectRoot; no server-cwd fallback (main dispatch() has it,
     // inline dispatch historically did not -- keep parity).
     agentName = agentRef;
-    agent = deps.resolveAgent(agentName, sessionAsVars(session), { projectRoot }) as AgentDefinition | null;
+    agent = (await deps.resolveAgent(agentName, sessionAsVars(session), { projectRoot })) as AgentDefinition | null;
     if (!agent) return { ok: false, message: `Agent '${agentName}' not found for sub-stage '${subStage.name}'` };
   }
 
@@ -127,7 +127,7 @@ export async function dispatchInlineSubStage(
   const executor = deps.resolveExecutor(runtime);
   if (!executor) return { ok: false, message: `Executor '${runtime}' not registered` };
 
-  const claudeArgs = runtime === "claude-code" ? deps.buildClaudeArgs(agent, { autonomy, projectRoot }) : [];
+  const claudeArgs = runtime === "claude-code" ? await deps.buildClaudeArgs(agent, { autonomy, projectRoot }) : [];
 
   const launchEnv = await buildLaunchEnv(deps, secrets, session, subStage, runtime, log);
   if (launchEnv.error) return { ok: false, message: launchEnv.error };

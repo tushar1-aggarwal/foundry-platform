@@ -13,7 +13,6 @@ export { SessionForker } from "./fork-clone.js";
 export { SessionReviewer, renderReworkPrompt } from "./review.js";
 
 export type {
-  LifecycleHooks,
   SessionLifecycleDeps,
   SessionOpResult,
   StartSessionOpts,

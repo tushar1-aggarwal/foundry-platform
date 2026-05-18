@@ -136,7 +136,7 @@ export async function syncCosts(app: AppContext): Promise<{ synced: number; skip
       skipped++;
       continue;
     }
-    const runtime = app.runtimes.get(runtimeName);
+    const runtime = await app.runtimes.get(runtimeName);
     const kind = runtime?.billing?.transcript_parser ?? "claude";
     const parser = app.transcriptParsers.get(kind);
     if (!parser) {

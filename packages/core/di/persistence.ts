@@ -46,7 +46,7 @@ import {
   FileModelStore,
   EphemeralFlowStore,
 } from "../stores/index.js";
-import type { ModelStore } from "../stores/model-store.js";
+import { DEFAULT_MODEL_ALIAS } from "../stores/model-store.js";
 import { DbResourceStore } from "../stores/db-resource-store.js";
 import { WorkspaceStore } from "../workspace/store.js";
 
@@ -202,8 +202,7 @@ export function registerResourceStores(container: AppContainer): void {
       { lifetime: Lifetime.SINGLETON },
     ),
     agents: asFunction(
-      (c: { db: DatabaseAdapter; config: ArkConfig; mode: AppMode; models: ModelStore }) =>
-        makeAgentStore(c.db, c.config, c.mode, c.models),
+      (c: { db: DatabaseAdapter; config: ArkConfig; mode: AppMode }) => makeAgentStore(c.db, c.config, c.mode),
       { lifetime: Lifetime.SINGLETON },
     ),
     runtimes: asFunction(
@@ -241,15 +240,14 @@ function makeSkillStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
   });
 }
 
-function makeAgentStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode, models: ModelStore) {
+function makeAgentStore(db: DatabaseAdapter, config: ArkConfig, mode: AppMode) {
   if (mode.kind === "hosted") {
-    // `model` default comes from the catalog (alias "sonnet") rather than a
-    // hardcoded string. A fresh install with an empty catalog throws here
-    // by design -- a missing catalog is a broken install, not a data state
-    // we want to paper over with a stale slug.
+    // `model` default is the canonical alias; agent rows that omit a model
+    // resolve it through the catalog at dispatch (resolveModelFromStore),
+    // which hard-fails loudly on an empty catalog.
     return new DbResourceStore(db, "agent", {
       description: "",
-      model: models.default().id,
+      model: DEFAULT_MODEL_ALIAS,
       max_turns: 200,
       system_prompt: "",
       tools: [],

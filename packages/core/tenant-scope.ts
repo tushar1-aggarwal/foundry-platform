@@ -44,6 +44,7 @@ import {
   LedgerRepository,
 } from "./repositories/index.js";
 import { DbResourceStore } from "./stores/db-resource-store.js";
+import { DEFAULT_MODEL_ALIAS } from "./stores/model-store.js";
 import { UsageRecorder } from "./observability/usage.js";
 import type { PricingRegistry } from "./observability/pricing.js";
 import { registerServices } from "./di/services.js";
@@ -157,14 +158,12 @@ export function buildTenantScope(parent: AppContext, tenantId: string): AppConte
     childContainer.register({
       agents: asFunction(
         (c: { db: DatabaseAdapter }) => {
-          // `model` default comes from the parent's ModelStore (alias
-          // "sonnet" by default). Keeps the hosted seed aligned with
-          // di/persistence.ts:makeAgentStore so a tenant-scoped store
-          // doesn't resurrect a stale hardcoded slug.
-          const defaultModelId = parent.models.default().id;
+          // `model` default is the canonical alias, aligned with
+          // di/persistence.ts:makeAgentStore. Agent rows that omit a model
+          // resolve it through the catalog at dispatch.
           const store = new DbResourceStore(c.db, "agent", {
             description: "",
-            model: defaultModelId,
+            model: DEFAULT_MODEL_ALIAS,
             max_turns: 200,
             system_prompt: "",
             tools: [],

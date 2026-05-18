@@ -112,13 +112,14 @@ export function resolveModel(catalog: Map<string, ModelDefinition>, idOrAlias: s
  * `resolve-stage.ts` so callers on the hot path can skip the catalog-map
  * plumbing and just call the store directly.
  */
-export function resolveModelFromStore(store: ModelStore, idOrAlias: string, projectRoot?: string): ModelDefinition {
-  const hit = store.get(idOrAlias, projectRoot);
+export async function resolveModelFromStore(
+  store: ModelStore,
+  idOrAlias: string,
+  projectRoot?: string,
+): Promise<ModelDefinition> {
+  const hit = await store.get(idOrAlias, projectRoot);
   if (hit) return hit;
-  const ids = store
-    .list(projectRoot)
-    .map((m) => m.id)
-    .sort();
+  const ids = (await store.list(projectRoot)).map((m) => m.id).sort();
   throw new Error(`Model "${idOrAlias}" not found in catalog. Available: [${ids.join(", ")}]`);
 }
 
@@ -160,17 +161,17 @@ export function transportKeyForCompat(compat: readonly string[] | undefined): st
  * null if the catalog doesn't know this id -- caller decides whether that's
  * fatal or whether to pass the raw id through.
  */
-export function resolveProviderSlug(
+export async function resolveProviderSlug(
   store: ModelStore,
   idOrAlias: string,
   compat: readonly string[] | undefined,
   projectRoot?: string,
-): string | null {
+): Promise<string | null> {
   // Already provider-qualified (e.g. "pi-agentic/global.anthropic.sonnet-4-6")
   // -- pass through untouched. Matches the dispatch-time precedence callers
   // expect: an explicit slug beats the catalog.
   if (idOrAlias.includes("/")) return idOrAlias;
-  const model = store.get(idOrAlias, projectRoot);
+  const model = await store.get(idOrAlias, projectRoot);
   if (!model) return null;
   const key = transportKeyForCompat(compat);
   // Prefer the transport-specific slug; fall back to anthropic-direct so

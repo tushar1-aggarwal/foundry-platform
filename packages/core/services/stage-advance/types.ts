@@ -59,7 +59,7 @@ export interface RecordUsageCb {
     usage: { input_tokens: number; output_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number },
     provider: string,
     source: string,
-  ): void;
+  ): Promise<void>;
 }
 export interface SessionCloneCb {
   (sessionId: string, newName?: string): Promise<SessionOpResult>;

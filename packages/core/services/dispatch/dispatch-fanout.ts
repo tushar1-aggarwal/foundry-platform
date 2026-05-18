@@ -64,8 +64,8 @@ export class FanOutDispatcher {
 
     // Zero-children fan-out is a dispatch failure: the parent has nothing to
     // wait on, so the auto-join path never fires and the session sits at
-    // `waiting` forever. Surface as ok:false so the caller (kickDispatch +
-    // mediateStageHandoff) marks the session failed via markDispatchFailedShared.
+    // `waiting` forever. Surface as ok:false so the caller marks the session
+    // failed.
     if (planned.length > 0 && children.length === 0) {
       return {
         ok: false,

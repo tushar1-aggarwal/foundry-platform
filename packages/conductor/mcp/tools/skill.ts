@@ -32,7 +32,7 @@ const skillShow: ToolDef = {
   inputSchema: z.object({ name: z.string() }),
   handler: async (input, { app }) => {
     const parsed = input as { name: string };
-    const skill = app.skills.get(parsed.name);
+    const skill = await app.skills.get(parsed.name);
     if (!skill) throw new Error(`Skill not found: ${parsed.name}`);
     return skill;
   },
@@ -45,8 +45,8 @@ const skillCreate: ToolDef = {
   handler: async (input, { app }) => {
     const parsed = input as { definition: { name: string } & Record<string, unknown> };
     const def = parsed.definition;
-    if (app.skills.get(def.name)) throw new Error(`Skill already exists: ${def.name}`);
-    app.skills.save(def.name, def as never, "global");
+    if (await app.skills.get(def.name)) throw new Error(`Skill already exists: ${def.name}`);
+    await app.skills.save(def.name, def as never, "global");
     return { name: def.name };
   },
 };
@@ -57,10 +57,10 @@ const skillUpdate: ToolDef = {
   inputSchema: z.object({ name: z.string(), patch: z.record(z.string(), z.unknown()) }),
   handler: async (input, { app }) => {
     const parsed = input as { name: string; patch: Record<string, unknown> };
-    const existing = app.skills.get(parsed.name);
+    const existing = await app.skills.get(parsed.name);
     if (!existing) throw new Error(`Skill not found: ${parsed.name}`);
     const merged = { ...existing, ...parsed.patch, name: parsed.name };
-    app.skills.save(parsed.name, merged as never, "global");
+    await app.skills.save(parsed.name, merged as never, "global");
     return { name: parsed.name };
   },
 };

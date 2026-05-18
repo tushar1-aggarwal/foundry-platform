@@ -30,11 +30,7 @@ export async function projectStageActivity(input: ProjectionInput): Promise<void
   if (input.stageIdx !== undefined && updates.stage === undefined) {
     session = await d.sessions.get(input.sessionId);
     if (session) {
-      const flowVal = d.flows.get(session.flow);
-      const flowDef =
-        flowVal && typeof (flowVal as { then?: unknown }).then === "function"
-          ? await (flowVal as Promise<import("../../services/flow.js").FlowDefinition | null>)
-          : (flowVal as import("../../services/flow.js").FlowDefinition | null);
+      const flowDef = await d.flows.get(session.flow);
       const stageName = flowDef?.stages?.[input.stageIdx]?.name;
       if (stageName) updates.stage = stageName;
     }

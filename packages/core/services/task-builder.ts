@@ -28,18 +28,18 @@ export function sessionAsVars(session: Session): Record<string, unknown> {
 }
 
 /** Build the task header: agent role, stage description, and reporting instructions. */
-export function formatTaskHeader(
+export async function formatTaskHeader(
   deps: OrchestrationDeps,
   session: Session,
   stage: string,
   agentName: string,
-): string[] {
+): Promise<string[]> {
   const parts: string[] = [];
   const isBare = session.flow === "bare";
 
   // Get resolved stage with substituted variables
   const vars = buildSessionVars(sessionAsVars(session));
-  const resolved = resolveFlow(deps, session.flow, vars);
+  const resolved = await resolveFlow(deps, session.flow, vars);
   const stageDef = resolved?.stages.find((s) => s.name === stage);
 
   // Every autonomously-dispatched session (including bare) gets an actionable
@@ -66,7 +66,7 @@ export function formatTaskHeader(
   // for --runtime overrides) and append its prompt verbatim. Missing YAML =
   // no completion ritual appended.
   const projectRoot = agentRegistry.findProjectRoot(session.workdir || session.repo) ?? undefined;
-  const agent = deps.agents.get(agentName, projectRoot);
+  const agent = await deps.agents.get(agentName, projectRoot);
   // The runtime override (via `scoping_overrides`) is applied by
   // `applyScopingRuntimeHint` in dispatch-core BEFORE task-builder runs,
   // so `agent.runtime` already reflects any override here. The legacy
@@ -74,7 +74,7 @@ export function formatTaskHeader(
   // had -- dropped.
   const effectiveRuntime = agent?.runtime;
   if (effectiveRuntime) {
-    const runtime = deps.runtimes.get(effectiveRuntime);
+    const runtime = await deps.runtimes.get(effectiveRuntime);
     if (runtime?.task_prompt) {
       parts.push(runtime.task_prompt);
     }
@@ -85,8 +85,7 @@ export function formatTaskHeader(
 
 /**
  * Render the session's attachments as a markdown block, fetching blob-backed
- * content on demand. Called from `appendPreviousStageContext` so it stays in
- * the async side of task construction -- `formatTaskHeader` remains sync.
+ * content on demand. Called from `appendPreviousStageContext`.
  *
  * Supports both shapes during the migration window: pre-upload entries carry
  * inline `content`, post-upload entries carry `locator`. After the first
@@ -188,13 +187,13 @@ export async function buildTaskWithHandoff(
   stage: string,
   agentName: string,
 ): Promise<string> {
-  const header = formatTaskHeader(deps, session, stage, agentName);
+  const header = await formatTaskHeader(deps, session, stage, agentName);
   const context = await appendPreviousStageContext(deps, session);
 
   // Apply message filter if agent config specifies one
   try {
     const projectRoot = agentRegistry.findProjectRoot(session.workdir || session.repo) ?? undefined;
-    const agent = deps.agents.get(agentName, projectRoot);
+    const agent = await deps.agents.get(agentName, projectRoot);
     if (agent) {
       const mFilter = parseMessageFilter(agent);
       if (mFilter) {

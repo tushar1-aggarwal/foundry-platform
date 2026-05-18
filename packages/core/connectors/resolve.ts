@@ -43,7 +43,7 @@ export function setConnectorRegistry(app: AppContext, registry: ConnectorRegistr
  * `writeChannelConfig`. The naming is historical -- it covers every opt-in
  * level above the agent YAML.
  */
-export function collectMcpEntries(
+export async function collectMcpEntries(
   app: AppContext,
   session: Session,
   opts: {
@@ -53,10 +53,10 @@ export function collectMcpEntries(
     /** Per-session connectors -- typically derived from `--with-mcp` flags. */
     sessionConnectors?: string[];
   },
-): (string | Record<string, unknown>)[] {
+): Promise<(string | Record<string, unknown>)[]> {
   const out: (string | Record<string, unknown>)[] = [];
   if (opts.runtimeName) {
-    const runtime = app.runtimes.get(opts.runtimeName);
+    const runtime = await app.runtimes.get(opts.runtimeName);
     for (const entry of runtime?.mcp_servers ?? []) out.push(entry);
   }
   if (opts.flowConnectors?.length || opts.sessionConnectors?.length) {
@@ -84,10 +84,10 @@ export function collectMcpEntries(
  * Read the connector list from a session's flow YAML. Returns an empty
  * array when the flow is unknown or has no connectors block.
  */
-export function flowConnectorsFor(app: AppContext, flowName: string | undefined): string[] {
+export async function flowConnectorsFor(app: AppContext, flowName: string | undefined): Promise<string[]> {
   if (!flowName) return [];
   try {
-    const flow = app.flows.get(flowName) as { connectors?: string[] } | null;
+    const flow = (await app.flows.get(flowName)) as { connectors?: string[] } | null;
     return flow?.connectors ?? [];
   } catch {
     return [];

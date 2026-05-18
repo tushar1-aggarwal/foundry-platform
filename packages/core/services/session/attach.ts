@@ -77,21 +77,21 @@ export type AttachPlan =
  *      when the current stage was dispatched. Always wins when present.
  *   2. session.agent's runtime field -- legacy fallback for older rows.
  */
-function resolveActiveRuntime(
+async function resolveActiveRuntime(
   deps: OrchestrationDeps,
   session: Pick<Session, "config" | "agent">,
-): { interactive?: boolean } | null {
+): Promise<{ interactive?: boolean } | null> {
   const cfg = session.config ?? null;
   const launchExecutor = (cfg as { launch_executor?: string } | null)?.launch_executor;
   if (launchExecutor) {
-    const r = deps.runtimes.get(launchExecutor);
+    const r = await deps.runtimes.get(launchExecutor);
     if (r) return r;
   }
   if (session.agent) {
-    const agent = deps.agents.get(session.agent);
+    const agent = await deps.agents.get(session.agent);
     const runtimeName = (agent as { runtime?: string } | undefined)?.runtime;
     if (runtimeName) {
-      const r = deps.runtimes.get(runtimeName);
+      const r = await deps.runtimes.get(runtimeName);
       if (r) return r;
     }
   }
@@ -121,7 +121,7 @@ export class SessionAttachService {
       };
     }
 
-    const runtime = resolveActiveRuntime(this.deps, session);
+    const runtime = await resolveActiveRuntime(this.deps, session);
     if (runtime?.interactive === false) {
       const tracksDir = this.deps.config.dirs.tracks;
       return {

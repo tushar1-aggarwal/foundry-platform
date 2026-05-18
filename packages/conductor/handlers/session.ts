@@ -63,7 +63,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     // validated here.
     const flowName = typeof opts.flow === "string" ? opts.flow : null;
     if (flowName && !opts.repo) {
-      const flow = scoped.flows.get(flowName);
+      const flow = await scoped.flows.get(flowName);
       if (flow?.requires_repo) {
         throw new RpcError(
           `Flow '${flowName}' requires a repo. Pass repo: <git-url-or-local-path>.`,
@@ -104,7 +104,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     if (!opts.runtime) {
       const runtimeOverride = await app.scoping.resolve<string>(ctx, "runtime");
       if (runtimeOverride !== null) {
-        if (app.runtimes.get(runtimeOverride) === null) {
+        if ((await app.runtimes.get(runtimeOverride)) === null) {
           throw new RpcError(
             `Runtime override '${runtimeOverride}' is not a registered runtime ` +
               `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
@@ -140,7 +140,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     {
       const modelOverride = await app.scoping.resolve<string>(ctx, "model");
       if (modelOverride !== null) {
-        if (app.models.get(modelOverride) === null) {
+        if ((await app.models.get(modelOverride)) === null) {
           throw new RpcError(
             `Model override '${modelOverride}' is not a registered model id or alias ` +
               `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
@@ -225,15 +225,9 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
           }
         : normalizedOpts;
 
-    // Atomic create + dispatch: splitting these across two RPCs used to force
-    // every caller (CLI, web, tests) to remember the second call or live with
-    // a session stuck at status=ready until the conductor's 60s poll tick.
-    //
-    // `start()` emits `session_created` before returning; the default
-    // dispatcher listener (registered above) kicks the background launcher.
-    const session = await scoped.sessionCreator.start(startOpts, {
-      onCreated: (id) => scoped.sessionService.emitSessionCreated(id),
-    });
+    // `start()` persists the session row and launches its Temporal
+    // sessionWorkflow, which drives every stage via dispatchStageActivity.
+    const session = await scoped.sessionCreator.start(startOpts);
     notify("session/created", { session });
     return { session };
   });
@@ -324,9 +318,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/fork", async (params, notify, ctx) => {
     const { sessionId, name, group_name } = extract<SessionForkParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionForker.fork(sessionId, name, {
-      onCreated: (sid) => scoped.sessionService.emitSessionCreated(sid),
-    });
+    const result = await scoped.sessionForker.fork(sessionId, name);
     if (!result.ok) {
       throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
@@ -341,9 +333,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/clone", async (params, notify, ctx) => {
     const { sessionId, name } = extract<SessionCloneParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionForker.clone(sessionId, name, {
-      onCreated: (sid) => scoped.sessionService.emitSessionCreated(sid),
-    });
+    const result = await scoped.sessionForker.clone(sessionId, name);
     if (!result.ok) {
       throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
@@ -514,7 +504,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     if (result.sessionId) {
       const session = await scoped.sessions.get(result.sessionId);
       if (session) notify("session/created", { session });
-      // spawn() emits session_created internally; the default listener handles dispatch.
+      // spawnSubagent starts the subagent's Temporal workflow, which drives dispatch.
     }
     return result;
   });
@@ -577,7 +567,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const session = await scoped.sessions.get(sessionId);
     if (!session) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
     const { getStages } = await import("../../core/services/flow.js");
-    const stages = getStages(scoped, session.flow).map((s) => ({
+    const stages = (await getStages(scoped, session.flow)).map((s) => ({
       name: s.name,
       type: s.action ? "action" : s.agent ? "agent" : (s.type ?? "agent"),
       agent: s.agent ?? null,

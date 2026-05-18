@@ -16,19 +16,19 @@ import * as flow from "./flow.js";
 import { depsFromApp } from "./deps.js";
 
 export interface GetStageCb {
-  (flowName: string, stageName: string): StageDefinition | null;
+  (flowName: string, stageName: string): Promise<StageDefinition | null>;
 }
 
 export interface GetStageActionCb {
-  (flowName: string, stageName: string): StageAction;
+  (flowName: string, stageName: string): Promise<StageAction>;
 }
 
 export interface ResolveNextStageCb {
-  (flowName: string, stage: string, outcome?: string): string | null;
+  (flowName: string, stage: string, outcome?: string): Promise<string | null>;
 }
 
 export interface EvaluateGateCb {
-  (flowName: string, stage: string, session: Session): { canProceed: boolean; reason: string };
+  (flowName: string, stage: string, session: Session): Promise<{ canProceed: boolean; reason: string }>;
 }
 
 /**

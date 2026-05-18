@@ -124,7 +124,7 @@ export class DispatchService {
     if (guard.blocked) return { ok: false, message: guard.message! };
 
     // 6. Per-stage compute template override.
-    const stageDef = this.deps.getStage(session.flow, stage);
+    const stageDef = await this.deps.getStage(session.flow, stage);
     const stageCompute = await this.compute.resolveForStage(stageDef, sessionId, log);
     if (stageCompute) {
       await this.deps.sessions.update(sessionId, { compute_name: stageCompute });
@@ -140,20 +140,19 @@ export class DispatchService {
     if (stageDef?.for_each !== undefined) {
       const sessionVars = buildSessionVars(session as unknown as Record<string, unknown>);
       const result = await this.foreach.dispatchForEach(sessionId, stageDef, sessionVars);
-      if (result.ok) {
-        await this.deps.mediateStageHandoff(sessionId, { autoDispatch: true, source: "dispatch_for_each" });
-      } else {
+      if (!result.ok) {
         await this.deps.sessions.update(sessionId, {
           status: "failed",
           error: result.message.slice(0, 500),
         });
       }
+      // On success the Temporal workflow drives the post-for_each handoff.
       return result;
     }
 
     // 9. Agent stage. Must come last -- all shorter-circuit paths above
     // consumed the dispatch if they applied.
-    const action = this.deps.getStageAction(session.flow, stage);
+    const action = await this.deps.getStageAction(session.flow, stage);
     if (action.type !== "agent") {
       return { ok: false, message: `Stage '${stage}' is ${action.type}, not agent` };
     }
@@ -177,9 +176,9 @@ export class DispatchService {
     // applyStageModelAndResolveSlug after the hints run, matching the
     // documented precedence: stage > resolver > agent declared.
     const cfg = (session.config as { scoping_runtime_hint?: string; scoping_model_hint?: string } | null) ?? {};
-    applyScopingRuntimeHint(this.deps, agent, cfg.scoping_runtime_hint, log);
-    applyScopingModelHint(this.deps, agent, cfg.scoping_model_hint, projectRoot, log);
-    applyStageModelAndResolveSlug(this.deps, agent, stageDef, projectRoot, log);
+    await applyScopingRuntimeHint(this.deps, agent, cfg.scoping_runtime_hint, log);
+    await applyScopingModelHint(this.deps, agent, cfg.scoping_model_hint, projectRoot, log);
+    await applyStageModelAndResolveSlug(this.deps, agent, stageDef, projectRoot, log);
 
     const autonomy = stageDef?.autonomy ?? "full";
 
@@ -211,7 +210,8 @@ export class DispatchService {
     if (!executor) return { ok: false, message: `Executor '${runtimeType}' not registered` };
 
     // Build claude args (only for claude-code executor)
-    const claudeArgs = runtimeType === "claude-code" ? this.deps.buildClaudeArgs(agent, { autonomy, projectRoot }) : [];
+    const claudeArgs =
+      runtimeType === "claude-code" ? await this.deps.buildClaudeArgs(agent, { autonomy, projectRoot }) : [];
 
     // Assemble launch env: stage/runtime secrets + tenant claude auth.
     const launchEnv = await buildLaunchEnv(this.deps, this.secrets, session, stageDef, runtimeName, log);

@@ -32,7 +32,7 @@ export class EphemeralFlowStore implements FlowStore {
 
   // ── FlowStore interface ────────────────────────────────────────────────
 
-  get(name: string): FlowDefinition | null {
+  async get(name: string): Promise<FlowDefinition | null> {
     const ephemeral = this.overlay.get(name);
     if (ephemeral !== undefined) return ephemeral;
     return this.backing.get(name);
@@ -40,8 +40,7 @@ export class EphemeralFlowStore implements FlowStore {
 
   async list(): Promise<FlowSummary[]> {
     // Merge: backing list first, then overlay entries (ephemeral last so they
-    // don't shadow real flows in UIs that enumerate flows). `await` handles
-    // both a sync (file-backed) and async (DB-backed) backing store.
+    // don't shadow real flows in UIs that enumerate flows).
     const result = await this.backing.list();
     for (const [name, def] of this.overlay) {
       result.push({
@@ -54,11 +53,11 @@ export class EphemeralFlowStore implements FlowStore {
     return result;
   }
 
-  save(name: string, flow: FlowDefinition, scope?: "global" | "project"): void {
-    this.backing.save(name, flow, scope);
+  async save(name: string, flow: FlowDefinition, scope?: "global" | "project"): Promise<void> {
+    await this.backing.save(name, flow, scope);
   }
 
-  delete(name: string, scope?: "global" | "project"): boolean {
+  async delete(name: string, scope?: "global" | "project"): Promise<boolean> {
     return this.backing.delete(name, scope);
   }
 }

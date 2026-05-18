@@ -183,7 +183,7 @@ export class ReportApplier {
           }
         }
 
-        const stageDef = getStage(session.flow, session.stage ?? "");
+        const stageDef = await getStage(session.flow, session.stage ?? "");
         const isManualGate = stageDef?.gate === "manual";
 
         if (isManualGate) {
@@ -252,7 +252,7 @@ export class ReportApplier {
         });
 
         if (session.stage && session.flow) {
-          const errStageDef = getStage(session.flow, session.stage);
+          const errStageDef = await getStage(session.flow, session.stage);
           const retryDirective = parseOnFailure(errStageDef?.on_failure);
           if (retryDirective) {
             result.shouldRetry = true;

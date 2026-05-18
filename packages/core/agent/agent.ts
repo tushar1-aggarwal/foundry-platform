@@ -109,13 +109,13 @@ export function findProjectRoot(cwd?: string): string | null {
 
 // ── Template substitution ───────────────────────────────────────────────────
 
-export function resolveAgent(
+export async function resolveAgent(
   app: AppContext,
   name: string,
   session: Record<string, unknown>,
   projectRoot?: string,
-): AgentDefinition | null {
-  const agent = app.agents.get(name, projectRoot);
+): Promise<AgentDefinition | null> {
+  const agent = await app.agents.get(name, projectRoot);
   if (!agent) return null;
 
   const vars = buildSessionVars(session);
@@ -157,12 +157,12 @@ import type { InlineAgentSpec } from "../services/flow.js";
  *
  * Returns null if the spec is missing required fields (runtime, system_prompt).
  */
-export function buildInlineAgent(
+export async function buildInlineAgent(
   app: AppContext,
   spec: InlineAgentSpec,
   session: Record<string, unknown>,
   opts?: { runtimeOverride?: string },
-): AgentDefinition | null {
+): Promise<AgentDefinition | null> {
   if (!spec.runtime || !spec.system_prompt) return null;
 
   const vars = buildSessionVars(session);
@@ -189,7 +189,7 @@ export function buildInlineAgent(
   // agents, so inline agents get _resolved_runtime_type + runtime env etc.
   const runtimeName = opts?.runtimeOverride ?? agent.runtime;
   if (runtimeName) {
-    const runtime = app.runtimes.get(runtimeName);
+    const runtime = await app.runtimes.get(runtimeName);
     if (runtime) {
       agent._resolved_runtime_type = runtime.type;
       if (!agent.command && runtime.command) agent.command = runtime.command;
@@ -210,13 +210,13 @@ export function buildInlineAgent(
  * The resolved runtime's type, command, task_delivery, env, and permission_mode are
  * merged into the returned agent definition (agent-level values win where both exist).
  */
-export function resolveAgentWithRuntime(
+export async function resolveAgentWithRuntime(
   app: AppContext,
   name: string,
   session: Record<string, unknown>,
   opts?: { runtimeOverride?: string; projectRoot?: string },
-): AgentDefinition | null {
-  const agent = resolveAgent(app, name, session, opts?.projectRoot);
+): Promise<AgentDefinition | null> {
+  const agent = await resolveAgent(app, name, session, opts?.projectRoot);
   if (!agent) return null;
 
   const runtimeName = opts?.runtimeOverride ?? agent.runtime;
@@ -241,7 +241,7 @@ export function resolveAgentWithRuntime(
     return agent;
   }
 
-  const runtime = app.runtimes.get(runtimeName);
+  const runtime = await app.runtimes.get(runtimeName);
   if (!runtime) {
     // Runtime name specified but not found -- fall back to using it as executor type (backward compat)
     return agent;
@@ -285,7 +285,7 @@ export function resolveAgentWithRuntime(
 import * as claude from "../claude/claude.js";
 import { resolveProviderSlug } from "../models/resolver.js";
 
-export function buildClaudeArgs(
+export async function buildClaudeArgs(
   agent: AgentDefinition,
   opts?: {
     task?: string;
@@ -295,7 +295,7 @@ export function buildClaudeArgs(
     projectRoot?: string;
     app?: AppContext;
   },
-): string[] {
+): Promise<string[]> {
   let systemPrompt = agent.system_prompt;
 
   // Autonomous mode: override question-asking behavior
@@ -327,10 +327,10 @@ export function buildClaudeArgs(
 
   // Inject skill prompts into system prompt
   if (agent.skills?.length && opts?.app) {
-    const skillPrompts = agent.skills
-      .map((name: string) => opts.app!.skills.get(name, opts?.projectRoot))
-      .filter(Boolean)
-      .map((s: any) => `## Skill: ${s.name}\n${s.prompt}`);
+    const resolved = await Promise.all(
+      agent.skills.map((name: string) => opts.app!.skills.get(name, opts?.projectRoot)),
+    );
+    const skillPrompts = resolved.filter(Boolean).map((s: any) => `## Skill: ${s.name}\n${s.prompt}`);
     if (skillPrompts.length) {
       systemPrompt += "\n\n" + skillPrompts.join("\n\n");
     }
@@ -350,9 +350,9 @@ export function buildClaudeArgs(
   let resolvedModel = agent.model;
   if (opts?.app && agent.model && agent.runtime) {
     try {
-      const runtimeDef = opts.app.runtimes?.get?.(agent.runtime) as { compat?: readonly string[] } | undefined;
+      const runtimeDef = (await opts.app.runtimes?.get?.(agent.runtime)) as { compat?: readonly string[] } | undefined;
       const compat = runtimeDef?.compat;
-      const slug = resolveProviderSlug(opts.app.models, agent.model, compat, opts.projectRoot);
+      const slug = await resolveProviderSlug(opts.app.models, agent.model, compat, opts.projectRoot);
       if (slug) resolvedModel = slug;
     } catch {
       // Catalog miss or store error -- fall through to the raw model alias.

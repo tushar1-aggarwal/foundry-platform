@@ -68,9 +68,7 @@ export class DefaultTriggerDispatcher implements TriggerDispatcher {
 
     try {
       const tenantApp = config.tenant ? this.app.forTenant(config.tenant) : this.app;
-      const session = await tenantApp.sessionCreator.start(createOpts, {
-        onCreated: (id) => tenantApp.sessionService.emitSessionCreated(id),
-      });
+      const session = await tenantApp.sessionCreator.start(createOpts);
       logInfo("triggers", `trigger ${config.name} -> session ${session.id}`);
       await this.app.events.log(session.id, "trigger_fired", {
         actor: event.source,

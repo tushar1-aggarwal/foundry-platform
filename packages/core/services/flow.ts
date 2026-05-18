@@ -12,7 +12,6 @@
 
 import { substituteVars } from "../template.js";
 import type { OrchestrationDeps } from "./deps.js";
-import { logDebug } from "../observability/structured-log.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -298,65 +297,47 @@ export interface FlowDefinition {
 
 // ── Stage navigation ────────────────────────────────────────────────────────
 
-/** Load a flow by name via the AppContext store.
- *
- * `FlowStore.get` is nominally synchronous (the file-backed store reads from
- * disk synchronously), but the hosted DB-backed store exposes `get` as
- * `T | null | Promise<T | null>` to serve sync callers out of an in-memory
- * cache and fall back to a Promise-returning query on a cache miss. Callers
- * here only need the sync resolution -- a cache miss on the hot startSession
- * path means the RPC dispatch path hasn't warmed the cache yet, which should
- * not happen after the `session/start` handler has run (startSession is
- * synchronous wrt. the flow lookup but lives inside an async RPC). To keep
- * the contract tight, we explicitly swallow Promise returns and treat them
- * as "not loaded yet" -- the caller's next tick will see the cached value.
- */
-function loadFlow(deps: OrchestrationDeps, name: string): FlowDefinition | null {
+/** Load a flow by name via the AppContext store. */
+async function loadFlow(deps: OrchestrationDeps, name: string): Promise<FlowDefinition | null> {
   try {
-    const result = deps.flows.get(name);
-    if (result && typeof (result as { then?: unknown }).then === "function") {
-      // Hosted DB store cache miss -- Promise return. Fire-and-forget so
-      // the cache warms for the next call; for this call there's nothing
-      // to return synchronously.
-      void (result as Promise<FlowDefinition | null>).catch((err) => {
-        logDebug("session", `flow.loadFlow: async cache-warm failed for flow "${name}"`, {
-          flow: name,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return null;
-      });
-      return null;
-    }
-    return result as FlowDefinition | null;
+    return await deps.flows.get(name);
   } catch {
     return null;
   }
 }
 
-export function getStages(deps: OrchestrationDeps, flowName: string): StageDefinition[] {
-  return loadFlow(deps, flowName)?.stages ?? [];
+export async function getStages(deps: OrchestrationDeps, flowName: string): Promise<StageDefinition[]> {
+  return (await loadFlow(deps, flowName))?.stages ?? [];
 }
 
-export function getStage(deps: OrchestrationDeps, flowName: string, stageName: string): StageDefinition | null {
-  return getStages(deps, flowName).find((s) => s.name === stageName) ?? null;
-}
-
-/** Alias for getStage - retrieve a single stage definition by flow and stage name. */
-export function getStageDefinition(
+export async function getStage(
   deps: OrchestrationDeps,
   flowName: string,
   stageName: string,
-): StageDefinition | null {
+): Promise<StageDefinition | null> {
+  return (await getStages(deps, flowName)).find((s) => s.name === stageName) ?? null;
+}
+
+/** Alias for getStage - retrieve a single stage definition by flow and stage name. */
+export async function getStageDefinition(
+  deps: OrchestrationDeps,
+  flowName: string,
+  stageName: string,
+): Promise<StageDefinition | null> {
   return getStage(deps, flowName, stageName);
 }
 
-export function getFirstStage(deps: OrchestrationDeps, flowName: string): string | null {
-  const stages = getStages(deps, flowName);
+export async function getFirstStage(deps: OrchestrationDeps, flowName: string): Promise<string | null> {
+  const stages = await getStages(deps, flowName);
   return stages[0]?.name ?? null;
 }
 
-export function getNextStage(deps: OrchestrationDeps, flowName: string, currentStage: string): string | null {
-  const stages = getStages(deps, flowName);
+export async function getNextStage(
+  deps: OrchestrationDeps,
+  flowName: string,
+  currentStage: string,
+): Promise<string | null> {
+  const stages = await getStages(deps, flowName);
   const idx = stages.findIndex((s) => s.name === currentStage);
   return idx >= 0 && idx + 1 < stages.length ? stages[idx + 1].name : null;
 }
@@ -369,18 +350,18 @@ export function getNextStage(deps: OrchestrationDeps, flowName: string, currentS
  * when no on_outcome is defined, no outcome is provided, or the outcome
  * doesn't match any key.
  */
-export function resolveNextStage(
+export async function resolveNextStage(
   deps: OrchestrationDeps,
   flowName: string,
   currentStage: string,
   outcome?: string,
-): string | null {
-  const stage = getStage(deps, flowName, currentStage);
+): Promise<string | null> {
+  const stage = await getStage(deps, flowName, currentStage);
   if (stage?.on_outcome && outcome) {
     const target = stage.on_outcome[outcome];
     if (target) {
       // Validate that target stage exists in the flow
-      const targetStage = getStage(deps, flowName, target);
+      const targetStage = await getStage(deps, flowName, target);
       if (targetStage) return target;
     }
   }
@@ -389,22 +370,22 @@ export function resolveNextStage(
 
 // ── Gate evaluation ─────────────────────────────────────────────────────────
 
-export function evaluateGate(
+export async function evaluateGate(
   deps: OrchestrationDeps,
   flowName: string,
   stageName: string,
   session: { error?: string | null },
-): { canProceed: boolean; reason: string } {
-  const stage = getStage(deps, flowName, stageName);
+): Promise<{ canProceed: boolean; reason: string }> {
+  const stage = await getStage(deps, flowName, stageName);
   if (!stage) return { canProceed: false, reason: `Stage '${stageName}' not found` };
 
   // Default to "auto" when the YAML omits `gate:`. The previous strict default
   // ("Unknown gate: undefined") silently broke for_each + spawn stages whose
-  // YAML didn't bother specifying a gate -- the dispatcher's post-loop
-  // mediateStageHandoff -> advance -> evaluateGate chain returned an error
-  // and the parent session got stuck in `ready` state forever instead of
-  // advancing to `completed`. Real incident: PAI-31995 dispatches surfaced
-  // as "pending" parents in the session list with no further action possible.
+  // YAML didn't bother specifying a gate -- the post-loop advance ->
+  // evaluateGate chain returned an error and the parent session got stuck in
+  // `ready` state forever instead of advancing to `completed`. Real incident:
+  // PAI-31995 dispatches surfaced as "pending" parents in the session list
+  // with no further action possible.
   const gate = stage.gate ?? "auto";
   switch (gate) {
     case "auto":
@@ -439,8 +420,12 @@ export interface StageAction {
   optional?: boolean;
 }
 
-export function getStageAction(deps: OrchestrationDeps, flowName: string, stageName: string): StageAction {
-  const stage = getStage(deps, flowName, stageName);
+export async function getStageAction(
+  deps: OrchestrationDeps,
+  flowName: string,
+  stageName: string,
+): Promise<StageAction> {
+  const stage = await getStage(deps, flowName, stageName);
   if (!stage) return { type: "unknown" };
 
   if (stage.for_each !== undefined) {
@@ -694,12 +679,12 @@ export function getReadyStages(stages: StageDefinition[], completedStages: strin
 // ── Template substitution ────────────────────────────────────────────────────
 
 /** Resolve a flow by rendering {{ var }} placeholders in stage fields. */
-export function resolveFlow(
+export async function resolveFlow(
   deps: OrchestrationDeps,
   flowName: string,
   vars: Record<string, string>,
-): FlowDefinition | null {
-  const flow = loadFlow(deps, flowName);
+): Promise<FlowDefinition | null> {
+  const flow = await loadFlow(deps, flowName);
   if (!flow) return null;
 
   return {

@@ -42,11 +42,7 @@ export async function dispatchStageActivity(input: {
   // idempotent w.r.t. retry state.
   const session = await d.sessions.get(input.sessionId);
   if (session) {
-    const flow = d.flows.get(session.flow);
-    const flowDef =
-      flow && typeof (flow as { then?: unknown }).then === "function"
-        ? await (flow as Promise<import("../../services/flow.js").FlowDefinition | null>)
-        : (flow as import("../../services/flow.js").FlowDefinition | null);
+    const flowDef = await d.flows.get(session.flow);
     const targetStage = flowDef?.stages?.[input.stageIdx]?.name;
     if (targetStage && session.stage !== targetStage) {
       await d.sessions.update(input.sessionId, { stage: targetStage, status: "ready", error: null });
@@ -57,16 +53,6 @@ export async function dispatchStageActivity(input: {
       await d.sessions.update(input.sessionId, { status: "ready", error: null });
     }
   }
-
-  // Warm agent + runtime caches so `resolveAgent()`'s sync `get()` path
-  // hits the in-memory cache. DbResourceStore (hosted mode, added in
-  // PR #534) returns a Promise on a cold miss; the sync ResolveAgentCb
-  // contract treats that Promise as a truthy agent and silently loses
-  // every field (notably `agent.runtime`) which surfaces downstream as
-  // "no runtime resolvable for session ...". List() populates the sync
-  // cache so subsequent .get() calls return real AgentDefinitions.
-  await (d.agents as any).list?.().catch(() => {});
-  await (d.runtimes as any).list?.().catch(() => {});
 
   const dispatchDeps = buildDispatchDeps(d);
   const svc = new DispatchService(dispatchDeps);

@@ -52,7 +52,7 @@ export interface ResolveAgentCb {
     agentName: string,
     sessionVars: Record<string, unknown>,
     opts: { runtimeOverride?: string; projectRoot?: string },
-  ): { name: string; model: string; [k: string]: any } | null;
+  ): Promise<{ name: string; model: string; [k: string]: any } | null>;
 }
 
 /** Build executor-specific CLI args (currently only claude-code). */
@@ -60,17 +60,12 @@ export interface BuildClaudeArgsCb {
   (
     agent: { name: string; model: string; [k: string]: unknown },
     opts: { autonomy: string; projectRoot?: string },
-  ): string[];
+  ): Promise<string[]>;
 }
 
 /** Save a session checkpoint (best-effort). */
 export interface CheckpointCb {
   (sessionId: string): void;
-}
-
-/** Mediate the stage handoff after an in-process action stage completes. */
-export interface MediateStageHandoffCb {
-  (sessionId: string, opts?: { autoDispatch?: boolean; source?: string; outcome?: string }): Promise<unknown>;
 }
 
 /** Execute an `action:` stage (dispatched in-process, no agent launch). */
@@ -149,7 +144,6 @@ export interface GetAppCb {
  *   buildClaudeArgs   -- agentRegistry.buildClaudeArgs (claude-code only)
  *   resolveExecutor   -- pluginRegistry + legacy registry fallback lookup
  *   checkpoint        -- saveCheckpoint (session/checkpoint.ts, best-effort)
- *   mediateStageHandoff -- follow-on handoff after action-stage completes
  *   executeAction     -- action-stage in-process executor
  *   dispatchChild     -- nested dispatch() for fan-out children
  *   fork              -- fork primitive (dynamic-imported today)
@@ -203,7 +197,6 @@ export interface DispatchDeps {
 
   // Lifecycle / follow-on
   checkpoint: CheckpointCb;
-  mediateStageHandoff: MediateStageHandoffCb;
   executeAction: ExecuteActionCb;
   dispatchChild: DispatchChildCb;
   fork: ForkCb;

@@ -30,7 +30,7 @@ export class StageSecretResolver {
     // Runtime-declared secrets. Avoid hard-failing if the runtime isn't
     // known (legacy executor paths may dispatch without a RuntimeStore row).
     try {
-      const rt = this.deps.runtimes?.get?.(runtimeKind) ?? null;
+      const rt = (await this.deps.runtimes?.get?.(runtimeKind)) ?? null;
       if (!rt) {
         logWarn("session", `secrets-resolve: runtime '${runtimeKind}' not found in store`);
       }

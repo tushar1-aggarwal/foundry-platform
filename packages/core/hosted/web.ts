@@ -156,36 +156,8 @@ export function startWebServer(app: AppContext, opts?: WebServerOptions): { stop
   registerAllHandlers(router, app);
   router.markInitialized();
 
-  // Wire the real dispatch function so sessions created via /api/rpc
-  // actually get dispatched. Without this sessions stay in `ready` forever.
-  //
-  // IMPORTANT: resolveTenantApp() returns app.forTenant(tenantId) for every
-  // request, which builds a child DI scope with its OWN sessionService and
-  // its own empty dispatchListeners. We must register on every tenant scope
-  // that will receive sessions. For the dev loop (ARK_DEFAULT_TENANT=default,
-  // no auth) there is exactly one tenant; register on both root + default
-  // scope so whichever path the RPC handler resolves through gets a wired
-  // dispatcher.
-  const registerDispatcher = (svc: typeof app.sessionService, scopeApp: typeof app) => {
-    svc.registerDefaultDispatcher((session) => {
-      if (!session) return;
-      void scopeApp.dispatchService.dispatch(session.id).catch((err) => {
-        logDebug("web", `dispatch ${session.id} failed: ${err?.message ?? err}`);
-      });
-    });
-  };
-  registerDispatcher(app.sessionService, app);
-  // Also register on the default tenant scope (used when ARK_DEFAULT_TENANT is set).
-  const defaultTenant = app.config.authSection.defaultTenant;
-  if (defaultTenant) {
-    const tenantApp = app.forTenant(defaultTenant);
-    if (tenantApp !== app) {
-      // Warm the agent + runtime sync caches so kickDispatch can resolve
-      // agent/runtime definitions synchronously on first dispatch.
-      void Promise.all([tenantApp.agents.list(), tenantApp.runtimes.list()]).catch(() => {});
-      registerDispatcher(tenantApp.sessionService, tenantApp);
-    }
-  }
+  // Sessions created via /api/rpc are driven by their Temporal
+  // sessionWorkflow; no in-process dispatcher wiring is needed here.
 
   // Auto-build web frontend if dist doesn't exist (skip in API-only mode)
   if (!apiOnly && !existsSync(WEB_DIST)) {

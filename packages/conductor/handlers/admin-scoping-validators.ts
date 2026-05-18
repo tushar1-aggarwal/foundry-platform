@@ -209,9 +209,9 @@ export async function validateOverride(
           "runtime override value must be a string",
         );
       }
-      if (!app.runtimes.get(value as string)) {
+      if (!(await app.runtimes.get(value as string))) {
         const knownSuffix = formatKnownOptionsHint(
-          app.runtimes.list().map((r) => r.name),
+          (await app.runtimes.list()).map((r) => r.name),
           MAX_KNOWN_OPTIONS_IN_ERROR,
         );
         reject(
@@ -235,11 +235,12 @@ export async function validateOverride(
           "model override value must be a string",
         );
       }
-      if (!app.models.get(value as string)) {
+      if (!(await app.models.get(value as string))) {
         // Model catalog can be 50+ entries; include both ids and aliases
         // so a typo on either form gets a useful correction hint.
-        const ids = app.models.list().map((m) => m.id);
-        const aliases = app.models.list().flatMap((m) => m.aliases ?? []);
+        const allModels = await app.models.list();
+        const ids = allModels.map((m) => m.id);
+        const aliases = allModels.flatMap((m) => m.aliases ?? []);
         const knownSuffix = formatKnownOptionsHint([...ids, ...aliases], MAX_KNOWN_OPTIONS_IN_ERROR);
         reject(
           ctx,

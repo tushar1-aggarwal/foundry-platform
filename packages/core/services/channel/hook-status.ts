@@ -23,9 +23,8 @@ import type { OutboundMessage } from "./channel-types.js";
 import { handleReport } from "./report-pipeline.js";
 import { depsFromApp } from "../deps.js";
 import { eventBus } from "../../hooks.js";
-import { logDebug, logError, logInfo, logWarn } from "../../observability/structured-log.js";
+import { logDebug, logInfo, logWarn } from "../../observability/structured-log.js";
 import { emitStageSpanEnd, emitSessionSpanEnd, flushSpans } from "../../observability/otlp.js";
-import { withSessionLock } from "../session-lock.js";
 
 /** Result shape returned by `processHookPayload`. */
 export interface HookProcessResult {
@@ -166,7 +165,9 @@ export async function processHookPayload(
   // span end, stage handoff, terminal cleanup) below.
   const result = await scoped.sessionHooks.ingestHookStatus(s, event, payload);
 
-  // On-failure retry loop
+  // On-failure retry loop. retryWithContext flips the failed session back
+  // to `ready`; the Temporal workflow's next dispatchStageActivity re-runs
+  // the current stage. No in-process re-dispatch -- that races the workflow.
   if (result.shouldRetry && result.newStatus === "failed") {
     const retryResult = await scoped.sessionHooks.retryWithContext(sessionId, {
       maxRetries: result.retryMaxRetries,
@@ -175,9 +176,6 @@ export async function processHookPayload(
       logInfo("conductor", `on_failure retry (hook) triggered for ${sessionId}: ${retryResult.message}`);
       eventBus.emit("hook_status", sessionId, {
         data: { event, status: "ready", retry: true, ...payload } as Record<string, unknown>,
-      });
-      scoped.dispatchService.dispatch(sessionId).catch((err) => {
-        logError("conductor", `on_failure retry dispatch (hook) failed for ${sessionId}: ${err?.message ?? err}`);
       });
       return { mapped: "retry" };
     }
@@ -209,28 +207,8 @@ export async function processHookPayload(
     }
   }
 
-  if (result.shouldAdvance) {
-    // Under Temporal orchestration the session-workflow loop drives stage
-    // advancement. Running the bespoke handoff here races the workflow's own
-    // dispatchStageActivity and double-executes action stages (T6 hit this:
-    // hook_status fired `create_pr` a second time after the Temporal activity
-    // had already failed-and-marked-the-session). Mirrors the gate in
-    // report-pipeline.ts.
-    const sessionForOrch = await scoped.sessions.get(sessionId);
-    if (sessionForOrch?.orchestrator === "temporal") {
-      logDebug(
-        "conductor",
-        `hook_status: skipping bespoke handoff for ${sessionId} -- Temporal workflow drives advancement`,
-      );
-    } else {
-      await withSessionLock(sessionId, () =>
-        scoped.sessionHooks.mediateStageHandoff(sessionId, {
-          autoDispatch: result.shouldAutoDispatch,
-          source: "hook_status",
-        }),
-      );
-    }
-  }
+  // Stage advancement is driven solely by the Temporal session-workflow
+  // loop (dispatchStageActivity), never from the hook-status path.
 
   if (result.newStatus) {
     try {
