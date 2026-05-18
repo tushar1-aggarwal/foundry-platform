@@ -12,17 +12,42 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { asValue } from "awilix";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../app.js";
 import { buildHostedAppMode } from "../../modes/app-mode.js";
+import { attachTemporalTestHarness, drainTemporalTestHarness } from "../../temporal/test-harness.js";
+
+// The hosted rejections throw at validation before any workflow starts. The
+// surviving local-mode acceptance path runs the real Temporal sessionWorkflow
+// via the in-process harness. Mode is mutated per test (hosted vs local), so
+// a fresh app per test keeps that isolation -- the harness is attached per
+// app and torn down in afterEach.
 
 let app: AppContext;
+let detach: () => void;
 
 beforeEach(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto
+description: single auto stage
+stages:
+  - name: work
+    agent: implementer
+    gate: auto
+`,
+  );
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
 });
 
 afterEach(async () => {
+  await drainTemporalTestHarness();
+  detach?.();
   await app?.shutdown().catch(() => undefined);
 });
 
@@ -56,7 +81,7 @@ describe("hosted mode rejects local compute (per-stage-pod invariant)", () => {
   });
 
   it("local mode still accepts local compute (no regression)", async () => {
-    const s = await app.sessionService.start({ summary: "x", compute_name: "local" });
+    const s = await app.sessionService.start({ summary: "x", compute_name: "local", flow: "x-auto" });
     expect(s.id).toMatch(/^s-/);
     expect(s.compute_name).toBe("local");
   });

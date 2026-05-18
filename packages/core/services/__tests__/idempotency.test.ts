@@ -18,21 +18,53 @@
  *   - executeAction() (`close` action -- simplest handler, pure event log)
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../app.js";
 import { executeAction } from "../actions/index.js";
 import { depsFromApp } from "../deps.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../temporal/test-harness.js";
+
+// handoff() clones a child session and starts a FRESH child sessionWorkflow
+// via the Temporal client (Temporal is the sole orchestrator). The in-process
+// harness runs the genuine workflow against the test app. The handoff source
+// uses a single auto stage so the cloned child workflow reaches a terminal
+// state instead of parking on a manual gate (which would hang the drain).
+// Every assertion here is session-scoped, so one shared app is isolation-safe.
 
 let app: AppContext;
+let detach: () => void;
 
-beforeEach(async () => {
-  if (app) await app.shutdown();
+beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto
+description: single auto stage
+stages:
+  - name: work
+    agent: implementer
+    gate: auto
+`,
+  );
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
 });
 
 afterEach(async () => {
-  // beforeEach resets the next run -- nothing to tear down here.
+  await drainTemporalTestHarness();
+});
+
+afterAll(async () => {
+  detach?.();
+  await app?.shutdown();
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -155,16 +187,16 @@ describe("complete() idempotency", async () => {
 
 describe("handoff() idempotency", async () => {
   it("same key = second call returns cached result without cloning again", async () => {
-    const session = await app.sessions.create({ summary: "handoff-src", flow: "default" });
-    await app.sessions.update(session.id, { status: "ready", stage: "implement" });
+    const session = await app.sessions.create({ summary: "handoff-src", flow: "x-auto" });
+    await app.sessions.update(session.id, { status: "ready", stage: "work" });
 
     const key = "handoff-key-1";
     const countSessionsBefore = (await app.sessions.list()).length;
 
-    // First call creates a clone via cloneSession + attempts dispatch. Dispatch
-    // may fail in the test harness (no runtime / agent), but the ledger
-    // records whatever result the body returns, and we only assert on no-op
-    // replay behavior -- not dispatch success.
+    // First call clones the session and starts a fresh child sessionWorkflow.
+    // The single-auto-stage flow lets the child reach a terminal state; the
+    // ledger records whatever result the body returns, and we only assert on
+    // no-op replay behavior -- not dispatch success.
     const first = await app.stageAdvance.handoff(session.id, "reviewer", "please review", { idempotencyKey: key });
     const countSessionsAfterFirst = (await app.sessions.list()).length;
     // cloneSession may have created 0 or 1 new rows depending on dispatch
@@ -181,7 +213,13 @@ describe("handoff() idempotency", async () => {
     expect(await countLedgerRows(session.id, "handoff")).toBe(1);
     // And the first call's count is preserved.
     expect(newSessionsFromFirst).toBeGreaterThanOrEqual(0);
-  });
+
+    // Drive the cloned child workflow to terminal so the harness drain is
+    // fast (a parked child would hang afterEach).
+    if (first.ok && first.sessionId) {
+      await waitForSessionStatus(app, first.sessionId, ["completed", "failed"]);
+    }
+  }, 45_000);
 });
 
 // ── executeAction() ────────────────────────────────────────────────────────

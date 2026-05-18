@@ -52,37 +52,37 @@ function makeAgent(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
 }
 
 describe("applyScopingRuntimeHint", () => {
-  it("no-ops when hint is undefined", () => {
+  it("no-ops when hint is undefined", async () => {
     const agent = makeAgent({ _resolved_runtime_type: "claude-code" });
     const logs: string[] = [];
-    applyScopingRuntimeHint(fakeRuntimes({}), agent, undefined, (m) => logs.push(m));
+    await applyScopingRuntimeHint(fakeRuntimes({}), agent, undefined, (m) => logs.push(m));
     expect(agent.runtime).toBe("claude");
     expect(agent._resolved_runtime_type).toBe("claude-code");
     expect(logs).toEqual([]);
   });
 
-  it("replaces runtime + recomputes _resolved_runtime_type when hint matches a known runtime and agent is unlocked", () => {
+  it("replaces runtime + recomputes _resolved_runtime_type when hint matches a known runtime and agent is unlocked", async () => {
     const agent = makeAgent({ _resolved_runtime_type: "claude-code" });
     const logs: string[] = [];
-    applyScopingRuntimeHint(fakeRuntimes({ codex: { type: "cli-agent" } }), agent, "codex", (m) => logs.push(m));
+    await applyScopingRuntimeHint(fakeRuntimes({ codex: { type: "cli-agent" } }), agent, "codex", (m) => logs.push(m));
     expect(agent.runtime).toBe("codex");
     expect(agent._resolved_runtime_type).toBe("cli-agent");
     expect(logs.some((m) => m.includes("'codex' applied"))).toBe(true);
   });
 
-  it("ignores hint when agent is runtime_locked (logs reason, leaves agent untouched)", () => {
+  it("ignores hint when agent is runtime_locked (logs reason, leaves agent untouched)", async () => {
     const agent = makeAgent({ runtime_locked: true, _resolved_runtime_type: "claude-code" });
     const logs: string[] = [];
-    applyScopingRuntimeHint(fakeRuntimes({ codex: { type: "cli-agent" } }), agent, "codex", (m) => logs.push(m));
+    await applyScopingRuntimeHint(fakeRuntimes({ codex: { type: "cli-agent" } }), agent, "codex", (m) => logs.push(m));
     expect(agent.runtime).toBe("claude");
     expect(agent._resolved_runtime_type).toBe("claude-code");
     expect(logs.some((m) => m.includes("ignored") && m.includes("runtime_locked"))).toBe(true);
   });
 
-  it("falls back gracefully when the hint refers to a runtime no longer in the registry", () => {
+  it("falls back gracefully when the hint refers to a runtime no longer in the registry", async () => {
     const agent = makeAgent({ _resolved_runtime_type: "claude-code" });
     const logs: string[] = [];
-    applyScopingRuntimeHint(fakeRuntimes({}), agent, "ghost-runtime", (m) => logs.push(m));
+    await applyScopingRuntimeHint(fakeRuntimes({}), agent, "ghost-runtime", (m) => logs.push(m));
     expect(agent.runtime).toBe("claude");
     expect(agent._resolved_runtime_type).toBe("claude-code");
     expect(logs.some((m) => m.includes("ghost-runtime") && m.includes("no longer"))).toBe(true);
@@ -90,39 +90,47 @@ describe("applyScopingRuntimeHint", () => {
 });
 
 describe("applyScopingModelHint", () => {
-  it("no-ops when hint is undefined", () => {
+  it("no-ops when hint is undefined", async () => {
     const agent = makeAgent({ model: "sonnet" });
     const logs: string[] = [];
-    applyScopingModelHint(fakeModels({}), agent, undefined, undefined, (m) => logs.push(m));
+    await applyScopingModelHint(fakeModels({}), agent, undefined, undefined, (m) => logs.push(m));
     expect(agent.model).toBe("sonnet");
     expect(logs).toEqual([]);
   });
 
-  it("replaces agent.model when hint matches a known model and agent is unlocked", () => {
+  it("replaces agent.model when hint matches a known model and agent is unlocked", async () => {
     const agent = makeAgent({ model: "sonnet" });
     const logs: string[] = [];
-    applyScopingModelHint(fakeModels({ opus: { id: "opus", provider: "anthropic" } }), agent, "opus", undefined, (m) =>
-      logs.push(m),
+    await applyScopingModelHint(
+      fakeModels({ opus: { id: "opus", provider: "anthropic" } }),
+      agent,
+      "opus",
+      undefined,
+      (m) => logs.push(m),
     );
     expect(agent.model).toBe("opus");
     expect(logs.some((m) => m.includes("'opus' applied"))).toBe(true);
   });
 
-  it("ignores hint when agent is model_locked (the cost-pinned scenario)", () => {
+  it("ignores hint when agent is model_locked (the cost-pinned scenario)", async () => {
     const agent = makeAgent({ model: "haiku", model_locked: true });
     const logs: string[] = [];
-    applyScopingModelHint(fakeModels({ opus: { id: "opus", provider: "anthropic" } }), agent, "opus", undefined, (m) =>
-      logs.push(m),
+    await applyScopingModelHint(
+      fakeModels({ opus: { id: "opus", provider: "anthropic" } }),
+      agent,
+      "opus",
+      undefined,
+      (m) => logs.push(m),
     );
     // Cost lock-in: agent stays on haiku even though tenant override said opus.
     expect(agent.model).toBe("haiku");
     expect(logs.some((m) => m.includes("ignored") && m.includes("model_locked"))).toBe(true);
   });
 
-  it("falls back gracefully when the hint refers to a model no longer in the catalog", () => {
+  it("falls back gracefully when the hint refers to a model no longer in the catalog", async () => {
     const agent = makeAgent({ model: "sonnet" });
     const logs: string[] = [];
-    applyScopingModelHint(fakeModels({}), agent, "ghost-model", undefined, (m) => logs.push(m));
+    await applyScopingModelHint(fakeModels({}), agent, "ghost-model", undefined, (m) => logs.push(m));
     expect(agent.model).toBe("sonnet");
     expect(logs.some((m) => m.includes("ghost-model") && m.includes("no longer"))).toBe(true);
   });
