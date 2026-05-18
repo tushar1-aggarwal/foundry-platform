@@ -7,8 +7,15 @@
  * `notSupported: true`).
  */
 
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeEach, beforeAll, afterAll, afterEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../core/app.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../core/temporal/test-harness.js";
 import { registerSessionHandlers } from "../handlers/session.js";
 import { Router } from "../router.js";
 import { createRequest, type JsonRpcResponse } from "../../protocol/types.js";
@@ -21,17 +28,29 @@ import type {
   Snapshot,
 } from "../../core/compute/types.js";
 import { NotSupportedError } from "../../core/compute/types.js";
-import { setApp } from "../../core/__tests__/test-helpers.js";
 
 let app: AppContext;
 let router: Router;
+let detach: (() => void) | undefined;
 
 beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+  );
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 
 afterAll(async () => {
+  detach?.();
   await app?.shutdown();
 });
 
@@ -92,12 +111,20 @@ async function ensureCompute(ctx: AppContext, name: string, _provider: string, c
   });
 }
 
+// session/start now starts a Temporal workflow. Let the real workflow run to
+// terminal (so projectSessionActivity is done writing the row), then reset the
+// row to a clean dispatchable "ready" state -- exactly the state a freshly
+// started session sat in under the old park-at-gate behaviour, with no live
+// workflow left to race the pause/resume RPC writes.
 async function startSession(opts: Record<string, unknown> = {}): Promise<string> {
   const res = await router.dispatch(
-    createRequest(1, "session/start", { summary: "pause-test", repo: ".", flow: "bare", ...opts }),
+    createRequest(1, "session/start", { summary: "pause-test", repo: ".", flow: "x-auto", ...opts }),
   );
   const session = ((res as JsonRpcResponse).result as Record<string, any>).session;
-  return session.id as string;
+  const id = session.id as string;
+  await waitForSessionStatus(app, id, ["completed", "failed"]);
+  await app.sessions.update(id, { status: "ready", error: null, breakpoint_reason: null, session_id: null });
+  return id;
 }
 
 describe("session/pause", async () => {
@@ -126,7 +153,7 @@ describe("session/pause", async () => {
     const session = await app.sessions.get(id)!;
     expect(session.status).toBe("blocked");
     expect((session.config as Record<string, unknown>).last_snapshot_id).toBe(result.snapshot.id);
-  });
+  }, 45_000);
 
   it("on a non-snapshot compute: degrades to state-only pause with notSupported=true", async () => {
     const id = await startSession(); // defaults to local compute
@@ -140,7 +167,7 @@ describe("session/pause", async () => {
 
     const session = await app.sessions.get(id)!;
     expect(session.status).toBe("blocked");
-  });
+  }, 45_000);
 });
 
 describe("session/resume", async () => {
@@ -167,7 +194,7 @@ describe("session/resume", async () => {
     const session = await app.sessions.get(id)!;
     expect(session.status).toBe("ready");
     expect(session.breakpoint_reason).toBeNull();
-  });
+  }, 45_000);
 
   it("on a session with no snapshot: falls through to state-only resume", async () => {
     const id = await startSession();
@@ -180,7 +207,7 @@ describe("session/resume", async () => {
     expect(result.ok).toBe(true);
     const session = await app.sessions.get(id)!;
     expect(session.status).toBe("ready");
-  });
+  }, 45_000);
 
   it("falls back to state-only resume when the referenced snapshot's compute lacks restore support", async () => {
     // Save a snapshot referencing a kind whose registered compute doesn't support restore.
@@ -203,7 +230,7 @@ describe("session/resume", async () => {
     const result = (res as JsonRpcResponse).result as Record<string, any>;
     expect(result.ok).toBe(true);
     expect((await app.sessions.get(id))!.status).toBe("ready");
-  });
+  }, 45_000);
 });
 
 describe("NotSupportedError surface", () => {

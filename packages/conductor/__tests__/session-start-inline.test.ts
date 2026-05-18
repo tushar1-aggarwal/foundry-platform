@@ -12,21 +12,33 @@
  * ephemeral overlay now carries the flow.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from "bun:test";
 import { AppContext } from "../../core/app.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../core/temporal/test-harness.js";
 import { registerSessionHandlers } from "../handlers/session.js";
 import { Router } from "../router.js";
 import { createRequest, type JsonRpcResponse, type JsonRpcError } from "../../protocol/types.js";
 
 let app: AppContext;
 let router: Router;
+let detach: (() => void) | undefined;
 
 beforeAll(async () => {
   app = await AppContext.forTestAsync();
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 
 afterAll(async () => {
+  detach?.();
   await app?.shutdown();
 });
 
@@ -36,7 +48,9 @@ beforeEach(() => {
 });
 
 describe("session/start: inline flow payloads", () => {
-  it("accepts an inline flow object and registers it on the overlay", async () => {
+  it(
+    "accepts an inline flow object and registers it on the overlay",
+    async () => {
     const inlineFlow = {
       name: "my-inline",
       description: "built-on-the-wire",
@@ -63,12 +77,17 @@ describe("session/start: inline flow payloads", () => {
     expect(flowName.startsWith("inline-")).toBe(true);
 
     // Ephemeral overlay now carries the definition.
-    const def = app.flows.get(flowName);
+    const def = await app.flows.get(flowName);
     expect(def).toBeDefined();
     expect(def?.stages[0]?.name).toBe("main");
-  });
+    await waitForSessionStatus(app, session.id as string, ["completed", "failed"]);
+  },
+  45_000,
+  );
 
-  it("accepts an inline agent at stage.agent", async () => {
+  it(
+    "accepts an inline agent at stage.agent",
+    async () => {
     const inlineFlow = {
       name: "with-inline-agent",
       stages: [
@@ -92,14 +111,17 @@ describe("session/start: inline flow payloads", () => {
     const result = (res as JsonRpcResponse).result as Record<string, unknown>;
     const session = result.session as Record<string, unknown>;
     const flowName = session.flow as string;
-    const def = app.flows.get(flowName);
+    const def = await app.flows.get(flowName);
     const stage = def?.stages[0] as Record<string, unknown> | undefined;
     expect(stage?.agent).toBeDefined();
     expect(typeof stage?.agent).toBe("object");
     const agent = stage?.agent as Record<string, unknown>;
     expect(agent.runtime).toBe("claude-agent");
     expect(agent.model).toBe("sonnet");
-  });
+    await waitForSessionStatus(app, session.id as string, ["completed", "failed"]);
+  },
+  45_000,
+  );
 
   it("rejects an inline flow with zero stages", async () => {
     const req = createRequest(3, "session/start", {

@@ -43,7 +43,7 @@ describe("agent_create + agent_update", () => {
         env: {},
       },
     });
-    const fetched = h.app.agents.get("mcp-test-agent");
+    const fetched = await h.app.agents.get("mcp-test-agent");
     expect(fetched).toBeTruthy();
     expect(fetched?.description).toBe("Created via MCP");
 
@@ -51,7 +51,7 @@ describe("agent_create + agent_update", () => {
       name: "mcp-test-agent",
       patch: { description: "Updated via MCP" },
     });
-    const updated = h.app.agents.get("mcp-test-agent");
+    const updated = await h.app.agents.get("mcp-test-agent");
     expect(updated?.description).toBe("Updated via MCP");
   });
 });

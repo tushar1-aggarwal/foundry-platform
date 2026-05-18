@@ -1,18 +1,45 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../core/app.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../core/temporal/test-harness.js";
 import { registerSessionHandlers } from "../handlers/session.js";
 import { registerResourceHandlers } from "../handlers/resource.js";
 import { Router } from "../router.js";
 import { createRequest, type JsonRpcResponse } from "../../protocol/types.js";
 
 let app: AppContext;
+let detach: (() => void) | undefined;
 beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+  );
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 afterAll(async () => {
+  detach?.();
   await app?.shutdown();
 });
+
+function sessionId(res: unknown): string {
+  return ((res as JsonRpcResponse).result as { session?: { id?: string } })?.session?.id ?? "";
+}
+async function drive(res: unknown): Promise<void> {
+  const id = sessionId(res);
+  if (id) await waitForSessionStatus(app, id, ["completed", "failed"]);
+}
 
 let router: Router;
 
@@ -29,54 +56,85 @@ function ok(res: unknown): Record<string, unknown> {
 // ── Session list ────────────────────────────────────────────────────────────
 
 describe("session/list", async () => {
-  it("returns an array of sessions", async () => {
-    await router.dispatch(createRequest(1, "session/start", { summary: "list-a", repo: ".", flow: "bare" }));
-    await router.dispatch(createRequest(2, "session/start", { summary: "list-b", repo: ".", flow: "bare" }));
-    const res = ok(await router.dispatch(createRequest(3, "session/list", {})));
-    const sessions = res.sessions as Array<{ summary: string }>;
-    expect(sessions.length).toBeGreaterThanOrEqual(2);
-    expect(sessions.some((s) => s.summary === "list-a")).toBe(true);
-    expect(sessions.some((s) => s.summary === "list-b")).toBe(true);
-  });
+  it(
+    "returns an array of sessions",
+    async () => {
+      const a = await router.dispatch(createRequest(1, "session/start", { summary: "list-a", repo: ".", flow: "x-auto" }));
+      const b = await router.dispatch(createRequest(2, "session/start", { summary: "list-b", repo: ".", flow: "x-auto" }));
+      const res = ok(await router.dispatch(createRequest(3, "session/list", {})));
+      const sessions = res.sessions as Array<{ summary: string }>;
+      expect(sessions.length).toBeGreaterThanOrEqual(2);
+      expect(sessions.some((s) => s.summary === "list-a")).toBe(true);
+      expect(sessions.some((s) => s.summary === "list-b")).toBe(true);
+      await drive(a);
+      await drive(b);
+    },
+    45_000,
+  );
 
-  it("filters by status", async () => {
-    await router.dispatch(createRequest(1, "session/start", { summary: "status-filter", repo: ".", flow: "bare" }));
-    const res = ok(await router.dispatch(createRequest(2, "session/list", { status: "pending" })));
-    const sessions = res.sessions as Array<{ status: string }>;
-    for (const s of sessions) {
-      expect(s.status).toBe("pending");
-    }
-  });
+  it(
+    "filters by status",
+    async () => {
+      const a = await router.dispatch(
+        createRequest(1, "session/start", { summary: "status-filter", repo: ".", flow: "x-auto" }),
+      );
+      const res = ok(await router.dispatch(createRequest(2, "session/list", { status: "pending" })));
+      const sessions = res.sessions as Array<{ status: string }>;
+      for (const s of sessions) {
+        expect(s.status).toBe("pending");
+      }
+      await drive(a);
+    },
+    45_000,
+  );
 
-  it("filters by repo", async () => {
-    await router.dispatch(
-      createRequest(1, "session/start", { summary: "repo-filter", repo: "/tmp/test-repo", flow: "bare" }),
-    );
-    const res = ok(await router.dispatch(createRequest(2, "session/list", { repo: "/tmp/test-repo" })));
-    const sessions = res.sessions as Array<{ repo: string }>;
-    expect(sessions.length).toBeGreaterThanOrEqual(1);
-    for (const s of sessions) {
-      expect(s.repo).toBe("/tmp/test-repo");
-    }
-  });
+  it(
+    "filters by repo",
+    async () => {
+      const a = await router.dispatch(
+        createRequest(1, "session/start", { summary: "repo-filter", repo: "/tmp/test-repo", flow: "x-auto" }),
+      );
+      const res = ok(await router.dispatch(createRequest(2, "session/list", { repo: "/tmp/test-repo" })));
+      const sessions = res.sessions as Array<{ repo: string }>;
+      expect(sessions.length).toBeGreaterThanOrEqual(1);
+      for (const s of sessions) {
+        expect(s.repo).toBe("/tmp/test-repo");
+      }
+      await drive(a);
+    },
+    45_000,
+  );
 
-  it("filters by flow", async () => {
-    await router.dispatch(createRequest(1, "session/start", { summary: "flow-filter", repo: ".", flow: "bare" }));
-    const res = ok(await router.dispatch(createRequest(2, "session/list", { flow: "bare" })));
-    const sessions = res.sessions as Array<{ flow: string }>;
-    expect(sessions.length).toBeGreaterThanOrEqual(1);
-    for (const s of sessions) {
-      expect(s.flow).toBe("bare");
-    }
-  });
+  it(
+    "filters by flow",
+    async () => {
+      const a = await router.dispatch(
+        createRequest(1, "session/start", { summary: "flow-filter", repo: ".", flow: "x-auto" }),
+      );
+      const res = ok(await router.dispatch(createRequest(2, "session/list", { flow: "x-auto" })));
+      const sessions = res.sessions as Array<{ flow: string }>;
+      expect(sessions.length).toBeGreaterThanOrEqual(1);
+      for (const s of sessions) {
+        expect(s.flow).toBe("x-auto");
+      }
+      await drive(a);
+    },
+    45_000,
+  );
 
-  it("respects limit", async () => {
-    await router.dispatch(createRequest(1, "session/start", { summary: "lim-1", repo: ".", flow: "bare" }));
-    await router.dispatch(createRequest(2, "session/start", { summary: "lim-2", repo: ".", flow: "bare" }));
-    const res = ok(await router.dispatch(createRequest(3, "session/list", { limit: 1 })));
-    const sessions = res.sessions as unknown[];
-    expect(sessions.length).toBe(1);
-  });
+  it(
+    "respects limit",
+    async () => {
+      const a = await router.dispatch(createRequest(1, "session/start", { summary: "lim-1", repo: ".", flow: "x-auto" }));
+      const b = await router.dispatch(createRequest(2, "session/start", { summary: "lim-2", repo: ".", flow: "x-auto" }));
+      const res = ok(await router.dispatch(createRequest(3, "session/list", { limit: 1 })));
+      const sessions = res.sessions as unknown[];
+      expect(sessions.length).toBe(1);
+      await drive(a);
+      await drive(b);
+    },
+    45_000,
+  );
 
   it("returns empty array when no sessions match filter", async () => {
     const res = ok(await router.dispatch(createRequest(1, "session/list", { repo: "/nonexistent/repo/xyz" })));
@@ -156,34 +214,44 @@ describe("session/start runtime scoping override (Phase 1)", () => {
     tenant_id: "default",
   };
 
-  it("no override -> session created without scoping_runtime_hint", async () => {
-    const res = (await router.dispatch(
-      createRequest(1, "session/start", { summary: "rt-no-override", repo: ".", flow: "bare" }),
-    )) as JsonRpcResponse;
-    const session = (res.result as { session: { id: string; config: Record<string, unknown> } }).session;
-    expect(session.config?.scoping_runtime_hint).toBeUndefined();
-  });
-
-  it("override naming a known runtime -> session.config.scoping_runtime_hint is set", async () => {
-    const knownRuntime = (await app.runtimes.list()).find((r) => r.name)?.name;
-    if (!knownRuntime) throw new Error("test setup: at least one runtime must exist");
-    await app.scopingOverrides.set(tenantOverrideKey, knownRuntime);
-    try {
+  it(
+    "no override -> session created without scoping_runtime_hint",
+    async () => {
       const res = (await router.dispatch(
-        createRequest(1, "session/start", { summary: "rt-known-override", repo: ".", flow: "bare" }),
+        createRequest(1, "session/start", { summary: "rt-no-override", repo: ".", flow: "x-auto" }),
       )) as JsonRpcResponse;
-      const session = (res.result as { session: { config: Record<string, unknown> } }).session;
-      expect(session.config?.scoping_runtime_hint).toBe(knownRuntime);
-    } finally {
-      await app.scopingOverrides.delete(tenantOverrideKey);
-    }
-  });
+      const session = (res.result as { session: { id: string; config: Record<string, unknown> } }).session;
+      expect(session.config?.scoping_runtime_hint).toBeUndefined();
+      await drive(res);
+    },
+    45_000,
+  );
+
+  it(
+    "override naming a known runtime -> session.config.scoping_runtime_hint is set",
+    async () => {
+      const knownRuntime = (await app.runtimes.list()).find((r) => r.name)?.name;
+      if (!knownRuntime) throw new Error("test setup: at least one runtime must exist");
+      await app.scopingOverrides.set(tenantOverrideKey, knownRuntime);
+      try {
+        const res = (await router.dispatch(
+          createRequest(1, "session/start", { summary: "rt-known-override", repo: ".", flow: "x-auto" }),
+        )) as JsonRpcResponse;
+        const session = (res.result as { session: { config: Record<string, unknown> } }).session;
+        expect(session.config?.scoping_runtime_hint).toBe(knownRuntime);
+        await drive(res);
+      } finally {
+        await app.scopingOverrides.delete(tenantOverrideKey);
+      }
+    },
+    45_000,
+  );
 
   it("override naming an UNKNOWN runtime -> session/start fails with INVALID_PARAMS", async () => {
     await app.scopingOverrides.set(tenantOverrideKey, "ghost-runtime-xyz");
     try {
       const res = (await router.dispatch(
-        createRequest(1, "session/start", { summary: "rt-bad-override", repo: ".", flow: "bare" }),
+        createRequest(1, "session/start", { summary: "rt-bad-override", repo: ".", flow: "x-auto" }),
       )) as { error?: { code: number; message: string } };
       expect(res.error).toBeDefined();
       expect(res.error?.code).toBe(-32602); // ErrorCodes.INVALID_PARAMS
@@ -194,27 +262,32 @@ describe("session/start runtime scoping override (Phase 1)", () => {
     }
   });
 
-  it("explicit caller-provided opts.runtime wins -- override is not validated, no hint stashed", async () => {
-    // A bad tenant override should NOT block a caller who explicitly
-    // chose their runtime via opts.runtime. The explicit caller intent
-    // takes precedence; the resolver does not run.
-    await app.scopingOverrides.set(tenantOverrideKey, "ghost-runtime-xyz");
-    try {
-      const knownRuntime = (await app.runtimes.list()).find((r) => r.name)?.name;
-      const res = (await router.dispatch(
-        createRequest(1, "session/start", {
-          summary: "rt-explicit-wins",
-          repo: ".",
-          flow: "bare",
-          runtime: knownRuntime,
-        }),
-      )) as JsonRpcResponse;
-      const session = (res.result as { session: { config: Record<string, unknown> } }).session;
-      expect(session.config?.scoping_runtime_hint).toBeUndefined();
-    } finally {
-      await app.scopingOverrides.delete(tenantOverrideKey);
-    }
-  });
+  it(
+    "explicit caller-provided opts.runtime wins -- override is not validated, no hint stashed",
+    async () => {
+      // A bad tenant override should NOT block a caller who explicitly
+      // chose their runtime via opts.runtime. The explicit caller intent
+      // takes precedence; the resolver does not run.
+      await app.scopingOverrides.set(tenantOverrideKey, "ghost-runtime-xyz");
+      try {
+        const knownRuntime = (await app.runtimes.list()).find((r) => r.name)?.name;
+        const res = (await router.dispatch(
+          createRequest(1, "session/start", {
+            summary: "rt-explicit-wins",
+            repo: ".",
+            flow: "x-auto",
+            runtime: knownRuntime,
+          }),
+        )) as JsonRpcResponse;
+        const session = (res.result as { session: { config: Record<string, unknown> } }).session;
+        expect(session.config?.scoping_runtime_hint).toBeUndefined();
+        await drive(res);
+      } finally {
+        await app.scopingOverrides.delete(tenantOverrideKey);
+      }
+    },
+    45_000,
+  );
 });
 
 describe("session/start model scoping override (Phase 1)", () => {
@@ -225,34 +298,44 @@ describe("session/start model scoping override (Phase 1)", () => {
     tenant_id: "default",
   };
 
-  it("no override -> session created without scoping_model_hint", async () => {
-    const res = (await router.dispatch(
-      createRequest(1, "session/start", { summary: "model-no-override", repo: ".", flow: "bare" }),
-    )) as JsonRpcResponse;
-    const session = (res.result as { session: { config: Record<string, unknown> } }).session;
-    expect(session.config?.scoping_model_hint).toBeUndefined();
-  });
-
-  it("override naming a known model -> session.config.scoping_model_hint is set", async () => {
-    const knownModel = app.models.list().find((m) => m.id)?.id;
-    if (!knownModel) throw new Error("test setup: at least one model must exist in the catalog");
-    await app.scopingOverrides.set(tenantOverrideKey, knownModel);
-    try {
+  it(
+    "no override -> session created without scoping_model_hint",
+    async () => {
       const res = (await router.dispatch(
-        createRequest(1, "session/start", { summary: "model-known-override", repo: ".", flow: "bare" }),
+        createRequest(1, "session/start", { summary: "model-no-override", repo: ".", flow: "x-auto" }),
       )) as JsonRpcResponse;
       const session = (res.result as { session: { config: Record<string, unknown> } }).session;
-      expect(session.config?.scoping_model_hint).toBe(knownModel);
-    } finally {
-      await app.scopingOverrides.delete(tenantOverrideKey);
-    }
-  });
+      expect(session.config?.scoping_model_hint).toBeUndefined();
+      await drive(res);
+    },
+    45_000,
+  );
+
+  it(
+    "override naming a known model -> session.config.scoping_model_hint is set",
+    async () => {
+      const knownModel = (await app.models.list()).find((m) => m.id)?.id;
+      if (!knownModel) throw new Error("test setup: at least one model must exist in the catalog");
+      await app.scopingOverrides.set(tenantOverrideKey, knownModel);
+      try {
+        const res = (await router.dispatch(
+          createRequest(1, "session/start", { summary: "model-known-override", repo: ".", flow: "x-auto" }),
+        )) as JsonRpcResponse;
+        const session = (res.result as { session: { config: Record<string, unknown> } }).session;
+        expect(session.config?.scoping_model_hint).toBe(knownModel);
+        await drive(res);
+      } finally {
+        await app.scopingOverrides.delete(tenantOverrideKey);
+      }
+    },
+    45_000,
+  );
 
   it("override naming an UNKNOWN model -> session/start fails with INVALID_PARAMS", async () => {
     await app.scopingOverrides.set(tenantOverrideKey, "ghost-model-xyz");
     try {
       const res = (await router.dispatch(
-        createRequest(1, "session/start", { summary: "model-bad-override", repo: ".", flow: "bare" }),
+        createRequest(1, "session/start", { summary: "model-bad-override", repo: ".", flow: "x-auto" }),
       )) as { error?: { code: number; message: string } };
       expect(res.error).toBeDefined();
       expect(res.error?.code).toBe(-32602); // INVALID_PARAMS
@@ -263,25 +346,30 @@ describe("session/start model scoping override (Phase 1)", () => {
     }
   });
 
-  it("alias override (e.g. 'sonnet') is accepted by the catalog", async () => {
-    // Aliases are a first-class lookup path on ModelStore.get(); they
-    // should validate exactly the same as concrete model ids.
-    const aliasModel = app.models.list().find((m) => Array.isArray(m.aliases) && m.aliases.length > 0);
-    if (!aliasModel || !aliasModel.aliases) {
-      throw new Error("test setup: catalog must have at least one model with aliases");
-    }
-    const alias = aliasModel.aliases[0];
-    await app.scopingOverrides.set(tenantOverrideKey, alias);
-    try {
-      const res = (await router.dispatch(
-        createRequest(1, "session/start", { summary: "model-alias-override", repo: ".", flow: "bare" }),
-      )) as JsonRpcResponse;
-      const session = (res.result as { session: { config: Record<string, unknown> } }).session;
-      expect(session.config?.scoping_model_hint).toBe(alias);
-    } finally {
-      await app.scopingOverrides.delete(tenantOverrideKey);
-    }
-  });
+  it(
+    "alias override (e.g. 'sonnet') is accepted by the catalog",
+    async () => {
+      // Aliases are a first-class lookup path on ModelStore.get(); they
+      // should validate exactly the same as concrete model ids.
+      const aliasModel = (await app.models.list()).find((m) => Array.isArray(m.aliases) && m.aliases.length > 0);
+      if (!aliasModel || !aliasModel.aliases) {
+        throw new Error("test setup: catalog must have at least one model with aliases");
+      }
+      const alias = aliasModel.aliases[0];
+      await app.scopingOverrides.set(tenantOverrideKey, alias);
+      try {
+        const res = (await router.dispatch(
+          createRequest(1, "session/start", { summary: "model-alias-override", repo: ".", flow: "x-auto" }),
+        )) as JsonRpcResponse;
+        const session = (res.result as { session: { config: Record<string, unknown> } }).session;
+        expect(session.config?.scoping_model_hint).toBe(alias);
+        await drive(res);
+      } finally {
+        await app.scopingOverrides.delete(tenantOverrideKey);
+      }
+    },
+    45_000,
+  );
 });
 
 describe("session/start compute.default scoping override (Phase 1)", () => {
@@ -292,38 +380,48 @@ describe("session/start compute.default scoping override (Phase 1)", () => {
     tenant_id: "default",
   };
 
-  it("no override -> session created with caller-supplied or default compute", async () => {
-    const res = (await router.dispatch(
-      createRequest(1, "session/start", { summary: "compute-no-override", repo: ".", flow: "bare" }),
-    )) as JsonRpcResponse;
-    const session = (res.result as { session: { compute_name: string | null } }).session;
-    // No override and no caller-explicit compute -> falls through to
-    // SessionCreator's existing default ("local").
-    expect(session.compute_name).toBe("local");
-  });
-
-  it("override naming a known compute -> session.compute_name is set from the resolver", async () => {
-    // Pick any compute that exists in the test tenant ("local" is the
-    // auto-seeded one).
-    const known = (await app.computes.list()).find((c) => c.name)?.name;
-    if (!known) throw new Error("test setup: at least one compute must exist");
-    await app.scopingOverrides.set(tenantOverrideKey, known);
-    try {
+  it(
+    "no override -> session created with caller-supplied or default compute",
+    async () => {
       const res = (await router.dispatch(
-        createRequest(1, "session/start", { summary: "compute-known-override", repo: ".", flow: "bare" }),
+        createRequest(1, "session/start", { summary: "compute-no-override", repo: ".", flow: "x-auto" }),
       )) as JsonRpcResponse;
-      const session = (res.result as { session: { compute_name: string } }).session;
-      expect(session.compute_name).toBe(known);
-    } finally {
-      await app.scopingOverrides.delete(tenantOverrideKey);
-    }
-  });
+      const session = (res.result as { session: { compute_name: string | null } }).session;
+      // No override and no caller-explicit compute -> falls through to
+      // SessionCreator's existing default ("local").
+      expect(session.compute_name).toBe("local");
+      await drive(res);
+    },
+    45_000,
+  );
+
+  it(
+    "override naming a known compute -> session.compute_name is set from the resolver",
+    async () => {
+      // Pick any compute that exists in the test tenant ("local" is the
+      // auto-seeded one).
+      const known = (await app.computes.list()).find((c) => c.name)?.name;
+      if (!known) throw new Error("test setup: at least one compute must exist");
+      await app.scopingOverrides.set(tenantOverrideKey, known);
+      try {
+        const res = (await router.dispatch(
+          createRequest(1, "session/start", { summary: "compute-known-override", repo: ".", flow: "x-auto" }),
+        )) as JsonRpcResponse;
+        const session = (res.result as { session: { compute_name: string } }).session;
+        expect(session.compute_name).toBe(known);
+        await drive(res);
+      } finally {
+        await app.scopingOverrides.delete(tenantOverrideKey);
+      }
+    },
+    45_000,
+  );
 
   it("override naming an UNKNOWN compute -> session/start fails with INVALID_PARAMS", async () => {
     await app.scopingOverrides.set(tenantOverrideKey, "ghost-compute-xyz");
     try {
       const res = (await router.dispatch(
-        createRequest(1, "session/start", { summary: "compute-bad-override", repo: ".", flow: "bare" }),
+        createRequest(1, "session/start", { summary: "compute-bad-override", repo: ".", flow: "x-auto" }),
       )) as { error?: { code: number; message: string } };
       expect(res.error).toBeDefined();
       expect(res.error?.code).toBe(-32602); // INVALID_PARAMS
@@ -334,26 +432,31 @@ describe("session/start compute.default scoping override (Phase 1)", () => {
     }
   });
 
-  it("explicit caller-provided opts.compute_name wins -- override is not validated, hint not applied", async () => {
-    // A bad tenant override should NOT block a caller who explicitly
-    // chose their compute. Same caller-explicit short-circuit pattern
-    // as runtime.
-    await app.scopingOverrides.set(tenantOverrideKey, "ghost-compute-xyz");
-    try {
-      const res = (await router.dispatch(
-        createRequest(1, "session/start", {
-          summary: "compute-explicit-wins",
-          repo: ".",
-          flow: "bare",
-          compute_name: "local",
-        }),
-      )) as JsonRpcResponse;
-      const session = (res.result as { session: { compute_name: string } }).session;
-      expect(session.compute_name).toBe("local");
-    } finally {
-      await app.scopingOverrides.delete(tenantOverrideKey);
-    }
-  });
+  it(
+    "explicit caller-provided opts.compute_name wins -- override is not validated, hint not applied",
+    async () => {
+      // A bad tenant override should NOT block a caller who explicitly
+      // chose their compute. Same caller-explicit short-circuit pattern
+      // as runtime.
+      await app.scopingOverrides.set(tenantOverrideKey, "ghost-compute-xyz");
+      try {
+        const res = (await router.dispatch(
+          createRequest(1, "session/start", {
+            summary: "compute-explicit-wins",
+            repo: ".",
+            flow: "x-auto",
+            compute_name: "local",
+          }),
+        )) as JsonRpcResponse;
+        const session = (res.result as { session: { compute_name: string } }).session;
+        expect(session.compute_name).toBe("local");
+        await drive(res);
+      } finally {
+        await app.scopingOverrides.delete(tenantOverrideKey);
+      }
+    },
+    45_000,
+  );
 });
 
 describe("skill/list", async () => {

@@ -1,16 +1,35 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../core/app.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../core/temporal/test-harness.js";
 import { registerSessionHandlers } from "../handlers/session.js";
 import { registerResourceHandlers } from "../handlers/resource.js";
 import { Router } from "../router.js";
 import { createRequest, type JsonRpcResponse, type JsonRpcError } from "../../protocol/types.js";
 
 let app: AppContext;
+let detach: (() => void) | undefined;
 beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+  );
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 afterAll(async () => {
+  detach?.();
   await app?.shutdown();
 });
 
@@ -31,20 +50,26 @@ function err(res: unknown): { code: number; message: string } {
 }
 
 async function createSession(summary: string): Promise<string> {
-  const res = await router.dispatch(createRequest(1, "session/start", { summary, repo: ".", flow: "bare" }));
-  return (ok(res).session as Record<string, unknown>).id as string;
+  const res = await router.dispatch(createRequest(1, "session/start", { summary, repo: ".", flow: "x-auto" }));
+  const id = (ok(res).session as Record<string, unknown>).id as string;
+  await waitForSessionStatus(app, id, ["completed", "failed"]);
+  return id;
 }
 
 // ── session/read ───────────────────────────────────────────────────────────
 
 describe("session/read", async () => {
-  it("returns session by id", async () => {
-    const id = await createSession("read-basic");
-    const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id }));
-    const result = ok(res);
-    expect((result.session as Record<string, unknown>).id).toBe(id);
-    expect((result.session as Record<string, unknown>).summary).toBe("read-basic");
-  });
+  it(
+    "returns session by id",
+    async () => {
+      const id = await createSession("read-basic");
+      const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id }));
+      const result = ok(res);
+      expect((result.session as Record<string, unknown>).id).toBe(id);
+      expect((result.session as Record<string, unknown>).summary).toBe("read-basic");
+    },
+    45_000,
+  );
 
   it("returns error for unknown session id", async () => {
     const res = await router.dispatch(createRequest(1, "session/read", { sessionId: "s-does-not-exist" }));
@@ -52,55 +77,71 @@ describe("session/read", async () => {
     expect(err(res).code).toBe(-32002);
   });
 
-  it("includes events when requested", async () => {
-    const id = await createSession("read-events");
-    await app.events.log(id, "test-event", { stage: "init", data: { foo: "bar" } });
+  it(
+    "includes events when requested",
+    async () => {
+      const id = await createSession("read-events");
+      await app.events.log(id, "test-event", { stage: "init", data: { foo: "bar" } });
 
-    const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id, include: ["events"] }));
-    const result = ok(res);
-    expect(result.events).toBeDefined();
-    const events = result.events as Array<Record<string, unknown>>;
-    expect(events.length).toBeGreaterThanOrEqual(1);
-    expect(events.some((e) => e.type === "test-event")).toBe(true);
-  });
+      const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id, include: ["events"] }));
+      const result = ok(res);
+      expect(result.events).toBeDefined();
+      const events = result.events as Array<Record<string, unknown>>;
+      expect(events.length).toBeGreaterThanOrEqual(1);
+      expect(events.some((e) => e.type === "test-event")).toBe(true);
+    },
+    45_000,
+  );
 
-  it("includes messages when requested", async () => {
-    const id = await createSession("read-messages");
-    await app.messages.send(id, "user", "hello from test");
+  it(
+    "includes messages when requested",
+    async () => {
+      const id = await createSession("read-messages");
+      await app.messages.send(id, "user", "hello from test");
 
-    const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id, include: ["messages"] }));
-    const result = ok(res);
-    expect(result.messages).toBeDefined();
-    const messages = result.messages as Array<Record<string, unknown>>;
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    expect(messages.some((m) => m.content === "hello from test")).toBe(true);
-  });
+      const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id, include: ["messages"] }));
+      const result = ok(res);
+      expect(result.messages).toBeDefined();
+      const messages = result.messages as Array<Record<string, unknown>>;
+      expect(messages.length).toBeGreaterThanOrEqual(1);
+      expect(messages.some((m) => m.content === "hello from test")).toBe(true);
+    },
+    45_000,
+  );
 
-  it("includes both events and messages when requested", async () => {
-    const id = await createSession("read-both");
-    await app.events.log(id, "both-event");
-    await app.messages.send(id, "system", "both-msg");
+  it(
+    "includes both events and messages when requested",
+    async () => {
+      const id = await createSession("read-both");
+      await app.events.log(id, "both-event");
+      await app.messages.send(id, "system", "both-msg");
 
-    const res = await router.dispatch(
-      createRequest(2, "session/read", { sessionId: id, include: ["events", "messages"] }),
-    );
-    const result = ok(res);
-    expect(result.events).toBeDefined();
-    expect(result.messages).toBeDefined();
-    expect((result.events as unknown[]).length).toBeGreaterThanOrEqual(1);
-    expect((result.messages as unknown[]).length).toBeGreaterThanOrEqual(1);
-  });
+      const res = await router.dispatch(
+        createRequest(2, "session/read", { sessionId: id, include: ["events", "messages"] }),
+      );
+      const result = ok(res);
+      expect(result.events).toBeDefined();
+      expect(result.messages).toBeDefined();
+      expect((result.events as unknown[]).length).toBeGreaterThanOrEqual(1);
+      expect((result.messages as unknown[]).length).toBeGreaterThanOrEqual(1);
+    },
+    45_000,
+  );
 
-  it("omits events and messages when include is not specified", async () => {
-    const id = await createSession("read-no-include");
-    await app.events.log(id, "omitted-event");
-    await app.messages.send(id, "user", "omitted-msg");
+  it(
+    "omits events and messages when include is not specified",
+    async () => {
+      const id = await createSession("read-no-include");
+      await app.events.log(id, "omitted-event");
+      await app.messages.send(id, "user", "omitted-msg");
 
-    const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id }));
-    const result = ok(res);
-    expect(result.events).toBeUndefined();
-    expect(result.messages).toBeUndefined();
-  });
+      const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id }));
+      const result = ok(res);
+      expect(result.events).toBeUndefined();
+      expect(result.messages).toBeUndefined();
+    },
+    45_000,
+  );
 });
 
 // ── agent/read ─────────────────────────────────────────────────────────────
