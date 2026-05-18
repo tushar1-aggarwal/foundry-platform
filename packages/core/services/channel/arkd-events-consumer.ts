@@ -158,6 +158,36 @@ async function runConsumerLoop(
 ): Promise<void> {
   let backoff = RECONNECT_MIN_MS;
   while (!entry.stopped) {
+    // A session-scoped consumer (k8s ephemeral pod-per-session) exists only
+    // to drain THAT session's pod hooks. Its registry is an in-memory map
+    // local to one process; with multiple temporal-worker replicas the
+    // destroy/stop activity can land on a different replica than the one
+    // that started this loop (or the session row can be GC'd before
+    // destroyComputeActivity runs), so stopArkdEventsConsumer never reaches
+    // it and it reconnect-loops a dead pod forever. Tie lifetime to the
+    // session: once it is terminal or gone, the pod is being/already
+    // destroyed -- there is nothing left to drain. Replica-agnostic
+    // (every replica reads the same session row). Compute-scoped
+    // rehydrated consumers (no triggerSessionId) are unaffected.
+    if (entry.triggerSessionId) {
+      try {
+        const s = await app.sessions.get(entry.triggerSessionId);
+        const terminal =
+          !s || ["completed", "failed", "stopped", "cancelled", "deleting"].includes(s.status as string);
+        if (terminal) {
+          logInfo(
+            "conductor",
+            `arkd-events: session ${entry.triggerSessionId} ${s ? s.status : "gone"} -- stopping consumer compute=${entry.computeName}`,
+          );
+          entry.stopped = true;
+          entry.abort.abort();
+          consumers.delete(entry.computeName);
+          return;
+        }
+      } catch {
+        /* transient DB blip -- keep draining, re-check next cycle */
+      }
+    }
     try {
       await readHooksChannelOnce(app, entry, arkdUrl, arkdToken);
       // Clean stream end (server closed) -- reconnect immediately.
