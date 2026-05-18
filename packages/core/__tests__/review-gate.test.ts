@@ -40,8 +40,12 @@ describe("approveReviewGate", async () => {
       ],
     });
 
-    const session = await getApp().sessionCreator.start({ flow: "pr-flow", summary: "test review gate" });
-    // startSession puts us at stage "code" -- advance past auto gate to "wait-review"
+    // Temporal owns workflow-driven progression; this test exercises the
+    // stageAdvance / approveReviewGate primitives directly, so seed the row
+    // at the first stage instead of kicking a racing sessionWorkflow.
+    const session = await getApp().sessions.create({ flow: "pr-flow", summary: "test review gate" });
+    await getApp().sessions.update(session.id, { stage: "code", status: "ready" });
+    // advance past auto gate "code" to "wait-review"
     const adv = await getApp().stageAdvance.advance(session.id, true);
     expect(adv.ok).toBe(true);
     expect(adv.message).toContain("wait-review");
@@ -78,7 +82,8 @@ describe("approveReviewGate", async () => {
       ],
     });
 
-    const session = await getApp().sessionCreator.start({ flow: "rev-evt", summary: "event test" });
+    const session = await getApp().sessions.create({ flow: "rev-evt", summary: "event test" });
+    await getApp().sessions.update(session.id, { stage: "wait", status: "ready" });
     await approveReviewGate(getApp(), session.id);
 
     const events = await getApp().events.list(session.id, { type: "review_approved" });
@@ -100,11 +105,12 @@ describe("review gate blocking", async () => {
       ],
     });
 
-    const session = await getApp().sessionCreator.start({ flow: "block-flow", summary: "block test" });
-    expect(session.stage).toBe("review-stage");
+    const session = await getApp().sessions.create({ flow: "block-flow", summary: "block test" });
+    await getApp().sessions.update(session.id, { stage: "review-stage", status: "ready" });
+    expect((await getApp().sessions.get(session.id))!.stage).toBe("review-stage");
 
     // Gate blocks
-    const gateResult = evaluateGate(getApp(), "block-flow", "review-stage", {});
+    const gateResult = await evaluateGate(getApp(), "block-flow", "review-stage", {});
     expect(gateResult.canProceed).toBe(false);
 
     // Normal advance blocked
@@ -123,7 +129,7 @@ describe("review gate blocking", async () => {
 // ── Flow with review stage loads from YAML ───────────────────────────────
 
 describe("review flow YAML loading", () => {
-  it("flow with review stage loads correctly from YAML", () => {
+  it("flow with review stage loads correctly from YAML", async () => {
     writeUserFlow("yaml-review", {
       name: "yaml-review",
       description: "Flow with review gate",
@@ -134,7 +140,7 @@ describe("review flow YAML loading", () => {
       ],
     });
 
-    const flow = getApp().flows.get("yaml-review");
+    const flow = await getApp().flows.get("yaml-review");
     expect(flow).not.toBeNull();
     expect(flow!.name).toBe("yaml-review");
     expect(flow!.stages).toHaveLength(3);

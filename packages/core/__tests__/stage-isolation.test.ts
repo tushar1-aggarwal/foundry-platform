@@ -13,10 +13,9 @@
  * 1. advance() clears claude_session_id by default (fresh isolation)
  * 2. advance() always clears session_id (tmux handle)
  * 3. advance() preserves claude_session_id when next stage has isolation="continue"
- * 4. mediateStageHandoff integration verifies full handoff chain
- * 5. Stage events include isolation mode for observability
- * 6. Flow completion does not need isolation (terminal state)
- * 7. Multi-stage flow: each transition clears runtime state
+ * 4. Stage events include isolation mode for observability
+ * 5. Flow completion does not need isolation (terminal state)
+ * 6. Multi-stage flow: each transition clears runtime state
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
@@ -147,75 +146,6 @@ describe("stage isolation: observability", async () => {
     expect(stageReady!.data?.isolation).toBe("fresh");
     expect(stageReady!.data?.from_stage).toBe("implement");
     expect(stageReady!.data?.to_stage).toBe("verify");
-  });
-});
-
-// ── mediateStageHandoff integration ──────────────────────────────────────
-
-describe("stage isolation: mediateStageHandoff integration", async () => {
-  it("clears runtime state during mediated handoff", async () => {
-    const session = await app.sessions.create({ summary: "mediated isolation test", flow: "quick" });
-    await app.sessions.update(session.id, {
-      status: "ready",
-      stage: "implement",
-      claude_session_id: "pre-handoff-session",
-      session_id: "pre-handoff-tmux",
-    });
-
-    const result = await app.sessionHooks.mediateStageHandoff(session.id, {
-      autoDispatch: false,
-      source: "test",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.fromStage).toBe("implement");
-    expect(result.toStage).toBe("verify");
-
-    const updated = await app.sessions.get(session.id);
-    expect(updated?.stage).toBe("verify");
-    expect(updated?.claude_session_id).toBeNull();
-    expect(updated?.session_id).toBeNull();
-  });
-
-  it("clears runtime state through complete flow via mediateStageHandoff", async () => {
-    // quick flow: implement -> verify -> pr -> merge
-    const session = await app.sessions.create({ summary: "full mediation test", flow: "quick" });
-    await app.sessions.update(session.id, {
-      status: "ready",
-      stage: "implement",
-      claude_session_id: "session-impl",
-      session_id: "tmux-impl",
-    });
-
-    // Advance through all stages
-    const stages = ["implement", "verify", "pr"];
-    for (const fromStage of stages) {
-      const r = await app.sessionHooks.mediateStageHandoff(session.id, {
-        autoDispatch: false,
-        source: "test",
-      });
-      expect(r.ok).toBe(true);
-      expect(r.fromStage).toBe(fromStage);
-
-      if (!r.flowCompleted) {
-        const s = await app.sessions.get(session.id);
-        expect(s?.claude_session_id).toBeNull();
-        expect(s?.session_id).toBeNull();
-        // Simulate next stage running
-        await app.sessions.update(session.id, {
-          claude_session_id: `session-${r.toStage}`,
-          session_id: `tmux-${r.toStage}`,
-        });
-      }
-    }
-
-    // Final advance: merge -> completed
-    const final = await app.sessionHooks.mediateStageHandoff(session.id, {
-      autoDispatch: false,
-      source: "test",
-    });
-    expect(final.ok).toBe(true);
-    expect(final.flowCompleted).toBe(true);
   });
 });
 

@@ -5,6 +5,10 @@
  * tests beyond the basic fork/clone create-shape coverage.
  */
 
+// Import the harness FIRST so its top-level Temporal module substitutes are
+// installed before any transitive import pulls in the real client; otherwise
+// spawnSubagent's startWorkflowFor dials a non-existent Temporal server.
+import { attachTemporalTestHarness, drainTemporalTestHarness } from "../temporal/test-harness.js";
 import { describe, it, expect, setDefaultTimeout } from "bun:test";
 
 setDefaultTimeout(15_000);
@@ -179,6 +183,7 @@ describe("spawnSubagent", async () => {
   });
 
   it("creates a quick-flow child with subagent metadata", async () => {
+    await attachTemporalTestHarness(getApp());
     const parent = await getApp().sessions.create({ summary: "parent" });
     await getApp().sessions.update(parent.id, { agent: "implementer", workdir: "/wd" });
 
@@ -194,28 +199,34 @@ describe("spawnSubagent", async () => {
     expect(child.workdir).toBe("/wd");
     expect(child.agent).toBe("implementer"); // inherits parent's agent
     expect(child.config?.subagent).toBe(true);
+    await drainTemporalTestHarness();
   });
 
   it("agent override takes precedence over the parent's agent", async () => {
+    await attachTemporalTestHarness(getApp());
     const parent = await getApp().sessions.create({ summary: "parent" });
     await getApp().sessions.update(parent.id, { agent: "implementer" });
 
     const result = await spawnSubagent(depsFromApp(getApp()), parent.id, { task: "review", agent: "reviewer" });
     expect(result.ok).toBe(true);
     expect((await getApp().sessions.get(result.sessionId!))!.agent).toBe("reviewer");
+    await drainTemporalTestHarness();
   });
 
   it("logs a subagent_spawned event", async () => {
+    await attachTemporalTestHarness(getApp());
     const parent = await getApp().sessions.create({ summary: "parent" });
     const result = await spawnSubagent(depsFromApp(getApp()), parent.id, { task: "x" });
     expect(result.ok).toBe(true);
     const events = await getApp().events.list(result.sessionId!);
     expect(events.some((e) => e.type === "subagent_spawned")).toBe(true);
+    await drainTemporalTestHarness();
   });
 });
 
 describe("spawnParallelSubagents", async () => {
   it("returns the list of spawned ids and logs events on each", async () => {
+    await attachTemporalTestHarness(getApp());
     const parent = await getApp().sessions.create({ summary: "parent" });
     const result = await spawnParallelSubagents(depsFromApp(getApp()), parent.id, [
       { task: "a" },
@@ -229,5 +240,6 @@ describe("spawnParallelSubagents", async () => {
       const events = await getApp().events.list(id);
       expect(events.some((e) => e.type === "subagent_spawned")).toBe(true);
     }
+    await drainTemporalTestHarness();
   });
 });

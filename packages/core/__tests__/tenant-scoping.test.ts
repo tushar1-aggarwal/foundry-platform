@@ -5,20 +5,33 @@
  * each other's data, and that the default tenant works for backward compat.
  */
 
-import { describe, it, expect, beforeEach, afterAll } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../app.js";
+import { attachTemporalTestHarness, drainTemporalTestHarness } from "../temporal/test-harness.js";
 
 let app: AppContext;
+let detach: (() => void) | undefined;
 
 beforeEach(async () => {
   if (app) {
     await app.shutdown();
   }
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(join(flowDir, "x-auto.yaml"), `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`);
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 
 afterAll(async () => {
+  detach?.();
   if (app) {
     await app.shutdown();
   }
@@ -360,26 +373,33 @@ describe("tenant scoping", async () => {
       expect(tenantApp.sessionCreator).toBe(tenantApp.sessionCreator);
     });
 
-    it("sessionCreator.start() on a tenant scope writes with tenant_id", async () => {
-      const tenantApp = app.forTenant("acme");
-      const session = await tenantApp.sessionCreator.start({ summary: "tenant acme start" } as any);
+    it(
+      "sessionCreator.start() on a tenant scope writes with tenant_id",
+      async () => {
+        const tenantApp = app.forTenant("acme");
+        const session = await tenantApp.sessionCreator.start({ summary: "tenant acme start", flow: "x-auto" } as any);
 
-      // The row must be tagged with `acme` -- not `default`. Before the fix,
-      // sessionLifecycle was the root singleton, so its `sessions` dep was
-      // the default-tenant repo and the INSERT wrote `tenant_id='default'`.
-      expect(session.tenant_id).toBe("acme");
+        // The row must be tagged with `acme` -- not `default`. Before the fix,
+        // sessionLifecycle was the root singleton, so its `sessions` dep was
+        // the default-tenant repo and the INSERT wrote `tenant_id='default'`.
+        // `start()` writes the row and hands off to the (fire-and-forget)
+        // Temporal workflow synchronously; the tenant tag is observable
+        // immediately, which is the contract this test pins.
+        expect(session.tenant_id).toBe("acme");
 
-      // Cross-check via the tenant-scoped sessions repo: it can read the row.
-      const roundtrip = await tenantApp.sessions.get(session.id);
-      expect(roundtrip).not.toBeNull();
-      expect(roundtrip!.tenant_id).toBe("acme");
+        // Cross-check via the tenant-scoped sessions repo: it can read the row.
+        const roundtrip = await tenantApp.sessions.get(session.id);
+        expect(roundtrip).not.toBeNull();
+        expect(roundtrip!.tenant_id).toBe("acme");
 
-      // The default tenant's sessions repo must NOT see the acme session --
-      // proves the write actually tagged the tenant rather than accidentally
-      // landing in a tenant-agnostic row.
-      const fromDefault = await app.sessions.get(session.id);
-      expect(fromDefault).toBeNull();
-    });
+        // The default tenant's sessions repo must NOT see the acme session --
+        // proves the write actually tagged the tenant rather than accidentally
+        // landing in a tenant-agnostic row.
+        const fromDefault = await app.sessions.get(session.id);
+        expect(fromDefault).toBeNull();
+      },
+      45_000,
+    );
 
     it("sessionHooks closes over the tenant-scoped events repo", () => {
       // Structural check: the hook-status applier reaches for deps.events.log
