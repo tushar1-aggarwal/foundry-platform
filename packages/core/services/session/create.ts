@@ -210,7 +210,16 @@ export class SessionCreator {
     const firstStage = await flow.getFirstStage(flowShim, flowName);
     if (firstStage) {
       const action = await flow.getStageAction(flowShim, flowName, firstStage);
-      await d.sessions.update(session.id, { stage: firstStage, status: "ready" });
+      const firstStageDef = await flow.getStage(flowShim, flowName, firstStage);
+      const stageUpdate: Record<string, unknown> = { stage: firstStage, status: "ready" };
+      // `compute_template:` names a template to materialize per session: the
+      // generic provision path mints an ephemeral pod from the template spec
+      // and binds it to the session via the handle (no row is cloned). Point
+      // the session at the template; an explicit caller compute_name wins.
+      if (firstStageDef?.compute_template && opts.compute_name == null) {
+        stageUpdate.compute_name = firstStageDef.compute_template;
+      }
+      await d.sessions.update(session.id, stageUpdate);
       await d.events.log(session.id, "stage_ready", {
         stage: firstStage,
         actor: "system",

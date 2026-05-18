@@ -1,10 +1,10 @@
 /**
  * Template-dispatch integration tests.
  *
- * When a stage references a named template row, the dispatcher clones it
- * into a fresh per-session concrete row. The clone is tagged with
- * `cloned_from = <template>` so the GC pass can prune it once the session
- * reaches a terminal state.
+ * A stage that references a template row resolves to the template's own
+ * name -- it is NOT cloned into a per-session row. The template is a
+ * read-only spec; the provision path materializes an ephemeral pod from it
+ * and binds the pod to the session via its handle. Nothing to GC.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
@@ -23,9 +23,8 @@ afterEach(async () => {
   await app?.shutdown();
 });
 
-describe("resolveComputeForStage + template cloning", () => {
-  it("clones a template row into a per-session concrete row", async () => {
-    // Seed a template.
+describe("resolveComputeForStage + template materialization", () => {
+  it("resolves a template to its own name (no clone row created)", async () => {
     await app.computeService.create({
       name: "k8s-tmpl",
       compute: "k8s",
@@ -38,17 +37,12 @@ describe("resolveComputeForStage + template cloning", () => {
     const stageDef = { compute: "k8s-tmpl" } as any;
 
     const resolved = await app.dispatchService.resolveComputeForStage(stageDef, sessionId);
-    // Clone name is `<template>-<first 8 of sessionId>`.
-    expect(resolved).toBe("k8s-tmpl-abcdef12");
+    expect(resolved).toBe("k8s-tmpl");
 
-    const clone = await app.computes.get("k8s-tmpl-abcdef12");
-    expect(clone).not.toBeNull();
-    expect(clone!.is_template).toBe(false);
-    expect(clone!.cloned_from).toBe("k8s-tmpl");
-    expect(clone!.compute_kind).toBe("k8s");
-    expect(clone!.isolation_kind).toBe("direct");
+    // No per-session clone row exists -- materialization is at provision.
+    expect(await app.computes.get("k8s-tmpl-abcdef12")).toBeNull();
 
-    // Template row stays intact.
+    // Template row stays intact and remains a template.
     const tmpl = await app.computes.get("k8s-tmpl");
     expect(tmpl?.is_template).toBe(true);
   });
@@ -65,12 +59,10 @@ describe("resolveComputeForStage + template cloning", () => {
     const resolved = await app.dispatchService.resolveComputeForStage(stageDef, sessionId);
     expect(resolved).toBe("shared-ec2");
 
-    // No clone was created.
-    const would = await app.computes.get("shared-ec2-abcdef12");
-    expect(would).toBeNull();
+    expect(await app.computes.get("shared-ec2-abcdef12")).toBeNull();
   });
 
-  it("legacy compute_template field resolves through the same path", async () => {
+  it("legacy compute_template field resolves to the template name", async () => {
     await app.computeService.create({
       name: "legacy-tmpl",
       compute: "k8s",
@@ -82,10 +74,8 @@ describe("resolveComputeForStage + template cloning", () => {
     const stageDef = { compute_template: "legacy-tmpl" } as any;
 
     const resolved = await app.dispatchService.resolveComputeForStage(stageDef, sessionId);
-    expect(resolved).toBe("legacy-tmpl-fedcba09");
-
-    const clone = await app.computes.get("legacy-tmpl-fedcba09");
-    expect(clone?.cloned_from).toBe("legacy-tmpl");
+    expect(resolved).toBe("legacy-tmpl");
+    expect(await app.computes.get("legacy-tmpl-fedcba09")).toBeNull();
   });
 
   it("returns null when the named row is not found", async () => {
@@ -94,7 +84,7 @@ describe("resolveComputeForStage + template cloning", () => {
     expect(resolved).toBeNull();
   });
 
-  it("GC prunes the clone when the session completes; template is preserved", async () => {
+  it("a referenced template is never GC'd and spawns no clone to prune", async () => {
     await app.computeService.create({
       name: "k8s-tmpl2",
       compute: "k8s",
@@ -105,25 +95,26 @@ describe("resolveComputeForStage + template cloning", () => {
 
     const sessionId = "1111222233334444";
     const resolved = await app.dispatchService.resolveComputeForStage({ compute: "k8s-tmpl2" } as any, sessionId);
-    expect(resolved).toBe("k8s-tmpl2-11112222");
+    expect(resolved).toBe("k8s-tmpl2");
 
-    // Tie the clone to a session, then drive it to terminal.
+    // A session pointed at the template, driven terminal.
     const s = await app.sessions.create({
       repo: "/tmp",
       flow: "quick",
       task: "test",
       agent: "default",
-      compute_name: "k8s-tmpl2-11112222",
+      compute_name: "k8s-tmpl2",
     });
     await app.sessions.update(s.id, { status: "completed" });
 
-    const gc = await garbageCollectComputeIfTemplate(depsFromApp(app), "k8s-tmpl2-11112222");
-    expect(gc).toBe(true);
-    expect(await app.computes.get("k8s-tmpl2-11112222")).toBeNull();
-
-    // Template row is untouched.
+    // GC must NOT delete a template (it is a reusable spec, not a clone).
+    const gc = await garbageCollectComputeIfTemplate(depsFromApp(app), "k8s-tmpl2");
+    expect(gc).toBe(false);
     const tmpl = await app.computes.get("k8s-tmpl2");
     expect(tmpl).not.toBeNull();
     expect(tmpl?.is_template).toBe(true);
+
+    // No per-session clone row was ever created.
+    expect(await app.computes.get("k8s-tmpl2-11112222")).toBeNull();
   });
 });

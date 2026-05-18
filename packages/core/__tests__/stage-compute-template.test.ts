@@ -131,24 +131,20 @@ describe("resolveComputeForStage", async () => {
     const logs: string[] = [];
 
     const result = await app.dispatchService.resolveComputeForStage(stageDef, session.id, (m) => logs.push(m));
-    // Upstream adc10203 clones templates with a session-suffixed name so the
-    // GC can tear them down per-session. The resolved name is the clone, not
-    // the source template.
-    expect(result).toMatch(/^fast-docker-/);
+    // A template resolves to its own name -- no per-session clone row.
+    // The provision path materializes an ephemeral pod from the spec.
+    expect(result).toBe("fast-docker");
 
-    // Verify the clone was created with the template's provider
-    const clone = await app.computes.get(result!);
-    expect(clone).not.toBeNull();
-    expect(providerOf(clone!)).toBe("docker");
+    // The resolved row is the template itself, untouched.
+    const tmpl = await app.computes.get(result!);
+    expect(tmpl).not.toBeNull();
+    expect(tmpl!.is_template).toBe(true);
+    expect(providerOf(tmpl!)).toBe("docker");
 
-    // Verify event was logged
+    // No clone row, no clone event.
+    expect(await app.computes.get(`fast-docker-${session.id.slice(0, 8)}`)).toBeNull();
     const events = await app.events.list(session.id);
-    const provisionEvent = events.find((e) => e.type === "compute_cloned_from_template");
-    expect(provisionEvent).toBeDefined();
-    expect(provisionEvent!.data?.template).toBe("fast-docker");
-
-    // Clean up the clone
-    await app.computes.delete(result!);
+    expect(events.find((e) => e.type === "compute_cloned_from_template")).toBeUndefined();
   });
 
   it("resolves template from config when not in DB", async () => {
@@ -162,12 +158,13 @@ describe("resolveComputeForStage", async () => {
     const stageDef = { name: "build", gate: "auto" as const, compute_template: "config-tmpl" };
 
     const result = await app.dispatchService.resolveComputeForStage(stageDef, session.id);
-    // Same session-suffixed clone semantics as above (upstream adc10203).
-    expect(result).toMatch(/^config-tmpl-/);
+    // Config-only templates are seeded into a template row; resolution
+    // returns the template name (materialized at provision, not cloned).
+    expect(result).toBe("config-tmpl");
 
-    // Verify compute was created from config template
     const compute = await app.computes.get(result!);
     expect(compute).not.toBeNull();
+    expect(compute!.is_template).toBe(true);
     expect(providerOf(compute!)).toBe("docker");
 
     // Restore config

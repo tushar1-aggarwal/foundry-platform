@@ -1,28 +1,29 @@
 /**
- * Per-stage compute resolution + template cloning.
+ * Per-stage compute resolution.
  *
- * After the unification of compute targets and templates into a single row
- * the resolution path is uniform regardless of which axis the stage used
- * (`stageDef.compute` or the legacy `stageDef.compute_template`).
+ * Resolution is uniform regardless of which axis the stage used
+ * (`stageDef.compute` = existing concrete ref, or `stageDef.compute_template`
+ * = a template to materialize).
  *
  * Behavior:
  *   - Named row not found -> fall through to the config-defined template
- *     catalog; still not found -> return null (session default).
- *   - Row is a template (is_template=true) -> CLONE into a per-session
- *     concrete row `<template>-<sessionId8>` with `cloned_from` set. GC
- *     prunes the clone when the session reaches a terminal state.
- *   - Row is concrete -> return its name directly.
+ *     catalog (seed a template row); still not found -> return null.
+ *   - Row found (template OR concrete) -> resolve to the row name. A
+ *     template is MATERIALIZED per session by the provision path: it mints
+ *     an ephemeral pod from the template spec and binds it to the session
+ *     via the handle. No row is cloned here -- the template stays a
+ *     read-only spec and the pod is reaped on terminal.
  */
 
 import type { DispatchDeps } from "./types.js";
 import type { StageDefinition } from "../flow.js";
 
 export class ComputeResolver {
-  constructor(private readonly deps: Pick<DispatchDeps, "computes" | "computeService" | "config" | "events">) {}
+  constructor(private readonly deps: Pick<DispatchDeps, "computes" | "computeService" | "config">) {}
 
   async resolveForStage(
     stageDef: StageDefinition | null,
-    sessionId: string,
+    _sessionId: string,
     log: (msg: string) => void = () => {},
   ): Promise<string | null> {
     const ref = stageDef?.compute ?? stageDef?.compute_template;
@@ -33,7 +34,7 @@ export class ComputeResolver {
     if (!existing) {
       // Fallback: config-defined template catalog lets users declare
       // templates in ~/.ark/config.yaml without hitting the DB. Seed a
-      // fresh template row from config, then clone it below.
+      // template row so resolveComputeTarget can build a target from it.
       const cfgTmpl = (this.deps.config.computeTemplates ?? []).find((t) => t.name === ref);
       if (cfgTmpl) {
         log(`Seeding template '${ref}' from config`);
@@ -45,64 +46,16 @@ export class ComputeResolver {
           config: cfgTmpl.config,
           is_template: true,
         });
-        return this.cloneTemplate(cfgTmpl.name, sessionId, log);
+        return cfgTmpl.name;
       }
       log(`Stage compute '${ref}' not found, falling back to session default`);
       return null;
     }
 
-    if (existing.is_template) {
-      return this.cloneTemplate(existing.name, sessionId, log);
-    }
-
-    // Concrete target -- use directly, no cloning.
+    // Template or concrete: resolve to the row name. A template is
+    // materialized per session by the provision path (an ephemeral pod
+    // bound to the session via its handle); no row is cloned here.
     return existing.name;
-  }
-
-  /**
-   * Clone a template row into a per-session concrete row. Inherits provider,
-   * compute_kind, isolation_kind and a deep copy of the template's config so
-   * per-session mutations (e.g. an assigned pod IP) don't leak back.
-   */
-  private async cloneTemplate(templateName: string, sessionId: string, log: (msg: string) => void): Promise<string> {
-    const tmpl = await this.deps.computes.get(templateName);
-    if (!tmpl) {
-      // Shouldn't happen -- caller already checked -- but be defensive.
-      log(`Template '${templateName}' disappeared before clone`);
-      return templateName;
-    }
-
-    const cloneName = `${templateName}-${sessionId.slice(0, 8)}`;
-
-    // Idempotent: if a prior dispatch for this session already cloned the
-    // template (e.g. on resume), reuse the existing clone.
-    const existingClone = await this.deps.computes.get(cloneName);
-    if (existingClone) {
-      log(`Reusing existing clone '${cloneName}' of template '${templateName}'`);
-      return cloneName;
-    }
-
-    log(`Cloning template '${templateName}' into '${cloneName}' for session ${sessionId}`);
-    await this.deps.computeService.create({
-      name: cloneName,
-      compute: tmpl.compute_kind,
-      isolation: tmpl.isolation_kind,
-      // Deep-copy via JSON round-trip so later per-session mutations don't
-      // leak back into the template row.
-      config: JSON.parse(JSON.stringify(tmpl.config ?? {})),
-      is_template: false,
-      cloned_from: templateName,
-    });
-    await this.deps.events.log(sessionId, "compute_cloned_from_template", {
-      actor: "system",
-      data: {
-        template: templateName,
-        clone: cloneName,
-        compute_kind: tmpl.compute_kind,
-        isolation_kind: tmpl.isolation_kind,
-      },
-    });
-    return cloneName;
   }
 }
 
