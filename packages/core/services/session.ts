@@ -84,9 +84,23 @@ export class SessionService {
     const usesTemporal =
       app !== null && app.mode.kind === "hosted" && app.config.features.temporalOrchestration === true;
 
+    // Per-stage-pod invariant: in hosted mode `local` compute would execute
+    // the agent in-process on the control-plane / temporal-worker pod with
+    // zero isolation (it competes with the control plane for resources and
+    // breaks the "one pod per flow stage" model). Reject early and loudly
+    // instead of silently running it in the worker.
+    const effectiveComputeName = opts.compute_name ?? "local";
+    if (app !== null && app.mode.kind === "hosted" && effectiveComputeName === "local") {
+      throw new ValidationError(
+        `Hosted mode requires an explicit non-local compute_name -- 'local' would run the agent ` +
+          `inside the control-plane/temporal-worker pod with zero isolation. Pass a registered ` +
+          `compute target (k8s / ec2 / docker / firecracker).`,
+      );
+    }
+
     const session = await this.sessions.create({
       ...opts,
-      compute_name: opts.compute_name ?? "local",
+      compute_name: effectiveComputeName,
       orchestrator: usesTemporal ? "temporal" : "custom",
     });
 
