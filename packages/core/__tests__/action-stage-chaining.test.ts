@@ -1,317 +1,277 @@
 /**
- * Tests for action stage chaining.
+ * Action stage chaining under Temporal.
  *
- * Validates that consecutive action stages (e.g., create_pr -> auto_merge)
- * chain-execute correctly via mediateStageHandoff() recursive calls.
+ * Original intent: consecutive action stages must chain-execute and the flow
+ * must advance after each action succeeds (or fail loudly on error) -- never
+ * sit stuck at `ready`. The bespoke `mediateStageHandoff()` recursive
+ * re-dispatch path is deleted; the surviving concern is re-expressed against
+ * the real Temporal sessionWorkflow + executeActionActivity loop. We start a
+ * YAML flow whose stages are actions (chained / mixed with an agent stage)
+ * and assert the workflow drives every stage to a terminal state, emitting
+ * the expected `action_executed` events.
  *
- * Test coverage:
- * 1. Single action stage chains to completion
- * 2. Consecutive action stages chain-execute
- * 3. Action failure stops chain and sets failed status
- * 4. Action stage followed by agent stage dispatches agent
- * 5. executeAction no longer calls advance internally
+ * `close` is the bundled no-network success action. `create_pr` / `auto_merge`
+ * fail without a worktree/PR, which exercises the chain-stops-on-failure path.
+ *
+ * Deleted tests (asserted the removed bespoke contract, no Temporal
+ * equivalent at this layer):
+ *  - the direct `app.sessionHooks.mediateStageHandoff(...)` driver calls --
+ *    the method no longer exists; stage handoff is owned by the workflow.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { afterAll, beforeAll, afterEach, describe, expect, it } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../app.js";
 import { executeAction } from "../services/actions/index.js";
 import { depsFromApp } from "../services/deps.js";
-import { waitFor } from "./test-helpers.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../temporal/test-harness.js";
 
 let app: AppContext;
+let detach: () => void;
 
-beforeEach(async () => {
-  if (app) {
-    await app.shutdown();
-  }
+beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+
+  // agent -> action:close (last stage)
+  writeFileSync(
+    join(flowDir, "asc-single.yaml"),
+    `name: asc-single
+stages:
+  - name: work
+    agent: implementer
+    gate: auto
+  - name: finish
+    action: close
+    gate: auto
+    depends_on: [work]
+`,
+  );
+
+  // agent -> action:close -> action:close (two consecutive actions)
+  writeFileSync(
+    join(flowDir, "asc-chain.yaml"),
+    `name: asc-chain
+stages:
+  - name: work
+    agent: implementer
+    gate: auto
+  - name: step1
+    action: close
+    gate: auto
+    depends_on: [work]
+  - name: step2
+    action: close
+    gate: auto
+    depends_on: [step1]
+`,
+  );
+
+  // agent -> action:close (succeeds) -> action:auto_merge (fails, no pr_url)
+  writeFileSync(
+    join(flowDir, "asc-second-fails.yaml"),
+    `name: asc-second-fails
+stages:
+  - name: work
+    agent: implementer
+    gate: auto
+  - name: first
+    action: close
+    gate: auto
+    depends_on: [work]
+  - name: second
+    action: auto_merge
+    gate: auto
+    depends_on: [first]
+`,
+  );
+
+  // agent -> action:create_pr (fails, no workdir) -> action:auto_merge
+  writeFileSync(
+    join(flowDir, "asc-fail-chain.yaml"),
+    `name: asc-fail-chain
+stages:
+  - name: work
+    agent: implementer
+    gate: auto
+  - name: pr
+    action: create_pr
+    gate: auto
+    depends_on: [work]
+  - name: merge
+    action: auto_merge
+    gate: auto
+    depends_on: [pr]
+`,
+  );
+
+  // agent -> action:close -> agent (action followed by an agent stage)
+  writeFileSync(
+    join(flowDir, "asc-action-then-agent.yaml"),
+    `name: asc-action-then-agent
+stages:
+  - name: work1
+    agent: implementer
+    gate: auto
+  - name: middle
+    action: close
+    gate: auto
+    depends_on: [work1]
+  - name: work2
+    agent: implementer
+    gate: auto
+    depends_on: [middle]
+`,
+  );
+
+  // single first-stage action (no preceding agent stage)
+  writeFileSync(
+    join(flowDir, "asc-action-first.yaml"),
+    `name: asc-action-first
+stages:
+  - name: only
+    action: close
+    gate: auto
+`,
+  );
+
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
 });
 
 afterEach(async () => {
-  // no-op -- beforeEach handles cleanup
+  await drainTemporalTestHarness();
 });
 
-describe("action stage chaining", async () => {
+afterAll(async () => {
+  detach?.();
+  await app?.shutdown();
+});
+
+describe("action stage chaining", () => {
   it("single action stage chains to completion", async () => {
-    // Flow: agent -> action:close (last stage)
-    app.flows.save("test-single-action", {
-      name: "test-single-action",
-      stages: [
-        { name: "work", agent: "worker", gate: "auto" },
-        { name: "finish", action: "close", gate: "auto" },
-      ],
-    } as any);
-
-    const session = await app.sessions.create({ summary: "single action test", flow: "test-single-action" });
-    await app.sessions.update(session.id, { status: "ready", stage: "work" });
-
-    // Handoff from work -> finish (action:close)
-    const result = await app.sessionHooks.mediateStageHandoff(session.id, {
-      autoDispatch: true,
-      source: "test",
+    const session = await app.sessionService.start({
+      summary: "single action test",
+      flow: "asc-single",
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.toStage).toBe("finish");
-    expect(result.dispatched).toBe(true);
+    const final = await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+    expect(final.status).toBe("completed");
 
-    // Wait for async action chain to complete the flow
-    await waitFor(
-      async () => {
-        const s = await app.sessions.get(session.id);
-        return s?.status === "completed";
-      },
-      { timeout: 5000, message: "Expected session to reach completed status" },
-    );
-
-    // Verify action_executed event was logged
     const events = await app.events.list(session.id);
     const actionEvents = events.filter((e) => e.type === "action_executed");
-    expect(actionEvents.length).toBeGreaterThanOrEqual(1);
-    expect(actionEvents.some((e) => e.data?.action === "close")).toBe(true);
-  });
+    expect(actionEvents.some((e) => (e.data as any)?.action === "close")).toBe(true);
+  }, 45_000);
 
   it("consecutive action stages chain-execute", async () => {
-    // Flow: agent -> action:close -> action:close (two consecutive actions)
-    app.flows.save("test-chain-actions", {
-      name: "test-chain-actions",
-      stages: [
-        { name: "work", agent: "worker", gate: "auto" },
-        { name: "step1", action: "close", gate: "auto" },
-        { name: "step2", action: "close", gate: "auto" },
-      ],
-    } as any);
-
-    const session = await app.sessions.create({ summary: "chain test", flow: "test-chain-actions" });
-    await app.sessions.update(session.id, { status: "ready", stage: "work" });
-
-    // Handoff from work -> step1 (action:close)
-    const result = await app.sessionHooks.mediateStageHandoff(session.id, {
-      autoDispatch: true,
-      source: "test",
+    const session = await app.sessionService.start({
+      summary: "chain test",
+      flow: "asc-chain",
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.toStage).toBe("step1");
-    expect(result.dispatched).toBe(true);
+    const final = await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+    expect(final.status).toBe("completed");
 
-    // Wait for both actions to chain-execute and complete the flow
-    await waitFor(
-      async () => {
-        const s = await app.sessions.get(session.id);
-        return s?.status === "completed";
-      },
-      { timeout: 5000, message: "Expected session to reach completed after chained actions" },
-    );
-
-    // Verify both action_executed events were logged
     const events = await app.events.list(session.id);
-    const actionEvents = events.filter((e) => e.type === "action_executed");
+    const actionEvents = events.filter(
+      (e) => e.type === "action_executed" && (e.data as any)?.action === "close",
+    );
     expect(actionEvents.length).toBeGreaterThanOrEqual(2);
-  });
+  }, 45_000);
 
   it("SECOND action failing after first succeeds still marks session failed (#435)", async () => {
-    // Repro for #435: a stage chain where the FIRST action succeeds and the
-    // SECOND action fails was leaving session.status="ready" with
-    // session.error set -- a state machine inconsistency that surfaced in
-    // the UI as PENDING badge alongside a failed Errors tab.
-    //
-    // Flow: agent -> action:close (succeeds) -> action:auto_merge (fails,
-    // no pr_url). The mediator's recursive chain call (action_chain source)
-    // must propagate the failed status all the way out, not let the outer
-    // mediate's stage_handoff event reset it.
-    app.flows.save("test-second-action-fails", {
-      name: "test-second-action-fails",
-      stages: [
-        { name: "work", agent: "worker", gate: "auto" },
-        { name: "first", action: "close", gate: "auto" },
-        { name: "second", action: "auto_merge", gate: "auto" },
-      ],
-    } as any);
-
-    const session = await app.sessions.create({
+    // #435: a chain where the FIRST action succeeds and the SECOND fails must
+    // surface as a terminal `failed` -- not a status-machine inconsistency
+    // (ready badge alongside a failed errors tab). The Temporal workflow owns
+    // this now: a failed action stage closes the workflow as failed.
+    const session = await app.sessionService.start({
       summary: "second-action-fails repro",
-      flow: "test-second-action-fails",
-    });
-    await app.sessions.update(session.id, { status: "ready", stage: "work" });
-
-    const result = await app.sessionHooks.mediateStageHandoff(session.id, {
-      autoDispatch: true,
-      source: "test",
+      flow: "asc-second-fails",
     });
 
-    expect(result.ok).toBe(true);
+    const final = await waitForSessionStatus(app, session.id, ["failed", "completed"]);
+    expect(final.status).toBe("failed");
+    expect(final.error).toBeTruthy();
+    expect(String(final.error ?? "").toLowerCase()).toContain("auto_merge");
 
-    // Wait for the chain: first (close) succeeds, advances to second
-    // (auto_merge), which fails because there's no pr_url.
-    await waitFor(
-      async () => {
-        const s = await app.sessions.get(session.id);
-        return s?.status === "failed" || (s?.status === "ready" && (s?.error ?? "").includes("auto_merge"));
-      },
-      { timeout: 5000, message: "Expected session to settle with failed status or ready+error" },
-    );
-
-    const updated = await app.sessions.get(session.id);
-
-    // The bug (#435): status was "ready" while error was set -> UI showed
-    // PENDING badge while errors tab said failed. The fix must transition
-    // status to "failed" when ANY action in the chain fails.
-    expect(updated?.status).toBe("failed");
-    expect(updated?.error).toBeTruthy();
-    expect((updated?.error ?? "").toLowerCase()).toContain("auto_merge");
-
-    // first (close) DID run; second (auto_merge) ATTEMPTED.
+    // first (close) DID run before the chain failed on second (auto_merge).
     const events = await app.events.list(session.id);
-    const actionExecuted = events.filter((e) => e.type === "action_executed").map((e) => e.data?.action);
+    const actionExecuted = events
+      .filter((e) => e.type === "action_executed")
+      .map((e) => (e.data as any)?.action);
     expect(actionExecuted).toContain("close");
-
-    // dispatch_failed event records the failure for ops visibility.
-    const dispatchFailed = events.filter((e) => e.type === "dispatch_failed");
-    expect(dispatchFailed.length).toBeGreaterThanOrEqual(1);
-    expect(JSON.stringify(dispatchFailed[dispatchFailed.length - 1])).toContain("auto_merge");
-  });
+  }, 45_000);
 
   it("action failure stops chain and sets failed status", async () => {
-    // Flow: agent -> action:create_pr -> action:auto_merge
-    // create_pr will fail because session has no workdir/repo
-    app.flows.save("test-fail-chain", {
-      name: "test-fail-chain",
-      stages: [
-        { name: "work", agent: "worker", gate: "auto" },
-        { name: "pr", action: "create_pr", gate: "auto" },
-        { name: "merge", action: "auto_merge", gate: "auto" },
-      ],
-    } as any);
-
-    const session = await app.sessions.create({ summary: "fail chain test", flow: "test-fail-chain" });
-    await app.sessions.update(session.id, { status: "ready", stage: "work" });
-
-    // Handoff from work -> pr (action:create_pr, will fail)
-    const result = await app.sessionHooks.mediateStageHandoff(session.id, {
-      autoDispatch: true,
-      source: "test",
+    // create_pr fails (no workdir/repo); auto_merge must never run.
+    const session = await app.sessionService.start({
+      summary: "fail chain test",
+      flow: "asc-fail-chain",
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.toStage).toBe("pr");
-    // `dispatched` reflects ACTION SUCCESS, not "we attempted to run it"
-    // (cf. line 56 above where a successful action sets it to true).
-    // create_pr fails because the session has no workdir; mediator
-    // marks the session failed AND reports dispatched=false.
-    expect(result.dispatched).toBe(false);
+    const final = await waitForSessionStatus(app, session.id, ["failed", "completed"]);
+    expect(final.status).toBe("failed");
+    expect(final.error).toBeTruthy();
+    // The chain stopped at the create_pr stage -- it never reached merge.
+    expect(final.stage).toBe("pr");
 
-    // Failure was already propagated synchronously by the mediator's
-    // markDispatchFailedShared call -- no need to wait.
-    const updated0 = await app.sessions.get(session.id);
-    expect(updated0?.status).toBe("failed");
-
-    const updated = await app.sessions.get(session.id);
-    expect(updated?.status).toBe("failed");
-    expect(updated?.error).toContain("create_pr");
-
-    // Verify auto_merge was NOT executed
     const events = await app.events.list(session.id);
-    const mergeEvents = events.filter((e) => e.type === "action_executed" && e.data?.action === "auto_merge");
+    const mergeEvents = events.filter(
+      (e) => e.type === "action_executed" && (e.data as any)?.action === "auto_merge",
+    );
     expect(mergeEvents.length).toBe(0);
-  });
+  }, 45_000);
 
-  it("action stage followed by agent stage dispatches agent", async () => {
-    // Flow: agent1 -> action:close -> agent2
-    app.flows.save("test-action-then-agent", {
-      name: "test-action-then-agent",
-      stages: [
-        { name: "work1", agent: "worker", gate: "auto" },
-        { name: "middle", action: "close", gate: "auto" },
-        { name: "work2", agent: "worker", gate: "auto" },
-      ],
-    } as any);
-
-    const session = await app.sessions.create({ summary: "action then agent test", flow: "test-action-then-agent" });
-    await app.sessions.update(session.id, { status: "ready", stage: "work1" });
-
-    // Handoff from work1 -> middle (action:close)
-    const result = await app.sessionHooks.mediateStageHandoff(session.id, {
-      autoDispatch: true,
-      source: "test",
+  it("action stage followed by agent stage dispatches agent and completes", async () => {
+    const session = await app.sessionService.start({
+      summary: "action then agent test",
+      flow: "asc-action-then-agent",
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.toStage).toBe("middle");
-    expect(result.dispatched).toBe(true);
+    const final = await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+    expect(final.status).toBe("completed");
 
-    // Wait for the action to execute and advance to work2
-    await waitFor(
-      async () => {
-        const s = await app.sessions.get(session.id);
-        return s?.stage === "work2";
-      },
-      { timeout: 5000, message: "Expected session to advance to work2 stage" },
-    );
-
-    // Verify session is at work2 with ready status (dispatch will fail in test but stage should advance)
-    const updated = await app.sessions.get(session.id);
-    expect(updated?.stage).toBe("work2");
-
-    // Verify the close action was executed
+    // The close action ran between the two agent stages.
     const events = await app.events.list(session.id);
-    const actionEvents = events.filter((e) => e.type === "action_executed" && e.data?.action === "close");
-    expect(actionEvents.length).toBe(1);
-  });
-
-  it("dispatch auto-executes first-stage action and drives flow to completed", async () => {
-    // Regression: prior to this fix, dispatch() returned `{ok: false,
-    // "Stage 'X' is action, not agent"}` when the first stage of a flow
-    // was an action. That left the session stuck at status=ready forever
-    // because the default session_created listener only kicks dispatch
-    // once. The fix routes action stages through executeAction +
-    // mediateStageHandoff so a single-action flow can auto-complete.
-    app.flows.save("test-action-first", {
-      name: "test-action-first",
-      stages: [{ name: "only", action: "close", gate: "auto" }],
-    } as any);
-
-    const session = await app.sessions.create({ summary: "action-first test", flow: "test-action-first" });
-    await app.sessions.update(session.id, { status: "ready", stage: "only" });
-
-    const result = await app.dispatchService.dispatch(session.id);
-    expect(result.ok).toBe(true);
-
-    await waitFor(
-      async () => {
-        const s = await app.sessions.get(session.id);
-        return s?.status === "completed";
-      },
-      { timeout: 5000, message: "Expected single-action-stage session to reach completed" },
+    const actionEvents = events.filter(
+      (e) => e.type === "action_executed" && (e.data as any)?.action === "close",
     );
+    expect(actionEvents.length).toBe(1);
+  }, 45_000);
+
+  it("workflow auto-executes a first-stage action and drives flow to completed", async () => {
+    const session = await app.sessionService.start({
+      summary: "action-first test",
+      flow: "asc-action-first",
+    });
+
+    const final = await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+    expect(final.status).toBe("completed");
 
     const events = await app.events.list(session.id);
-    const actionEvents = events.filter((e) => e.type === "action_executed" && e.data?.action === "close");
+    const actionEvents = events.filter(
+      (e) => e.type === "action_executed" && (e.data as any)?.action === "close",
+    );
     expect(actionEvents.length).toBe(1);
-  });
+  }, 45_000);
 
-  it("executeAction no longer calls advance internally", async () => {
-    // Set up session at an action stage
-    app.flows.save("test-no-advance", {
-      name: "test-no-advance",
-      stages: [
-        { name: "work", agent: "worker", gate: "auto" },
-        { name: "finish", action: "close", gate: "auto" },
-        { name: "after", agent: "worker", gate: "auto" },
-      ],
-    } as any);
-
-    const session = await app.sessions.create({ summary: "no advance test", flow: "test-no-advance" });
+  it("executeAction does not advance the session stage internally", async () => {
+    // Activity-level contract (still real under Temporal): executeAction runs
+    // the action against the session row but never advances the stage --
+    // stage advancement is the workflow loop's job, not the action's.
+    const session = await app.sessions.create({ summary: "no advance test", flow: "asc-single" });
     await app.sessions.update(session.id, { status: "ready", stage: "finish" });
 
-    // Call executeAction directly
     const result = await executeAction(depsFromApp(app), session.id, "close");
-
     expect(result.ok).toBe(true);
     expect(result.message).toContain("close");
 
-    // Session stage should remain at "finish" -- executeAction no longer advances
     const updated = await app.sessions.get(session.id);
     expect(updated?.stage).toBe("finish");
   });

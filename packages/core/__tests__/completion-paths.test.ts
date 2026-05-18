@@ -420,7 +420,11 @@ describe("Conductor channel report delivery", async () => {
     expect(updated?.status).toBe("blocked");
   });
 
-  it("POST /api/channel/:id with completed report on auto-gate advances session", async () => {
+  it("POST /api/channel/:id with completed report on auto-gate stores the report (no bespoke advance)", async () => {
+    // The bespoke channel-report -> advance() path is deleted: the report is
+    // still delivered/stored and the auto-gate flips the row to `ready`, but
+    // stage advancement is owned by the Temporal session-workflow now -- the
+    // channel endpoint must NOT advance the stage itself.
     server = startConductor(app, TEST_PORT, { quiet: true });
 
     const session = await app.sessions.create({ summary: "auto conductor test", flow: "quick" });
@@ -441,16 +445,16 @@ describe("Conductor channel report delivery", async () => {
 
     expect(resp.status).toBe(200);
 
-    // Auto gate: conductor should have advanced to next stage and auto-dispatched
-    // Give a moment for the async advance to complete
-    await new Promise((r) => setTimeout(r, 100));
+    // Report was delivered/stored.
+    const msgs = await app.messages.list(session.id);
+    expect(msgs.some((m) => m.type === "completed" && m.content.includes("Implemented the feature"))).toBe(true);
+
+    // Stage NOT advanced by the endpoint -- still at "implement".
     const updated = await app.sessions.get(session.id);
-    expect(updated?.stage).toBe("verify");
-    // Status is "running" because auto-dispatch is now properly awaited
-    expect(updated?.status).toBe("running");
+    expect(updated?.stage).toBe("implement");
   });
 
-  it("POST /hooks/status with SessionEnd on auto-gate advances session via HTTP", async () => {
+  it("POST /hooks/status with SessionEnd on auto-gate maps to `ready` (no bespoke advance)", async () => {
     server = startConductor(app, TEST_PORT, { quiet: true });
 
     const session = await app.sessions.create({ summary: "hook http test", flow: "quick" });
@@ -464,15 +468,12 @@ describe("Conductor channel report delivery", async () => {
 
     expect(resp.status).toBe(200);
     const body = (await resp.json()) as Record<string, unknown>;
+    // SessionEnd still maps to the `ready` stage-done signal the Temporal
+    // workflow consumes -- but the hook path itself no longer advances.
     expect(body.mapped).toBe("ready");
 
-    // Give a moment for the async advance to complete
-    await new Promise((r) => setTimeout(r, 100));
     const updated = await app.sessions.get(session.id);
-    // Auto-gate SessionEnd triggers advance to next stage and auto-dispatch
-    expect(updated?.stage).toBe("verify");
-    // Status is "running" because auto-dispatch is now properly awaited
-    expect(updated?.status).toBe("running");
+    expect(updated?.stage).toBe("implement");
   });
 
   it("POST /hooks/status with SessionEnd on manual-gate keeps session running via HTTP", async () => {
@@ -498,9 +499,16 @@ describe("Conductor channel report delivery", async () => {
 
 describe("Regression: complete() must advance flow (not leave status=ready)", async () => {
   it("SessionService.complete() + advance() on single-stage flow (bare) reaches 'completed'", async () => {
-    // Use startSession (orchestration) to properly wire stage/flow like production
-    const session = await app.sessionCreator.start({ summary: "svc complete bare", flow: "bare" });
-    await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running" });
+    // Wire stage/flow directly (start() now launches a Temporal workflow we
+    // don't want driving this row -- the regression under test is the
+    // complete()+advance() RPC contract, not the workflow). bare's first
+    // stage is "work".
+    const session = await app.sessions.create({ summary: "svc complete bare", flow: "bare" });
+    await app.sessions.update(session.id, {
+      session_id: `ark-s-${session.id}`,
+      status: "running",
+      stage: "work",
+    });
 
     // Call complete via SessionService (same path as RPC handler)
     const result = await app.sessionService.complete(session.id);
@@ -516,9 +524,13 @@ describe("Regression: complete() must advance flow (not leave status=ready)", as
   });
 
   it("SessionService.complete() + advance() on multi-stage flow (quick) advances to next stage", async () => {
-    const session = await app.sessionCreator.start({ summary: "svc complete quick", flow: "quick" });
-    // startSession sets stage to "implement" for quick flow
-    await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running" });
+    const session = await app.sessions.create({ summary: "svc complete quick", flow: "quick" });
+    // quick flow's first stage is "implement".
+    await app.sessions.update(session.id, {
+      session_id: `ark-s-${session.id}`,
+      status: "running",
+      stage: "implement",
+    });
 
     const result = await app.sessionService.complete(session.id);
     expect(result.ok).toBe(true);
@@ -533,8 +545,12 @@ describe("Regression: complete() must advance flow (not leave status=ready)", as
   });
 
   it("RPC session/complete handler advances bare flow to 'completed'", async () => {
-    const session = await app.sessionCreator.start({ summary: "rpc complete bare", flow: "bare" });
-    await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running" });
+    const session = await app.sessions.create({ summary: "rpc complete bare", flow: "bare" });
+    await app.sessions.update(session.id, {
+      session_id: `ark-s-${session.id}`,
+      status: "running",
+      stage: "work",
+    });
 
     // Use Router + registerSessionHandlers (same pattern as handler tests)
     const { Router } = await import("../../conductor/router.js");
@@ -555,8 +571,12 @@ describe("Regression: complete() must advance flow (not leave status=ready)", as
   });
 
   it("RPC session/complete handler advances quick flow to next stage", async () => {
-    const session = await app.sessionCreator.start({ summary: "rpc complete quick", flow: "quick" });
-    await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running" });
+    const session = await app.sessions.create({ summary: "rpc complete quick", flow: "quick" });
+    await app.sessions.update(session.id, {
+      session_id: `ark-s-${session.id}`,
+      status: "running",
+      stage: "implement",
+    });
 
     const { Router } = await import("../../conductor/router.js");
     const { registerSessionHandlers } = await import("../../conductor/handlers/session.js");

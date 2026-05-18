@@ -425,8 +425,8 @@ describe("StageDefinition verify field", () => {
     expect(typeof getStageDefinition).toBe("function");
   });
 
-  it("returns null for nonexistent flow/stage", () => {
-    const stage = getStageDefinition(getApp(), "nonexistent-flow", "nonexistent-stage");
+  it("returns null for nonexistent flow/stage", async () => {
+    const stage = await getStageDefinition(depsFromApp(getApp()), "nonexistent-flow", "nonexistent-stage");
     expect(stage).toBeNull();
   });
 

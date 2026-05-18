@@ -2,9 +2,12 @@
  * Tests for Codex runtime working with the autonomous flow.
  *
  * Validates:
- * 1. Status poller treats "not_found" (tmux exited) as completion
- * 2. Completion triggers advance() which completes single-stage autonomous flow
- * 3. cli-agent executor returns "not_found" when tmux session is gone
+ * 1. cli-agent executor returns "not_found" when the tmux session is gone
+ * 2. Status poller treats "not_found" (tmux exited) as stage-done by writing
+ *    `ready` -- the signal awaitStageCompletionActivity consumes. Stage
+ *    advancement / single-stage completion is the Temporal workflow's job
+ *    (the bespoke poller->advance() path is deleted), so the poller stops at
+ *    `ready` and never writes `completed` itself.
  */
 
 import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
@@ -58,7 +61,7 @@ describe("Codex runtime + autonomous flow", async () => {
     }
   });
 
-  it("status poller completes session when tmux exits (not_found)", async () => {
+  it("status poller writes `ready` (stage-done signal) when tmux exits (not_found)", async () => {
     // Create a session on the autonomous flow
     const session = await app.sessions.create({ summary: "codex test", flow: "autonomous" });
     await app.sessions.update(session.id, { status: "running", stage: "work", session_id: "ark-" + session.id });
@@ -70,26 +73,27 @@ describe("Codex runtime + autonomous flow", async () => {
       // Start the status poller for cli-agent executor
       startStatusPoller(app, session.id, "ark-" + session.id, "cli-agent");
 
-      // Wait for the poller to detect not_found and complete the session
+      // The poller detects not_found and writes `ready` -- the stage-done
+      // signal awaitStageCompletionActivity consumes. It does NOT write
+      // `completed` (that is the Temporal workflow's terminal projection).
       await waitFor(async () => {
         const s = await app.sessions.get(session.id);
-        return s?.status === "completed";
+        return s?.status === "ready";
       });
 
       const updated = await app.sessions.get(session.id);
-      expect(updated?.status).toBe("completed");
+      expect(updated?.status).toBe("ready");
     } finally {
       spy.mockRestore();
     }
   });
 
-  it("status poller handles failed state correctly", async () => {
+  it("status poller flips a running session off `running` on not_found (no failed)", async () => {
     const session = await app.sessions.create({ summary: "codex fail test", flow: "autonomous" });
     await app.sessions.update(session.id, { status: "running", stage: "work", session_id: "ark-" + session.id });
 
-    // Mock a cli-agent that returns "not_found" (same as exit)
-    // The cli-agent always returns not_found or running -- never "failed"
-    // So not_found should always map to completed
+    // cli-agent only ever reports running or not_found -- never "failed".
+    // not_found maps to the clean stage-done signal `ready`, not `failed`.
     const spy = spyOn(tmux, "sessionExistsAsync").mockResolvedValue(false);
 
     try {
@@ -101,8 +105,8 @@ describe("Codex runtime + autonomous flow", async () => {
       });
 
       const updated = await app.sessions.get(session.id);
-      // cli-agent returns not_found (not failed), so it should be completed
-      expect(updated?.status).toBe("completed");
+      // not_found -> ready (clean exit), never failed.
+      expect(updated?.status).toBe("ready");
     } finally {
       spy.mockRestore();
     }
