@@ -28,8 +28,8 @@ function makeAgent(overrides: Partial<AgentDefinition> & { name: string }): Agen
 }
 
 describe("skill injection via buildClaudeArgs", () => {
-  it("injects skill prompts into agent system prompt", () => {
-    getApp().skills.save(
+  it("injects skill prompts into agent system prompt", async () => {
+    await getApp().skills.save(
       "test-skill",
       {
         name: "test-skill",
@@ -40,9 +40,9 @@ describe("skill injection via buildClaudeArgs", () => {
     );
 
     const agent = makeAgent({ name: "test-agent", skills: ["test-skill"] });
-    getApp().agents.save(agent.name, agent, "global");
+    await getApp().agents.save(agent.name, agent, "global");
 
-    const args = buildClaudeArgs(agent, { app: getApp() });
+    const args = (await buildClaudeArgs(agent, { app: getApp() }));
     const systemPromptArg = args.join(" ");
 
     expect(systemPromptArg).toContain("You are a developer");
@@ -50,31 +50,31 @@ describe("skill injection via buildClaudeArgs", () => {
     expect(systemPromptArg).toContain("Always write tests first");
   });
 
-  it("handles missing skills gracefully", () => {
+  it("handles missing skills gracefully", async () => {
     const agent = makeAgent({ name: "no-skills-agent", skills: ["nonexistent-skill"] });
-    getApp().agents.save(agent.name, agent, "global");
+    await getApp().agents.save(agent.name, agent, "global");
 
     // Should not throw, just skip missing skills
-    const args = buildClaudeArgs(agent, { app: getApp() });
+    const args = (await buildClaudeArgs(agent, { app: getApp() }));
     expect(args.length).toBeGreaterThan(0);
     // The nonexistent skill prompt should not appear
     const systemPromptArg = args.join(" ");
     expect(systemPromptArg).not.toContain("## Skill:");
   });
 
-  it("agent without skills works normally", () => {
+  it("agent without skills works normally", async () => {
     const agent = makeAgent({ name: "plain-agent", skills: [] });
-    getApp().agents.save(agent.name, agent, "global");
+    await getApp().agents.save(agent.name, agent, "global");
 
-    const args = buildClaudeArgs(agent, { app: getApp() });
+    const args = (await buildClaudeArgs(agent, { app: getApp() }));
     expect(args.length).toBeGreaterThan(0);
     const systemPromptArg = args.join(" ");
     expect(systemPromptArg).toContain("You are a developer");
     expect(systemPromptArg).not.toContain("## Skill:");
   });
 
-  it("injects multiple skills in order", () => {
-    getApp().skills.save(
+  it("injects multiple skills in order", async () => {
+    await getApp().skills.save(
       "skill-a",
       {
         name: "skill-a",
@@ -84,7 +84,7 @@ describe("skill injection via buildClaudeArgs", () => {
       "global",
     );
 
-    getApp().skills.save(
+    await getApp().skills.save(
       "skill-b",
       {
         name: "skill-b",
@@ -95,9 +95,9 @@ describe("skill injection via buildClaudeArgs", () => {
     );
 
     const agent = makeAgent({ name: "multi-skill-agent", skills: ["skill-a", "skill-b"] });
-    getApp().agents.save(agent.name, agent, "global");
+    await getApp().agents.save(agent.name, agent, "global");
 
-    const args = buildClaudeArgs(agent, { app: getApp() });
+    const args = (await buildClaudeArgs(agent, { app: getApp() }));
     const systemPromptArg = args.join(" ");
 
     expect(systemPromptArg).toContain("## Skill: skill-a");
@@ -108,58 +108,58 @@ describe("skill injection via buildClaudeArgs", () => {
 });
 
 describe("tool hints injection via buildClaudeArgs", () => {
-  it("injects built-in tool list into the system prompt", () => {
+  it("injects built-in tool list into the system prompt", async () => {
     const agent = makeAgent({
       name: "hints-builtin",
       tools: ["Bash", "Read", "Write", "Edit"],
       mcp_servers: [],
     });
-    getApp().agents.save(agent.name, agent, "global");
+    await getApp().agents.save(agent.name, agent, "global");
 
-    const promptArg = buildClaudeArgs(agent, { app: getApp() }).join(" ");
+    const promptArg = (await buildClaudeArgs(agent, { app: getApp() })).join(" ");
     expect(promptArg).toContain("## Available tools");
     expect(promptArg).toContain("**Built-in:** Bash, Read, Write, Edit");
     expect(promptArg).toContain("Do not probe, list, or ask which tools exist");
   });
 
-  it("injects MCP server list with call prefix when servers are declared", () => {
+  it("injects MCP server list with call prefix when servers are declared", async () => {
     const agent = makeAgent({
       name: "hints-mcp",
       tools: ["Read"],
       mcp_servers: ["atlassian", "figma"],
     });
-    getApp().agents.save(agent.name, agent, "global");
+    await getApp().agents.save(agent.name, agent, "global");
 
-    const promptArg = buildClaudeArgs(agent, { app: getApp() }).join(" ");
+    const promptArg = (await buildClaudeArgs(agent, { app: getApp() })).join(" ");
     expect(promptArg).toContain("**MCP servers:**");
     expect(promptArg).toContain("mcp__atlassian__");
     expect(promptArg).toContain("mcp__figma__");
   });
 
-  it("keeps the base system_prompt above the tool hints block", () => {
+  it("keeps the base system_prompt above the tool hints block", async () => {
     const agent = makeAgent({
       name: "hints-order",
       system_prompt: "You are a developer working on foo.",
       tools: ["Bash"],
     });
-    getApp().agents.save(agent.name, agent, "global");
+    await getApp().agents.save(agent.name, agent, "global");
 
-    const promptArg = buildClaudeArgs(agent, { app: getApp() }).join(" ");
+    const promptArg = (await buildClaudeArgs(agent, { app: getApp() })).join(" ");
     const baseIdx = promptArg.indexOf("You are a developer working on foo");
     const hintsIdx = promptArg.indexOf("## Available tools");
     expect(baseIdx).toBeGreaterThan(-1);
     expect(hintsIdx).toBeGreaterThan(baseIdx);
   });
 
-  it("does not inject a hints block when the agent declares no tools or servers", () => {
+  it("does not inject a hints block when the agent declares no tools or servers", async () => {
     const agent = makeAgent({
       name: "hints-none",
       tools: [],
       mcp_servers: [],
     });
-    getApp().agents.save(agent.name, agent, "global");
+    await getApp().agents.save(agent.name, agent, "global");
 
-    const promptArg = buildClaudeArgs(agent, { app: getApp() }).join(" ");
+    const promptArg = (await buildClaudeArgs(agent, { app: getApp() })).join(" ");
     expect(promptArg).not.toContain("## Available tools");
   });
 });

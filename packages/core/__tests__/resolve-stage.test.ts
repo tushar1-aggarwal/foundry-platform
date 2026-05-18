@@ -113,9 +113,9 @@ afterAll(async () => {
 });
 
 describe("resolveStage: named chain", () => {
-  it("resolves stage.agent -> agent.runtime -> agent.model via the stores", () => {
+  it("resolves stage.agent -> agent.runtime -> agent.model via the stores", async () => {
     const stage: StageDefinition = { name: "main", gate: "auto", agent: "worker" };
-    const resolved = resolveStage(app, fakeSession, stage);
+    const resolved = await resolveStage(app, fakeSession, stage);
     expect(resolved.agent.name).toBe("worker");
     expect(resolved.runtime.name).toBe("claude-agent");
     expect(resolved.model.id).toBe("claude-sonnet-4-6");
@@ -124,7 +124,7 @@ describe("resolveStage: named chain", () => {
 });
 
 describe("resolveStage: inline agent with named runtime + named model", () => {
-  it("uses inline agent's system prompt + named refs", () => {
+  it("uses inline agent's system prompt + named refs", async () => {
     const stage: StageDefinition = {
       name: "custom",
       gate: "auto",
@@ -134,7 +134,7 @@ describe("resolveStage: inline agent with named runtime + named model", () => {
         system_prompt: "You are an inline agent.",
       },
     };
-    const resolved = resolveStage(app, fakeSession, stage);
+    const resolved = await resolveStage(app, fakeSession, stage);
     expect(resolved.agent.system_prompt).toBe("You are an inline agent.");
     expect(resolved.runtime.name).toBe("claude-agent");
     expect(resolved.model.id).toBe("claude-opus-4-7");
@@ -142,7 +142,7 @@ describe("resolveStage: inline agent with named runtime + named model", () => {
 });
 
 describe("resolveStage: inline model with provider_slugs", () => {
-  it("uses the inline model's provider_slugs for slug resolution", () => {
+  it("uses the inline model's provider_slugs for slug resolution", async () => {
     const stage: StageDefinition = {
       name: "bespoke-model",
       gate: "auto",
@@ -157,14 +157,14 @@ describe("resolveStage: inline model with provider_slugs", () => {
         system_prompt: "inline w/ inline model",
       },
     };
-    const resolved = resolveStage(app, fakeSession, stage);
+    const resolved = await resolveStage(app, fakeSession, stage);
     expect(resolved.model.id).toBe("my-custom");
     expect(resolved.resolvedSlug).toBe("my-direct");
   });
 });
 
 describe("resolveStage: inline runtime", () => {
-  it("materializes an inline runtime and resolves its model by name", () => {
+  it("materializes an inline runtime and resolves its model by name", async () => {
     const stage: StageDefinition = {
       name: "bespoke-runtime",
       gate: "auto",
@@ -174,14 +174,14 @@ describe("resolveStage: inline runtime", () => {
         system_prompt: "inline runtime",
       },
     };
-    const resolved = resolveStage(app, fakeSession, stage);
+    const resolved = await resolveStage(app, fakeSession, stage);
     expect(resolved.runtime.name).toBe("my-rt");
     expect(resolved.model.id).toBe("claude-sonnet-4-6");
   });
 });
 
 describe("resolveStage: fully mixed tree", () => {
-  it("allows inline agent + inline runtime + inline model in one call", () => {
+  it("allows inline agent + inline runtime + inline model in one call", async () => {
     const stage: StageDefinition = {
       name: "full-inline",
       gate: "auto",
@@ -196,7 +196,7 @@ describe("resolveStage: fully mixed tree", () => {
         system_prompt: "full inline",
       },
     };
-    const resolved = resolveStage(app, fakeSession, stage);
+    const resolved = await resolveStage(app, fakeSession, stage);
     expect(resolved.runtime.name).toBe("inline-rt");
     expect(resolved.model.id).toBe("inline-model");
     expect(resolved.resolvedSlug).toBe("mm-direct");
@@ -204,17 +204,17 @@ describe("resolveStage: fully mixed tree", () => {
 });
 
 describe("resolveStage: error paths", () => {
-  it("throws a clean error when the named agent is missing", () => {
+  it("throws a clean error when the named agent is missing", async () => {
     const stage: StageDefinition = { name: "x", gate: "auto", agent: "no-such-agent" };
     try {
-      resolveStage(app, fakeSession, stage);
+      await resolveStage(app, fakeSession, stage);
       throw new Error("expected throw");
     } catch (e: any) {
       expect(e.message).toContain('Agent "no-such-agent" not found');
     }
   });
 
-  it("throws when the named runtime is missing", () => {
+  it("throws when the named runtime is missing", async () => {
     const stage: StageDefinition = {
       name: "x",
       gate: "auto",
@@ -225,14 +225,14 @@ describe("resolveStage: error paths", () => {
       },
     };
     try {
-      resolveStage(app, fakeSession, stage);
+      await resolveStage(app, fakeSession, stage);
       throw new Error("expected throw");
     } catch (e: any) {
       expect(e.message).toContain('Runtime "no-such-runtime" not found');
     }
   });
 
-  it("throws when the named model is missing", () => {
+  it("throws when the named model is missing", async () => {
     const stage: StageDefinition = {
       name: "x",
       gate: "auto",
@@ -243,14 +243,14 @@ describe("resolveStage: error paths", () => {
       },
     };
     try {
-      resolveStage(app, fakeSession, stage);
+      await resolveStage(app, fakeSession, stage);
       throw new Error("expected throw");
     } catch (e: any) {
       expect(e.message).toContain('Model "no-such-model" not found');
     }
   });
 
-  it("throws when an inline agent has no model and the agent lacks one too", () => {
+  it("throws when an inline agent has no model and the agent lacks one too", async () => {
     const stage: StageDefinition = {
       name: "x",
       gate: "auto",
@@ -260,7 +260,7 @@ describe("resolveStage: error paths", () => {
       },
     };
     try {
-      resolveStage(app, fakeSession, stage);
+      await resolveStage(app, fakeSession, stage);
       throw new Error("expected throw");
     } catch (e: any) {
       expect(e.message).toContain("has no model");

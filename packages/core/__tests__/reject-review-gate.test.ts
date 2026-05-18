@@ -71,8 +71,12 @@ describe("rejectReviewGate", async () => {
       ],
     });
 
-    const session = await getApp().sessionCreator.start({ flow: "reject-custom", summary: "custom reject" });
-    expect(session.stage).toBe("qa");
+    // Temporal owns workflow-driven progression; this test exercises the
+    // sessionReviewer.reject primitive directly, so seed the row at the
+    // first stage instead of kicking a racing sessionWorkflow.
+    const session = await getApp().sessions.create({ flow: "reject-custom", summary: "custom reject" });
+    await getApp().sessions.update(session.id, { stage: "qa", status: "ready" });
+    expect((await getApp().sessions.get(session.id))!.stage).toBe("qa");
 
     let dispatched = 0;
     const result = await getApp().sessionReviewer.reject(session.id, "tests are missing", async () => {
@@ -105,7 +109,8 @@ describe("rejectReviewGate", async () => {
       ],
     });
 
-    const session = await getApp().sessionCreator.start({ flow: "reject-default", summary: "default" });
+    const session = await getApp().sessions.create({ flow: "reject-default", summary: "default" });
+    await getApp().sessions.update(session.id, { stage: "review-me", status: "ready" });
     const result = await getApp().sessionReviewer.reject(session.id, "needs more tests", async () => ({
       ok: true,
       message: "ok",
@@ -123,7 +128,8 @@ describe("rejectReviewGate", async () => {
       stages: [{ name: "sign-off", agent: "reviewer", gate: "manual" }],
     });
 
-    const session = await getApp().sessionCreator.start({ flow: "reject-manual", summary: "manual gate" });
+    const session = await getApp().sessions.create({ flow: "reject-manual", summary: "manual gate" });
+    await getApp().sessions.update(session.id, { stage: "sign-off", status: "ready" });
     const res = await getApp().sessionReviewer.reject(session.id, "nope", async () => ({
       ok: true,
       message: "ok",
@@ -137,7 +143,8 @@ describe("rejectReviewGate", async () => {
       name: "reject-auto",
       stages: [{ name: "build", agent: "builder", gate: "auto" }],
     });
-    const session = await getApp().sessionCreator.start({ flow: "reject-auto", summary: "auto" });
+    const session = await getApp().sessions.create({ flow: "reject-auto", summary: "auto" });
+    await getApp().sessions.update(session.id, { stage: "build", status: "ready" });
     const res = await getApp().sessionReviewer.reject(session.id, "nope", async () => ({
       ok: true,
       message: "ok",
@@ -160,9 +167,11 @@ describe("rejectReviewGate", async () => {
       name: "reject-clear",
       stages: [{ name: "review", agent: "reviewer", gate: "review" }],
     });
-    const session = await getApp().sessionCreator.start({ flow: "reject-clear", summary: "clear" });
+    const session = await getApp().sessions.create({ flow: "reject-clear", summary: "clear" });
     // Pre-populate runtime ids to verify they're nulled out.
     await getApp().sessions.update(session.id, {
+      stage: "review",
+      status: "ready",
       claude_session_id: "prev-claude",
       session_id: "ark-s-prev",
     });
@@ -192,7 +201,8 @@ describe("rejectReviewGate max_rejections", async () => {
       ],
     });
 
-    const session = await getApp().sessionCreator.start({ flow: "reject-cap", summary: "cap" });
+    const session = await getApp().sessions.create({ flow: "reject-cap", summary: "cap" });
+    await getApp().sessions.update(session.id, { stage: "review", status: "ready" });
 
     let dispatchCount = 0;
     const stubDispatch = async () => {
@@ -245,7 +255,8 @@ describe("rejectReviewGate max_rejections", async () => {
         },
       ],
     });
-    const session = await getApp().sessionCreator.start({ flow: "reject-zero", summary: "zero" });
+    const session = await getApp().sessions.create({ flow: "reject-zero", summary: "zero" });
+    await getApp().sessions.update(session.id, { stage: "review", status: "ready" });
     let dispatched = 0;
     const res = await getApp().sessionReviewer.reject(session.id, "no", async () => {
       dispatched++;
@@ -280,8 +291,9 @@ describe("review gate integration", async () => {
       ],
     });
 
-    const session = await getApp().sessionCreator.start({ flow: "integration", summary: "integration" });
-    expect(session.stage).toBe("review");
+    const session = await getApp().sessions.create({ flow: "integration", summary: "integration" });
+    await getApp().sessions.update(session.id, { stage: "review", status: "ready" });
+    expect((await getApp().sessions.get(session.id))!.stage).toBe("review");
 
     // Reject with a stub dispatch to simulate rework.
     const res = await getApp().sessionReviewer.reject(session.id, "add tests", async () => ({

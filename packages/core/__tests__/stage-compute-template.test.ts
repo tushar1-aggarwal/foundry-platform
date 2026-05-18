@@ -52,7 +52,7 @@ beforeEach(async () => {
 // ── StageDefinition.compute_template field ──────────────────────────────────
 
 describe("StageDefinition compute_template field", () => {
-  it("loads compute_template from flow YAML", () => {
+  it("loads compute_template from flow YAML", async () => {
     writeUserFlow("tmpl-flow", {
       name: "tmpl-flow",
       stages: [
@@ -61,24 +61,24 @@ describe("StageDefinition compute_template field", () => {
       ],
     });
 
-    const stages = getStages(depsFromApp(app), "tmpl-flow");
+    const stages = await getStages(depsFromApp(app), "tmpl-flow");
     expect(stages).toHaveLength(2);
     expect(stages[0].compute_template).toBe("fast-docker");
     expect(stages[1].compute_template).toBe("heavy-ec2");
   });
 
-  it("compute_template is undefined when not specified", () => {
+  it("compute_template is undefined when not specified", async () => {
     writeUserFlow("no-tmpl-flow", {
       name: "no-tmpl-flow",
       stages: [{ name: "work", agent: "worker", gate: "auto" }],
     });
 
-    const stage = getStage(depsFromApp(app), "no-tmpl-flow", "work");
+    const stage = await getStage(depsFromApp(app), "no-tmpl-flow", "work");
     expect(stage).not.toBeNull();
     expect(stage!.compute_template).toBeUndefined();
   });
 
-  it("only some stages can have compute_template", () => {
+  it("only some stages can have compute_template", async () => {
     writeUserFlow("mixed-flow", {
       name: "mixed-flow",
       stages: [
@@ -88,7 +88,7 @@ describe("StageDefinition compute_template field", () => {
       ],
     });
 
-    const stages = getStages(depsFromApp(app), "mixed-flow");
+    const stages = await getStages(depsFromApp(app), "mixed-flow");
     expect(stages[0].compute_template).toBeUndefined();
     expect(stages[1].compute_template).toBe("gpu-large");
     expect(stages[2].compute_template).toBeUndefined();
@@ -179,7 +179,7 @@ describe("resolveComputeForStage", async () => {
 // ── Integration: flow YAML with compute_template ────────────────────────────
 
 describe("flow with per-stage compute templates", () => {
-  it("different stages can specify different compute templates", () => {
+  it("different stages can specify different compute templates", async () => {
     writeUserFlow("multi-compute-flow", {
       name: "multi-compute-flow",
       description: "Flow with per-stage compute",
@@ -205,14 +205,14 @@ describe("flow with per-stage compute templates", () => {
       ],
     });
 
-    const flow = app.flows.get("multi-compute-flow");
+    const flow = await app.flows.get("multi-compute-flow");
     expect(flow).not.toBeNull();
     expect(flow!.stages[0].compute_template).toBe("lightweight");
     expect(flow!.stages[1].compute_template).toBe("heavy-gpu");
     expect(flow!.stages[2].compute_template).toBeUndefined();
   });
 
-  it("compute_template coexists with other stage fields", () => {
+  it("compute_template coexists with other stage fields", async () => {
     writeUserFlow("full-stage-flow", {
       name: "full-stage-flow",
       stages: [
@@ -229,7 +229,7 @@ describe("flow with per-stage compute templates", () => {
       ],
     });
 
-    const stage = getStage(depsFromApp(app), "full-stage-flow", "impl");
+    const stage = await getStage(depsFromApp(app), "full-stage-flow", "impl");
     expect(stage).not.toBeNull();
     expect(stage!.compute_template).toBe("sandbox");
     expect(stage!.model).toBe("opus");

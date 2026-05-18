@@ -36,7 +36,7 @@ describe("FileModelStore: three-layer lookup", () => {
     projectRoot = tempDir();
   });
 
-  it("falls back to the bundled layer when nothing overrides", () => {
+  it("falls back to the bundled layer when nothing overrides", async () => {
     writeModel(bundled, "foo.yaml", {
       id: "foo",
       display: "Foo",
@@ -44,12 +44,12 @@ describe("FileModelStore: three-layer lookup", () => {
       provider_slugs: { "anthropic-direct": "foo-direct" },
     });
     const store = new FileModelStore({ builtinDir: bundled, userDir: global });
-    const hit = store.get("foo");
+    const hit = await store.get("foo");
     expect(hit?.id).toBe("foo");
     expect(hit?._source).toBe("builtin");
   });
 
-  it("global layer replaces a bundled definition by id", () => {
+  it("global layer replaces a bundled definition by id", async () => {
     writeModel(bundled, "foo.yaml", {
       id: "foo",
       display: "Foo (bundled)",
@@ -63,13 +63,13 @@ describe("FileModelStore: three-layer lookup", () => {
       provider_slugs: { "anthropic-direct": "foo-global" },
     });
     const store = new FileModelStore({ builtinDir: bundled, userDir: global });
-    const hit = store.get("foo");
+    const hit = await store.get("foo");
     expect(hit?.display).toBe("Foo (global)");
     expect(hit?._source).toBe("global");
     expect(hit?.provider_slugs["anthropic-direct"]).toBe("foo-global");
   });
 
-  it("project layer wins over global and bundled", () => {
+  it("project layer wins over global and bundled", async () => {
     writeModel(bundled, "foo.yaml", {
       id: "foo",
       display: "Foo (bundled)",
@@ -89,12 +89,12 @@ describe("FileModelStore: three-layer lookup", () => {
       provider_slugs: { "anthropic-direct": "foo-project" },
     });
     const store = new FileModelStore({ builtinDir: bundled, userDir: global });
-    const hit = store.get("foo", projectRoot);
+    const hit = await store.get("foo", projectRoot);
     expect(hit?.display).toBe("Foo (project)");
     expect(hit?._source).toBe("project");
   });
 
-  it("replaces wholesale -- no field-level deep-merge", () => {
+  it("replaces wholesale -- no field-level deep-merge", async () => {
     // Bundled entry declares two provider slugs; global entry declares only
     // one. Project-less lookup should see only the global slugs -- the
     // bundled slug must NOT leak through.
@@ -111,12 +111,12 @@ describe("FileModelStore: three-layer lookup", () => {
       provider_slugs: { "anthropic-direct": "a-override" },
     });
     const store = new FileModelStore({ builtinDir: bundled, userDir: global });
-    const hit = store.get("foo");
+    const hit = await store.get("foo");
     expect(Object.keys(hit!.provider_slugs).sort()).toEqual(["anthropic-direct"]);
     expect(hit!.provider_slugs["anthropic-direct"]).toBe("a-override");
   });
 
-  it("project-layer alias shadows a bundled entry with that id", () => {
+  it("project-layer alias shadows a bundled entry with that id", async () => {
     writeModel(bundled, "fast.yaml", {
       id: "fast",
       display: "Fast (bundled)",
@@ -133,12 +133,12 @@ describe("FileModelStore: three-layer lookup", () => {
     const store = new FileModelStore({ builtinDir: bundled, userDir: global });
     // Looking up "fast" now lands on the project "turbo" entry because its
     // alias overrides the bundled id.
-    const hit = store.get("fast", projectRoot);
+    const hit = await store.get("fast", projectRoot);
     expect(hit?.id).toBe("turbo");
     expect(hit?._source).toBe("project");
   });
 
-  it("list returns one entry per canonical id across all layers", () => {
+  it("list returns one entry per canonical id across all layers", async () => {
     writeModel(bundled, "a.yaml", {
       id: "a",
       display: "A",
@@ -158,14 +158,14 @@ describe("FileModelStore: three-layer lookup", () => {
       provider_slugs: { "anthropic-direct": "a1-global" },
     });
     const store = new FileModelStore({ builtinDir: bundled, userDir: global });
-    const listed = store.list();
+    const listed = await store.list();
     const ids = listed.map((m) => m.id).sort();
     expect(ids).toEqual(["a", "b"]);
     // Global wins.
     expect(listed.find((m) => m.id === "a")?.display).toBe("A (global)");
   });
 
-  it("returns null for an unknown id", () => {
+  it("returns null for an unknown id", async () => {
     writeModel(bundled, "x.yaml", {
       id: "x",
       display: "X",
@@ -173,7 +173,7 @@ describe("FileModelStore: three-layer lookup", () => {
       provider_slugs: { "anthropic-direct": "x1" },
     });
     const store = new FileModelStore({ builtinDir: bundled, userDir: global });
-    expect(store.get("nope")).toBeNull();
+    expect(await store.get("nope")).toBeNull();
   });
 });
 
@@ -186,7 +186,7 @@ describe("FileModelStore.default()", () => {
     global = join(tempDir(), "models");
   });
 
-  it("resolves the alias 'sonnet' to the catalog entry carrying it", () => {
+  it("resolves the alias 'sonnet' to the catalog entry carrying it", async () => {
     writeModel(bundled, "claude-sonnet-4-6.yaml", {
       id: "claude-sonnet-4-6",
       display: "Claude Sonnet 4.6",
@@ -195,11 +195,11 @@ describe("FileModelStore.default()", () => {
       provider_slugs: { "anthropic-direct": "claude-sonnet-4-6" },
     });
     const store = new FileModelStore({ builtinDir: bundled, userDir: global });
-    const hit = store.default();
+    const hit = await store.default();
     expect(hit.id).toBe("claude-sonnet-4-6");
   });
 
-  it("honors global-layer override of the 'sonnet' alias", () => {
+  it("honors global-layer override of the 'sonnet' alias", async () => {
     writeModel(bundled, "claude-sonnet-4-6.yaml", {
       id: "claude-sonnet-4-6",
       display: "Claude Sonnet 4.6",
@@ -215,10 +215,10 @@ describe("FileModelStore.default()", () => {
       provider_slugs: { "anthropic-direct": "custom" },
     });
     const store = new FileModelStore({ builtinDir: bundled, userDir: global });
-    expect(store.default().id).toBe("custom-default");
+    expect((await store.default()).id).toBe("custom-default");
   });
 
-  it("throws when the catalog has no 'sonnet' alias (fresh install is broken)", () => {
+  it("throws when the catalog has no 'sonnet' alias (fresh install is broken)", async () => {
     writeModel(bundled, "other.yaml", {
       id: "other",
       display: "Other",
@@ -226,6 +226,6 @@ describe("FileModelStore.default()", () => {
       provider_slugs: { "anthropic-direct": "other" },
     });
     const store = new FileModelStore({ builtinDir: bundled, userDir: global });
-    expect(() => store.default()).toThrow(/no catalog entry for alias "sonnet"/);
+    expect(store.default()).rejects.toThrow(/no catalog entry for alias "sonnet"/);
   });
 });

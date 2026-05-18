@@ -6,7 +6,10 @@
  * (sanitization happens at the form/CLI level, not in core).
  */
 
+import { attachTemporalTestHarness, drainTemporalTestHarness, waitForSessionStatus } from "../temporal/test-harness.js";
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../app.js";
 import { setApp, clearApp, getApp } from "./test-helpers.js";
 
@@ -19,14 +22,21 @@ const sanitize = (name: string) =>
     .slice(0, 60);
 
 let app: AppContext;
+let detach: (() => void) | undefined;
 
 beforeEach(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(join(flowDir, "x-auto.yaml"), `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`);
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
   setApp(app);
 });
 
 afterEach(async () => {
+  await drainTemporalTestHarness();
+  detach?.();
   await app?.shutdown();
   clearApp();
 });
@@ -75,42 +85,62 @@ describe("session name sanitization", () => {
 // ── E2E: core stores names as-is ─────────────────────────────────────────────
 
 describe("session name in core (E2E)", async () => {
-  it("stores name with spaces as-is in the DB", async () => {
-    const session = await app.sessionCreator.start({
-      summary: "my test session",
-      flow: "bare",
-    });
+  it(
+    "stores name with spaces as-is in the DB",
+    async () => {
+      const session = await app.sessionCreator.start({
+        summary: "my test session",
+        flow: "x-auto",
+      });
+      await waitForSessionStatus(app, session.id, ["completed", "failed"]);
 
-    const stored = (await getApp().sessions.get(session.id))!;
-    expect(stored.summary).toBe("my test session");
-  });
+      const stored = (await getApp().sessions.get(session.id))!;
+      expect(stored.summary).toBe("my test session");
+    },
+    45_000,
+  );
 
-  it("stores name with special characters as-is in the DB", async () => {
-    const session = await app.sessionCreator.start({
-      summary: "fix: auth module (v2)",
-      flow: "bare",
-    });
+  it(
+    "stores name with special characters as-is in the DB",
+    async () => {
+      const session = await app.sessionCreator.start({
+        summary: "fix: auth module (v2)",
+        flow: "x-auto",
+      });
+      await waitForSessionStatus(app, session.id, ["completed", "failed"]);
 
-    const stored = (await getApp().sessions.get(session.id))!;
-    expect(stored.summary).toBe("fix: auth module (v2)");
-  });
+      const stored = (await getApp().sessions.get(session.id))!;
+      expect(stored.summary).toBe("fix: auth module (v2)");
+    },
+    45_000,
+  );
 
-  it("stores empty summary as null", async () => {
-    const session = await app.sessionCreator.start({ flow: "bare" });
+  it(
+    "stores empty summary as null",
+    async () => {
+      const session = await app.sessionCreator.start({ flow: "x-auto" });
+      await waitForSessionStatus(app, session.id, ["completed", "failed"]);
 
-    const stored = (await getApp().sessions.get(session.id))!;
-    expect(stored.summary).toBeNull();
-  });
+      const stored = (await getApp().sessions.get(session.id))!;
+      expect(stored.summary).toBeNull();
+    },
+    45_000,
+  );
 
-  it("stores long names without truncation in core", async () => {
-    const longName = "a".repeat(200);
-    const session = await app.sessionCreator.start({
-      summary: longName,
-      flow: "bare",
-    });
+  it(
+    "stores long names without truncation in core",
+    async () => {
+      const longName = "a".repeat(200);
+      const session = await app.sessionCreator.start({
+        summary: longName,
+        flow: "x-auto",
+      });
+      await waitForSessionStatus(app, session.id, ["completed", "failed"]);
 
-    const stored = (await getApp().sessions.get(session.id))!;
-    expect(stored.summary).toBe(longName);
-    expect(stored.summary!.length).toBe(200);
-  });
+      const stored = (await getApp().sessions.get(session.id))!;
+      expect(stored.summary).toBe(longName);
+      expect(stored.summary!.length).toBe(200);
+    },
+    45_000,
+  );
 });
