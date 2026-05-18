@@ -15,6 +15,7 @@ import { getExecutor } from "../executor.js";
 import { logDebug, logError, logInfo, logWarn } from "../observability/structured-log.js";
 import { resolveComputeTarget } from "../compute-resolver.js";
 import { ArkdUnreachableError } from "../../arkd/common/index.js";
+import { withSessionLock } from "../services/session-lock.js";
 
 const UNREACHABLE_BUDGET = 5; // consecutive unreachable probes before marking session failed
 
@@ -419,10 +420,12 @@ async function _handleStatus(
         // next stage in-process.
         await app.sessions.update(sessionId, { status: "ready", error: null });
         try {
-          await app.sessionHooks.mediateStageHandoff(sessionId, {
-            autoDispatch: true,
-            source: "status_poller",
-          });
+          await withSessionLock(sessionId, () =>
+            app.sessionHooks.mediateStageHandoff(sessionId, {
+              autoDispatch: true,
+              source: "status_poller",
+            }),
+          );
         } catch (err: any) {
           // advance may fail if flow is done
           logWarn("status", `mediateStageHandoff failed for ${sessionId}: ${err?.message ?? err}`);

@@ -12,6 +12,7 @@ import type { SessionRepository } from "../repositories/session.js";
 import type { EventRepository } from "../repositories/event.js";
 import { logWarn, logError } from "../observability/structured-log.js";
 import type { DispatchResult } from "./dispatch/types.js";
+import { withSessionLock } from "./session-lock.js";
 
 type SessionCreatedListener = (sessionId: string) => void;
 type DispatchFn = (sessionId: string) => Promise<DispatchResult>;
@@ -205,69 +206,74 @@ export class SessionDispatchListeners {
     // deadline, fire the dispatch_failed event, and let kickDispatch's
     // existing chain run onDispatched so the UI updates.
     const deadlineMs = this.dispatchWatchdogMs;
-    const watchdog = new Promise<{ ok: false; message: string; __watchdog: true }>((resolve) => {
-      setTimeout(() => {
-        resolve({
-          ok: false,
-          message: `dispatch hung past ${deadlineMs}ms watchdog deadline (sessionId=${sessionId})`,
-          __watchdog: true,
-        });
-      }, deadlineMs).unref?.();
-    });
-    const raced = Promise.race([this.dispatch(sessionId), watchdog]);
-    const promise = raced
-      .then(async (result) => {
-        // Watchdog winner: the real dispatch is still pending. Surface a
-        // dispatch_failed and move on. The orphaned dispatch promise will
-        // eventually settle (if ever) but its result is ignored -- the
-        // session is already marked failed.
-        if ((result as { __watchdog?: boolean }).__watchdog) {
-          logError("session", `dispatch watchdog fired -- dispatch hung past ${this.dispatchWatchdogMs}ms`, {
-            sessionId,
-            deadlineMs: this.dispatchWatchdogMs,
-            message: result.message,
+    // Per-session serialization: the whole dispatch + post-condition body
+    // runs inside the session lock so a report-driven advance (queued on
+    // the same lock) cannot interleave with this in-flight dispatch.
+    const promise = withSessionLock(sessionId, () => {
+      const watchdog = new Promise<{ ok: false; message: string; __watchdog: true }>((resolve) => {
+        setTimeout(() => {
+          resolve({
+            ok: false,
+            message: `dispatch hung past ${deadlineMs}ms watchdog deadline (sessionId=${sessionId})`,
+            __watchdog: true,
           });
-          await markDispatchFailedShared(this.sessions, this.events, sessionId, result.message ?? "dispatch hung");
-          return;
-        }
-        // dispatch returns `{ ok: false, message }` for non-throw failures
-        // (e.g. "Stage 'pr' is create_pr, not agent" on an action stage).
-        // Log the failure event AND flip the session to `failed` so the UI
-        // stops showing it as pending/ready. Without the status update the
-        // row renders "pending" forever despite the dispatch_failed event.
-        if (result && result.ok === false) {
-          const reason = result.message ?? "dispatch returned ok: false";
-          await markDispatchFailedShared(this.sessions, this.events, sessionId, reason);
-          return;
-        }
-        // Post-condition check on the success branch.
-        // Typed contract: launched:true MUST mean status moved out of ready.
-        // launched:false is intentional no-launch; reason names the case.
-        if (result && result.ok === true) {
-          if (result.launched) {
-            const refreshed = await this.sessions.get(sessionId);
-            if (refreshed && refreshed.status === "ready") {
-              logError("session", `dispatch contract violation: launched:true but session still at status=ready`, {
-                sessionId,
-                message: result.message,
-              });
-              await markDispatchFailedShared(
-                this.sessions,
-                this.events,
-                sessionId,
-                `dispatch returned launched:true but session still at status=ready (message: ${result.message ?? "<no message>"})`,
-              );
+        }, deadlineMs).unref?.();
+      });
+      const raced = Promise.race([this.dispatch(sessionId), watchdog]);
+      return raced
+        .then(async (result) => {
+          // Watchdog winner: the real dispatch is still pending. Surface a
+          // dispatch_failed and move on. The orphaned dispatch promise will
+          // eventually settle (if ever) but its result is ignored -- the
+          // session is already marked failed.
+          if ((result as { __watchdog?: boolean }).__watchdog) {
+            logError("session", `dispatch watchdog fired -- dispatch hung past ${this.dispatchWatchdogMs}ms`, {
+              sessionId,
+              deadlineMs: this.dispatchWatchdogMs,
+              message: result.message,
+            });
+            await markDispatchFailedShared(this.sessions, this.events, sessionId, result.message ?? "dispatch hung");
+            return;
+          }
+          // dispatch returns `{ ok: false, message }` for non-throw failures
+          // (e.g. "Stage 'pr' is create_pr, not agent" on an action stage).
+          // Log the failure event AND flip the session to `failed` so the UI
+          // stops showing it as pending/ready. Without the status update the
+          // row renders "pending" forever despite the dispatch_failed event.
+          if (result && result.ok === false) {
+            const reason = result.message ?? "dispatch returned ok: false";
+            await markDispatchFailedShared(this.sessions, this.events, sessionId, reason);
+            return;
+          }
+          // Post-condition check on the success branch.
+          // Typed contract: launched:true MUST mean status moved out of ready.
+          // launched:false is intentional no-launch; reason names the case.
+          if (result && result.ok === true) {
+            if (result.launched) {
+              const refreshed = await this.sessions.get(sessionId);
+              if (refreshed && refreshed.status === "ready") {
+                logError("session", `dispatch contract violation: launched:true but session still at status=ready`, {
+                  sessionId,
+                  message: result.message,
+                });
+                await markDispatchFailedShared(
+                  this.sessions,
+                  this.events,
+                  sessionId,
+                  `dispatch returned launched:true but session still at status=ready (message: ${result.message ?? "<no message>"})`,
+                );
+              }
             }
           }
-        }
-      })
-      .catch(async (err) => {
-        const reason = err instanceof Error ? err.message : String(err);
-        await markDispatchFailedShared(this.sessions, this.events, sessionId, reason, { error: err });
-      })
-      .then(async () => {
-        onDispatched(await this.sessions.get(sessionId));
-      });
+        })
+        .catch(async (err) => {
+          const reason = err instanceof Error ? err.message : String(err);
+          await markDispatchFailedShared(this.sessions, this.events, sessionId, reason, { error: err });
+        })
+        .then(async () => {
+          onDispatched(await this.sessions.get(sessionId));
+        });
+    });
     this.pendingDispatches.add(promise);
     promise
       .finally(() => this.pendingDispatches.delete(promise))

@@ -25,6 +25,7 @@ import { depsFromApp } from "../deps.js";
 import { eventBus } from "../../hooks.js";
 import { logDebug, logError, logInfo, logWarn } from "../../observability/structured-log.js";
 import { emitStageSpanEnd, emitSessionSpanEnd, flushSpans } from "../../observability/otlp.js";
+import { withSessionLock } from "../session-lock.js";
 
 /** Result shape returned by `processHookPayload`. */
 export interface HookProcessResult {
@@ -222,10 +223,12 @@ export async function processHookPayload(
         `hook_status: skipping bespoke handoff for ${sessionId} -- Temporal workflow drives advancement`,
       );
     } else {
-      await scoped.sessionHooks.mediateStageHandoff(sessionId, {
-        autoDispatch: result.shouldAutoDispatch,
-        source: "hook_status",
-      });
+      await withSessionLock(sessionId, () =>
+        scoped.sessionHooks.mediateStageHandoff(sessionId, {
+          autoDispatch: result.shouldAutoDispatch,
+          source: "hook_status",
+        }),
+      );
     }
   }
 

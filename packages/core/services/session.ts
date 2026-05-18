@@ -17,6 +17,7 @@ import type { AppContext } from "../app.js";
 import { logDebug } from "../observability/structured-log.js";
 import { SessionDispatchListeners, markDispatchFailedShared } from "./session-dispatch-listeners.js";
 import { ValidationError } from "./orchestrator-errors.js";
+import { withSessionLock } from "./session-lock.js";
 
 // ── SessionService ───────────────────────────────────────────────────────────
 
@@ -484,10 +485,12 @@ export class SessionService {
         // here so resume behaves the same way.
         const postAction = await this.sessions.get(sessionId);
         if (postAction?.status === "ready") {
-          await this.app.sessionHooks.mediateStageHandoff(sessionId, {
-            autoDispatch: true,
-            source: "resume_action",
-          });
+          await withSessionLock(sessionId, () =>
+            this.app.sessionHooks.mediateStageHandoff(sessionId, {
+              autoDispatch: true,
+              source: "resume_action",
+            }),
+          );
         }
       } catch (err) {
         // Mirror the action-failure branch above: thrown errors leave the

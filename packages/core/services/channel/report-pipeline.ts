@@ -16,6 +16,7 @@ import { safeAsync } from "../../safe.js";
 import { logDebug, logError, logInfo, logWarn } from "../../observability/structured-log.js";
 import { sendOSNotification } from "../../notify.js";
 import { markDispatchFailedShared } from "../session-dispatch-listeners.js";
+import { withSessionLock } from "../session-lock.js";
 
 export async function handleReport(deps: OrchestrationDeps, sessionId: string, report: OutboundMessage): Promise<void> {
   // Decide + persist the mechanical side-effects (events log, message
@@ -46,11 +47,13 @@ export async function handleReport(deps: OrchestrationDeps, sessionId: string, r
       );
     } else
       try {
-        const handoff = await deps.app!.sessionHooks.mediateStageHandoff(sessionId, {
-          autoDispatch: result.shouldAutoDispatch,
-          source: "channel_report",
-          outcome: result.outcome,
-        });
+        const handoff = await withSessionLock(sessionId, () =>
+          deps.app!.sessionHooks.mediateStageHandoff(sessionId, {
+            autoDispatch: result.shouldAutoDispatch,
+            source: "channel_report",
+            outcome: result.outcome,
+          }),
+        );
         if (!handoff.ok && !handoff.blockedByVerification) {
           logWarn("conductor", `stage handoff failed for ${sessionId}: ${handoff.message}`);
         }
