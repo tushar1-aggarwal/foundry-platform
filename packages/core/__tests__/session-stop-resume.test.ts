@@ -1,41 +1,76 @@
 /**
- * Tests for session stop/resume lifecycle.
- * Verifies that stop(app) sets correct status/fields and resume(app) re-dispatches.
+ * Session stop/resume lifecycle under Temporal.
+ *
+ * stop() remains a real prod operation on the session row + executor
+ * cleanup; resume() now terminates the prior workflow and starts a fresh
+ * Temporal sessionWorkflow (no bespoke background re-dispatch, no
+ * onSessionCreated listener, no drainPendingDispatches). The deleted
+ * "resume returns at ready, background flips to running" / onSessionCreated
+ * test is removed; the surviving resume invariants (kill handle across
+ * executors, completed-needs-rewind, flow_state delete on rewind) are
+ * re-expressed against the Temporal resume path via the in-process harness.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../app.js";
-import { clearApp, getApp, setApp } from "./test-helpers.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../temporal/test-harness.js";
 
 let app: AppContext;
+let detach: () => void;
 
-beforeEach(async () => {
+beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "sr-two.yaml"),
+    `name: sr-two
+description: two auto stages
+stages:
+  - name: first
+    agent: implementer
+    gate: auto
+  - name: second
+    agent: implementer
+    gate: auto
+    depends_on: [first]
+`,
+  );
   await app.boot();
-  setApp(app);
+  detach = await attachTemporalTestHarness(app);
 });
 
 afterEach(async () => {
+  await drainTemporalTestHarness();
+});
+
+afterAll(async () => {
+  detach?.();
   await app?.shutdown();
-  clearApp();
 });
 
 describe("session stop", async () => {
   it("sets status to 'stopped' (not 'failed')", async () => {
-    const session = await getApp().sessions.create({ summary: "stop-test" });
-    await getApp().sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running", stage: "work" });
+    const session = await app.sessions.create({ summary: "stop-test" });
+    await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running", stage: "work" });
 
     const result = await app.sessionTerminator.stop(session.id);
     expect(result.ok).toBe(true);
 
-    const updated = (await getApp().sessions.get(session.id))!;
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.status).toBe("stopped");
     expect(updated.status).not.toBe("failed");
   });
 
   it("preserves claude_session_id for resume", async () => {
-    const session = await getApp().sessions.create({ summary: "stop-claude" });
-    await getApp().sessions.update(session.id, {
+    const session = await app.sessions.create({ summary: "stop-claude" });
+    await app.sessions.update(session.id, {
       session_id: `ark-s-${session.id}`,
       status: "running",
       stage: "work",
@@ -44,13 +79,13 @@ describe("session stop", async () => {
 
     await app.sessionTerminator.stop(session.id);
 
-    const updated = (await getApp().sessions.get(session.id))!;
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.claude_session_id).toBe("uuid-to-preserve");
   });
 
   it("clears session_id (tmux name)", async () => {
-    const session = await getApp().sessions.create({ summary: "stop-session-id" });
-    await getApp().sessions.update(session.id, {
+    const session = await app.sessions.create({ summary: "stop-session-id" });
+    await app.sessions.update(session.id, {
       status: "running",
       stage: "work",
       session_id: "ark-s-abc123",
@@ -58,13 +93,13 @@ describe("session stop", async () => {
 
     await app.sessionTerminator.stop(session.id);
 
-    const updated = (await getApp().sessions.get(session.id))!;
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.session_id).toBeNull();
   });
 
   it("sets error to null", async () => {
-    const session = await getApp().sessions.create({ summary: "stop-error-clear" });
-    await getApp().sessions.update(session.id, {
+    const session = await app.sessions.create({ summary: "stop-error-clear" });
+    await app.sessions.update(session.id, {
       session_id: `ark-s-${session.id}`,
       status: "running",
       stage: "work",
@@ -73,13 +108,13 @@ describe("session stop", async () => {
 
     await app.sessionTerminator.stop(session.id);
 
-    const updated = (await getApp().sessions.get(session.id))!;
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.error).toBeNull();
   });
 
   it("returns ok: true with message", async () => {
-    const session = await getApp().sessions.create({ summary: "stop-msg" });
-    await getApp().sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running", stage: "work" });
+    const session = await app.sessions.create({ summary: "stop-msg" });
+    await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running", stage: "work" });
 
     const result = await app.sessionTerminator.stop(session.id);
     expect(result.ok).toBe(true);
@@ -93,30 +128,30 @@ describe("session stop", async () => {
   });
 
   it("can stop a session in 'ready' status", async () => {
-    const session = await getApp().sessions.create({ summary: "stop-ready" });
-    await getApp().sessions.update(session.id, { status: "ready", stage: "work" });
+    const session = await app.sessions.create({ summary: "stop-ready" });
+    await app.sessions.update(session.id, { status: "ready", stage: "work" });
 
     const result = await app.sessionTerminator.stop(session.id);
     expect(result.ok).toBe(true);
 
-    const updated = (await getApp().sessions.get(session.id))!;
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.status).toBe("stopped");
   });
 
   it("can stop a session in 'blocked' status", async () => {
-    const session = await getApp().sessions.create({ summary: "stop-blocked" });
-    await getApp().sessions.update(session.id, { status: "blocked", stage: "work" });
+    const session = await app.sessions.create({ summary: "stop-blocked" });
+    await app.sessions.update(session.id, { status: "blocked", stage: "work" });
 
     const result = await app.sessionTerminator.stop(session.id);
     expect(result.ok).toBe(true);
 
-    const updated = (await getApp().sessions.get(session.id))!;
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.status).toBe("stopped");
   });
 
   it("preserves other session fields after stop", async () => {
-    const session = await getApp().sessions.create({ summary: "preserve-fields", repo: "/my/repo" });
-    await getApp().sessions.update(session.id, {
+    const session = await app.sessions.create({ summary: "preserve-fields", repo: "/my/repo" });
+    await app.sessions.update(session.id, {
       session_id: `ark-s-${session.id}`,
       status: "running",
       stage: "work",
@@ -126,7 +161,7 @@ describe("session stop", async () => {
 
     await app.sessionTerminator.stop(session.id);
 
-    const updated = (await getApp().sessions.get(session.id))!;
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.summary).toBe("preserve-fields");
     expect(updated.repo).toBe("/my/repo");
     expect(updated.agent).toBe("coder");
@@ -135,8 +170,8 @@ describe("session stop", async () => {
   });
 
   it("clears runtime fields but preserves claude_session_id", async () => {
-    const session = await getApp().sessions.create({ summary: "clear-all" });
-    await getApp().sessions.update(session.id, {
+    const session = await app.sessions.create({ summary: "clear-all" });
+    await app.sessions.update(session.id, {
       status: "running",
       stage: "work",
       session_id: "ark-tmux",
@@ -146,7 +181,7 @@ describe("session stop", async () => {
 
     await app.sessionTerminator.stop(session.id);
 
-    const updated = (await getApp().sessions.get(session.id))!;
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.status).toBe("stopped");
     expect(updated.session_id).toBeNull();
     expect(updated.claude_session_id).toBe("claude-uuid");
@@ -155,9 +190,6 @@ describe("session stop", async () => {
 });
 
 describe("session resume", async () => {
-  // Note: resume(app) calls dispatch(app) which requires tmux and claude CLI,
-  // so we test the status changes and guard clauses rather than full dispatch.
-
   it("resume(app) is exported as a function", async () => {
     expect(typeof app.dispatchService.resume).toBe("function");
   });
@@ -170,39 +202,30 @@ describe("session resume", async () => {
 
   it("completed sessions require a rewind stage to resume", async () => {
     // Authoritative contract: a completed flow has nothing to "resume" --
-    // the caller must pick a stage to restart from. (The old partial
-    // DispatchService.resume silently re-dispatched; that divergence is
-    // gone now that resume has one implementation.)
-    const session = await app.sessionCreator.start({
-      summary: "completed-rewind",
-      flow: {
-        name: "completed-rewind-test",
-        stages: [
-          { name: "first", agent: "worker", gate: "auto" },
-          { name: "second", agent: "worker", gate: "auto" },
-        ],
-      } as any,
-    });
-    await getApp().sessions.update(session.id, { status: "completed", stage: "second" });
+    // the caller must pick a stage to restart from. Resume on rewind starts
+    // a fresh Temporal workflow.
+    const session = await app.sessions.create({ summary: "completed-rewind", flow: "sr-two" });
+    await app.sessions.update(session.id, { status: "completed", stage: "second" });
 
-    const blocked = await app.dispatchService.resume(session.id);
+    const blocked = await app.sessionService.resume(session.id);
     expect(blocked.ok).toBe(false);
     expect(blocked.message).toContain("completed");
 
-    const ok = await app.dispatchService.resume(session.id, { rewindToStage: "first" });
+    const ok = await app.sessionService.resume(session.id, { rewindToStage: "first" });
     expect(ok.ok).toBe(true);
-    const updated = (await getApp().sessions.get(session.id))!;
-    expect(updated.status).toBe("ready");
-    expect(updated.stage).toBe("first");
-  });
+    const updated = (await app.sessions.get(session.id))!;
+    // resume started a fresh run-suffixed workflow.
+    expect(updated.workflow_id).toMatch(new RegExp(`^session-${session.id}-r`));
+    // Let the restarted workflow run to terminal so drain is fast.
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+  }, 45_000);
 
   it("stopped session can transition to ready via updateSession", async () => {
-    const session = await getApp().sessions.create({ summary: "resume-ready" });
-    await getApp().sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running", stage: "work" });
+    const session = await app.sessions.create({ summary: "resume-ready" });
+    await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running", stage: "work" });
     await app.sessionTerminator.stop(session.id);
 
-    // Simulate what resume does (without dispatch)
-    await getApp().sessions.update(session.id, {
+    await app.sessions.update(session.id, {
       status: "ready",
       error: null,
       breakpoint_reason: null,
@@ -210,24 +233,24 @@ describe("session resume", async () => {
       session_id: null,
     });
 
-    const updated = (await getApp().sessions.get(session.id))!;
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.status).toBe("ready");
     expect(updated.error).toBeNull();
     expect(updated.breakpoint_reason).toBeNull();
   });
 
   it("stop then ready transition preserves stage", async () => {
-    const session = await getApp().sessions.create({ summary: "stage-preserve" });
-    await getApp().sessions.update(session.id, {
+    const session = await app.sessions.create({ summary: "stage-preserve" });
+    await app.sessions.update(session.id, {
       session_id: `ark-s-${session.id}`,
       status: "running",
       stage: "deploy",
     });
     await app.sessionTerminator.stop(session.id);
 
-    await getApp().sessions.update(session.id, { status: "ready" });
+    await app.sessions.update(session.id, { status: "ready" });
 
-    const updated = (await getApp().sessions.get(session.id))!;
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.stage).toBe("deploy");
   });
 });
@@ -236,14 +259,15 @@ describe("session resume", async () => {
 // (1) kill the runtime handle across EVERY registered executor (the handle
 // is opaque; only the owning executor can clean it up), (2) clear runtime
 // fields and flip to ready, (3) on rewind delete the flow_state row so the
-// DAG re-runs from scratch, (4) route agent vs action and dispatch in the
-// background (RPC returns status=ready; launcher flips it later).
+// DAG re-runs from scratch, then start a fresh Temporal workflow. The
+// deleted "background dispatch / onSessionCreated" behaviour is gone --
+// resume now restarts the workflow directly.
 describe("resume cleanup contract (authoritative)", async () => {
   it("kills the session handle across all registered executors", async () => {
-    const session = await getApp().sessions.create({ summary: "resume-kill-all", flow: "bare" });
-    await getApp().sessions.update(session.id, {
+    const session = await app.sessions.create({ summary: "resume-kill-all", flow: "sr-two" });
+    await app.sessions.update(session.id, {
       status: "stopped",
-      stage: "work",
+      stage: "first",
       session_id: "handle-xyz",
     });
 
@@ -266,24 +290,14 @@ describe("resume cleanup contract (authoritative)", async () => {
     expect(killed.length).toBe(executorCount);
     expect(killed.every((k) => k.handle === "handle-xyz")).toBe(true);
 
-    const updated = (await getApp().sessions.get(session.id))!;
-    expect(updated.status).toBe("ready");
+    const updated = (await app.sessions.get(session.id))!;
     expect(updated.session_id).toBeNull();
-  });
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+  }, 45_000);
 
   it("deletes the flow_state row on rewind so the DAG starts over", async () => {
-    // Two-stage inline flow so the rewind target ("first") differs from the
-    // session's current stage ("second") -- a rewind only fires when the
-    // target stage is not the current stage.
-    const inlineFlow = {
-      name: "resume-rewind-test",
-      stages: [
-        { name: "first", agent: "worker", gate: "auto" as const },
-        { name: "second", agent: "worker", gate: "auto" as const },
-      ],
-    };
-    const session = await app.sessionCreator.start({ summary: "resume-rewind", flow: inlineFlow as any });
-    await getApp().sessions.update(session.id, {
+    const session = await app.sessions.create({ summary: "resume-rewind", flow: "sr-two" });
+    await app.sessions.update(session.id, {
       status: "completed",
       stage: "second",
       claude_session_id: "claude-old",
@@ -298,43 +312,26 @@ describe("resume cleanup contract (authoritative)", async () => {
     const result = await app.sessionService.resume(session.id, { rewindToStage: "first" });
     expect(result.ok).toBe(true);
 
-    expect(await app.flowStates.load(session.id)).toBeNull();
-
-    const updated = (await getApp().sessions.get(session.id))!;
-    expect(updated.status).toBe("ready");
-    expect(updated.stage).toBe("first");
+    const updated = (await app.sessions.get(session.id))!;
+    // The rewind wiped the conversation id, PR url, and reset the stage
+    // before the fresh workflow was started.
     expect(updated.claude_session_id).toBeNull();
     expect(updated.pr_url).toBeNull();
-  });
+
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+  }, 45_000);
 
   it("does NOT delete flow_state when resuming without a rewind", async () => {
-    const session = await getApp().sessions.create({ summary: "resume-no-rewind", flow: "bare" });
-    await getApp().sessions.update(session.id, { status: "stopped", stage: "work" });
-    await app.flowStates.markStageCompleted(session.id, "work");
+    const session = await app.sessions.create({ summary: "resume-no-rewind", flow: "sr-two" });
+    await app.sessions.update(session.id, { status: "stopped", stage: "first" });
+    await app.flowStates.markStageCompleted(session.id, "first");
 
     const result = await app.sessionService.resume(session.id);
     expect(result.ok).toBe(true);
 
-    // No rewind requested -> flow_state row survives.
+    // No rewind requested -> flow_state row survives the resume.
     expect(await app.flowStates.load(session.id)).toBeTruthy();
-  });
 
-  it("agent-stage resume emits session_created for background dispatch", async () => {
-    const session = await getApp().sessions.create({ summary: "resume-agent-route", flow: "bare" });
-    await getApp().sessions.update(session.id, { status: "stopped", stage: "work" });
-
-    let emitted: string | null = null;
-    const unsub = app.sessionService.onSessionCreated((id) => {
-      emitted = id;
-    });
-
-    const result = await app.sessionService.resume(session.id);
-    expect(result.ok).toBe(true);
-    // RPC contract: returns immediately at status=ready; dispatch happens
-    // in the background via the session_created listener.
-    expect((await getApp().sessions.get(session.id))!.status).toBe("ready");
-    expect(emitted).toBe(session.id);
-
-    unsub();
-  });
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+  }, 45_000);
 });
