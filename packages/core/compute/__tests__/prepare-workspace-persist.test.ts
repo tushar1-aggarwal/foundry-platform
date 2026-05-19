@@ -22,7 +22,6 @@ import { AppContext } from "../../app.js";
 import { K8sCompute } from "../k8s.js";
 import { EC2Compute, type EC2HandleMeta } from "../ec2/compute.js";
 import { LocalCompute } from "../local.js";
-import { FirecrackerCompute } from "../firecracker/compute.js";
 import { cloneWorkspaceViaArkd, type RemoteCloneOpts } from "../workspace-clone.js";
 
 let app: AppContext;
@@ -235,45 +234,6 @@ describe("LocalCompute.prepareWorkspace persists session.workdir + branch (docke
     expect(captured[0].branch).toBe("ark-" + session.id);
     const after = await app.sessions.get(session.id);
     expect(after?.workdir).toBe("/work/" + session.id + "/foo");
-    expect(after?.branch).toBe("ark-" + session.id);
-  });
-});
-
-describe("FirecrackerCompute.prepareWorkspace persists session.workdir + branch", () => {
-  it("writes opts.remoteWorkdir to session.workdir and resolves session.branch on the row", async () => {
-    const session = await app.sessions.create({ summary: "fc-persist" });
-    const captured: RemoteCloneOpts[] = [];
-    const fc = new FirecrackerCompute(app);
-    fc.setCloneHelperForTesting(async (opts) => {
-      captured.push(opts);
-    });
-
-    const fcHandle = {
-      kind: "firecracker" as const,
-      name: "fc-test",
-      meta: {
-        firecracker: {
-          vmId: "vm-abc",
-          arkdUrl: "http://192.168.127.2:19300",
-          guestHome: "/home/ubuntu",
-        } as any,
-      },
-    };
-
-    await fc.prepareWorkspace(
-      fcHandle as any,
-      {
-        source: "https://example.com/foo.git",
-        remoteWorkdir: "/home/ubuntu/Projects/" + session.id + "/foo",
-        sessionId: session.id,
-        branch: null,
-      } as any,
-    );
-
-    expect(captured).toHaveLength(1);
-    expect(captured[0].branch).toBe("ark-" + session.id);
-    const after = await app.sessions.get(session.id);
-    expect(after?.workdir).toBe("/home/ubuntu/Projects/" + session.id + "/foo");
     expect(after?.branch).toBe("ark-" + session.id);
   });
 });

@@ -346,7 +346,6 @@ export class EC2Compute extends RemoteArkdCompute implements RemoteCompute {
   readonly kind: ComputeKind = "ec2";
   readonly capabilities: ComputeCapabilities = {
     snapshot: false,
-    pool: true,
     networkIsolation: true,
     provisionLatency: "minutes",
     singleton: false,

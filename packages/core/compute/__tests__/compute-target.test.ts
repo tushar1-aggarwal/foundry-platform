@@ -27,7 +27,6 @@ class FakeCompute implements Compute {
   readonly kind = "local" as const;
   readonly capabilities: ComputeCapabilities = {
     snapshot: true,
-    pool: false,
     networkIsolation: false,
     provisionLatency: "instant",
   };

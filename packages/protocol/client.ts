@@ -626,7 +626,7 @@ export class ArkClient {
   async clusterList(): Promise<
     Array<{
       name: string;
-      kind: "k8s" | "k8s-kata";
+      kind: "k8s";
       apiEndpoint: string;
       defaultNamespace?: string;
     }>
@@ -634,7 +634,7 @@ export class ArkClient {
     const { clusters } = await this.rpc<{
       clusters: Array<{
         name: string;
-        kind: "k8s" | "k8s-kata";
+        kind: "k8s";
         apiEndpoint: string;
         defaultNamespace?: string;
       }>;

@@ -36,8 +36,8 @@ describe("ComputeService", async () => {
     // After Task 5 of the compute cleanup, capabilities (including
     // initialStatus) live on Compute -- so any local+<isolation> row
     // inherits LocalCompute's initialStatus=running. The legacy distinction
-    // between local-direct (running) and docker/devcontainer/firecracker-
-    // template (stopped) is no longer carried by the singleton-axis rows.
+    // between local-direct (running) and docker/devcontainer-template
+    // (stopped) is no longer carried by the singleton-axis rows.
     const c = await svc.create({ name: "test-docker", compute: "local", isolation: "docker", is_template: true });
     expect(c.name).toBe("test-docker");
     expect(providerOf(c)).toBe("docker");

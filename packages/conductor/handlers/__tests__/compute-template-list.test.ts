@@ -30,27 +30,23 @@ function ok(res: unknown): Record<string, unknown> {
 }
 
 describe("compute/template/list", () => {
-  it("returns the two-axis (compute, isolation) pair plus the legacy provider label", async () => {
-    // Seed one template per supported (compute, isolation) pair. The wire
-    // format keeps a legacy `provider` string for back-compat clients,
-    // derived from the pair via `legacyProviderLabel`.
-    type Row = { compute: string; isolation: string; provider: string };
+  it("returns the two-axis (compute, isolation) pair", async () => {
+    type Row = { compute: string; isolation: string };
     const rows: Row[] = [
-      { compute: "local", isolation: "direct", provider: "local" },
-      { compute: "local", isolation: "docker", provider: "docker" },
-      { compute: "local", isolation: "devcontainer", provider: "devcontainer" },
-      { compute: "ec2", isolation: "direct", provider: "ec2" },
-      { compute: "ec2", isolation: "docker", provider: "ec2-docker" },
-      { compute: "ec2", isolation: "devcontainer", provider: "ec2-devcontainer" },
-      { compute: "firecracker", isolation: "direct", provider: "firecracker" },
-      { compute: "k8s", isolation: "direct", provider: "k8s" },
-      { compute: "k8s-kata", isolation: "direct", provider: "k8s-kata" },
+      { compute: "local", isolation: "direct" },
+      { compute: "local", isolation: "docker" },
+      { compute: "local", isolation: "devcontainer" },
+      { compute: "ec2", isolation: "direct" },
+      { compute: "ec2", isolation: "docker" },
+      { compute: "ec2", isolation: "devcontainer" },
+      { compute: "k8s", isolation: "direct" },
     ];
+    const tname = (r: Row) => `tmpl-${r.compute}-${r.isolation}`;
 
     for (const r of rows) {
       await app.computeTemplates.create({
-        name: `tmpl-${r.provider}`,
-        description: `Test template for ${r.provider}`,
+        name: tname(r),
+        description: `Test template for ${r.compute}/${r.isolation}`,
         compute: r.compute as any,
         isolation: r.isolation as any,
         config: {},
@@ -60,17 +56,14 @@ describe("compute/template/list", () => {
     const res = await router.dispatch(createRequest(1, "compute/template/list", {}));
     const templates = ok(res).templates as Array<Record<string, unknown>>;
 
-    // Every entry carries `compute` + `isolation`.
     for (const t of templates) {
       expect(typeof t.compute).toBe("string");
       expect(typeof t.isolation).toBe("string");
     }
 
-    // Every (compute, isolation) row we seeded is present with the expected axes.
     for (const r of rows) {
-      const row = templates.find((t) => t.name === `tmpl-${r.provider}`);
+      const row = templates.find((t) => t.name === tname(r));
       expect(row).toBeDefined();
-      expect(row!.provider).toBe(r.provider);
       expect(row!.compute).toBe(r.compute);
       expect(row!.isolation).toBe(r.isolation);
     }

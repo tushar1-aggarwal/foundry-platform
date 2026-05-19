@@ -11,8 +11,8 @@ export interface FlowInfo {
 
 export interface ComputeInfo {
   name: string;
-  type?: string;
-  provider?: string;
+  compute_kind?: string;
+  isolation_kind?: string;
   status?: string;
   is_template?: boolean;
 }

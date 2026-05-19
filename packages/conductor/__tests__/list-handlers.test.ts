@@ -442,8 +442,8 @@ describe("compute/list", async () => {
 
   it("includes the auto-created local compute", async () => {
     const res = ok(await router.dispatch(createRequest(1, "compute/list", {})));
-    const targets = res.targets as Array<{ name: string; provider: string }>;
-    expect(targets.some((t) => t.provider === "local")).toBe(true);
+    const targets = res.targets as Array<{ name: string; compute_kind: string }>;
+    expect(targets.some((t) => t.name === "local" && t.compute_kind === "local")).toBe(true);
   });
 });
 

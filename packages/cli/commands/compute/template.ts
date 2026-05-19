@@ -3,29 +3,6 @@ import chalk from "chalk";
 import { getArkClient, getInProcessApp } from "../../app-client.js";
 import { runAction } from "../_shared.js";
 
-/**
- * Display-only helper -- compose a `${compute_kind}+${isolation_kind}` label
- * back into the legacy provider-name string the wire format used to carry.
- */
-function legacyLabel(c: { compute?: string; isolation?: string }): string {
-  const ck = c.compute ?? "local";
-  const ik = c.isolation ?? "direct";
-  if (ck === "local") {
-    if (ik === "direct") return "local";
-    if (ik === "docker") return "docker";
-    if (ik === "devcontainer") return "devcontainer";
-  }
-  if (ck === "ec2") {
-    if (ik === "direct") return "ec2";
-    if (ik === "docker") return "ec2-docker";
-    if (ik === "devcontainer") return "ec2-devcontainer";
-  }
-  if (ck === "firecracker") return "firecracker";
-  if (ck === "k8s") return "k8s";
-  if (ck === "k8s-kata") return "k8s-kata";
-  return ck;
-}
-
 export function registerTemplateCommands(computeCmd: Command) {
   const template = computeCmd.command("template").description("Manage compute templates");
 
@@ -36,38 +13,35 @@ export function registerTemplateCommands(computeCmd: Command) {
       await runAction("compute template list", async () => {
         const app = await getInProcessApp();
         const templates = await app.computeTemplates.list();
-
-        // Also show config-defined templates
         const configTemplates = app.config.computeTemplates ?? [];
         const dbNames = new Set(templates.map((t) => t.name));
-        type TemplateRow = { name: string; description?: string; provider: string };
-        const dbRows: TemplateRow[] = templates.map((t) => ({
-          name: t.name,
-          description: t.description,
-          provider: legacyLabel({ compute: t.compute, isolation: t.isolation }),
-        }));
-        const cfgRows: TemplateRow[] = configTemplates
-          .filter((t) => !dbNames.has(t.name))
-          .map((t) => ({
+        type TemplateRow = { name: string; description?: string; compute?: string; isolation?: string };
+        const rows: TemplateRow[] = [
+          ...templates.map((t) => ({
             name: t.name,
             description: t.description,
-            provider: legacyLabel({ compute: t.compute, isolation: t.isolation }),
-          }));
-        const allTemplates: TemplateRow[] = [...dbRows, ...cfgRows];
+            compute: t.compute,
+            isolation: t.isolation,
+          })),
+          ...configTemplates
+            .filter((t) => !dbNames.has(t.name))
+            .map((t) => ({ name: t.name, description: t.description, compute: t.compute, isolation: t.isolation })),
+        ];
 
-        if (!allTemplates.length) {
+        if (!rows.length) {
           console.log(chalk.dim("No templates. Add to ~/.ark/config.yaml:"));
           console.log(chalk.dim("  compute_templates:"));
           console.log(chalk.dim("    gpu-large:"));
-          console.log(chalk.dim("      provider: ec2"));
-          console.log(chalk.dim("      size: l"));
+          console.log(chalk.dim("      compute: ec2"));
+          console.log(chalk.dim("      isolation: direct"));
           console.log(chalk.dim("      region: us-east-1"));
           return;
         }
 
-        console.log(`  ${"NAME".padEnd(20)} ${"PROVIDER".padEnd(12)} DESCRIPTION`);
-        for (const t of allTemplates) {
-          console.log(`  ${t.name.padEnd(20)} ${t.provider.padEnd(12)} ${t.description ?? ""}`);
+        console.log(`  ${"NAME".padEnd(20)} ${"COMPUTE/ISOLATION".padEnd(22)} DESCRIPTION`);
+        for (const t of rows) {
+          const ax = `${t.compute ?? "-"}/${t.isolation ?? "-"}`;
+          console.log(`  ${t.name.padEnd(20)} ${ax.padEnd(22)} ${t.description ?? ""}`);
         }
       });
     });
@@ -80,33 +54,20 @@ export function registerTemplateCommands(computeCmd: Command) {
       await runAction("compute template show", async () => {
         const app = await getInProcessApp();
         let tmpl: any = await app.computeTemplates.get(name);
-        let providerLabel: string | undefined = tmpl
-          ? legacyLabel({ compute: tmpl.compute, isolation: tmpl.isolation })
-          : undefined;
-
-        // Fall back to config
         if (!tmpl) {
           const cfgTmpl = (app.config.computeTemplates ?? []).find((t) => t.name === name);
-          if (cfgTmpl) {
-            tmpl = {
-              name: cfgTmpl.name,
-              description: cfgTmpl.description,
-              config: cfgTmpl.config,
-            };
-            providerLabel = legacyLabel({ compute: cfgTmpl.compute, isolation: cfgTmpl.isolation });
-          }
+          if (cfgTmpl) tmpl = cfgTmpl;
         }
-
         if (!tmpl) {
           console.log(chalk.red(`Template '${name}' not found.`));
           return;
         }
-
         console.log(chalk.bold(tmpl.name));
         if (tmpl.description) console.log(`  Description: ${tmpl.description}`);
-        console.log(`  Provider:    ${providerLabel ?? "-"}`);
+        console.log(`  Compute:    ${tmpl.compute ?? "-"}`);
+        console.log(`  Isolation:  ${tmpl.isolation ?? "-"}`);
         console.log(`  Config:`);
-        for (const [k, v] of Object.entries(tmpl.config)) {
+        for (const [k, v] of Object.entries(tmpl.config ?? {})) {
           console.log(`    ${k}: ${JSON.stringify(v)}`);
         }
       });
@@ -116,7 +77,8 @@ export function registerTemplateCommands(computeCmd: Command) {
     .command("create")
     .description("Create a compute template (convenience alias for 'compute create --template')")
     .argument("<name>", "Template name")
-    .option("--provider <type>", "Provider type", "ec2")
+    .requiredOption("--compute <kind>", "Compute kind (local, ec2, k8s)")
+    .requiredOption("--isolation <kind>", "Isolation kind (direct, docker, compose, devcontainer, worktree)")
     .option("--description <desc>", "Description")
     .option("--size <size>", "Instance size (ec2)")
     .option("--arch <arch>", "Architecture (ec2)")
@@ -134,20 +96,16 @@ export function registerTemplateCommands(computeCmd: Command) {
         if (opts.image) config.image = opts.image;
         if (opts.namespace) config.namespace = opts.namespace;
 
-        // Route through the unified RPC so templates and concrete targets
-        // stay in lockstep (same tenant policies, same k8s validation).
         const ark = await getArkClient();
-        const compute = await ark.computeCreate({
+        await ark.computeCreate({
           name,
-          provider: opts.provider,
+          compute: opts.compute,
+          isolation: opts.isolation,
           config,
           is_template: true,
         } as any);
 
-        const ck = (compute as any).compute_kind ?? "-";
-        const ik = (compute as any).isolation_kind ?? "-";
-        console.log(chalk.green(`Created TEMPLATE '${name}' (${ck}/${ik})`));
-        console.log(`  Provider: ${opts.provider}`);
+        console.log(chalk.green(`Created TEMPLATE '${name}' (${opts.compute}/${opts.isolation})`));
         for (const [k, v] of Object.entries(config)) {
           console.log(`  ${k}: ${v}`);
         }

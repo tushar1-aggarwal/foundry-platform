@@ -46,7 +46,9 @@ export function ComputeDropdown({
               <>
                 <span className="font-medium">{current.name}</span>
                 <KindBadge c={current} />
-                {current.provider && <span className="text-[var(--fg-muted)] text-[12px]">{current.provider}</span>}
+                <span className="text-[var(--fg-muted)] text-[12px]">
+                  {`${current.compute_kind ?? "local"}/${current.isolation_kind ?? "direct"}`}
+                </span>
               </>
             ) : (
               <span className="text-[var(--fg-muted)]">Select compute...</span>
@@ -79,9 +81,9 @@ export function ComputeDropdown({
                   <span className="text-[13px] font-medium text-[var(--fg)]">{c.name}</span>
                   <KindBadge c={c} />
                 </div>
-                {(c.provider || c.type) && (
-                  <div className="text-[11px] text-[var(--fg-muted)]">{c.provider || c.type}</div>
-                )}
+                <div className="text-[11px] text-[var(--fg-muted)]">
+                  {`${c.compute_kind ?? "local"}/${c.isolation_kind ?? "direct"}`}
+                </div>
               </div>
             </button>
           ))}

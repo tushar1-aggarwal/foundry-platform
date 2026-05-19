@@ -60,11 +60,13 @@ beforeEach(() => {
 });
 
 // ── A fake snapshot-capable compute we can swap into the registry per test ──
+// Registered under the surviving `k8s` kind: registerCompute() keys by kind,
+// so this overrides the real (snapshot-incapable) K8sCompute for the test,
+// giving us a real snapshot/restore path to exercise pause/resume against.
 class FakeSnapshotCompute implements Compute {
-  readonly kind: ComputeKind = "firecracker";
+  readonly kind: ComputeKind = "k8s";
   readonly capabilities: ComputeCapabilities = {
     snapshot: true,
-    pool: false,
     networkIsolation: true,
     provisionLatency: "seconds",
   };
@@ -75,7 +77,7 @@ class FakeSnapshotCompute implements Compute {
   setApp(_app: AppContext): void {}
 
   async provision(_opts: ProvisionOpts): Promise<ComputeHandle> {
-    return { kind: this.kind, name: "fake-fc", meta: {} };
+    return { kind: this.kind, name: "fake-k8s", meta: {} };
   }
   async start(_h: ComputeHandle): Promise<void> {}
   async stop(_h: ComputeHandle): Promise<void> {}
@@ -96,16 +98,16 @@ class FakeSnapshotCompute implements Compute {
   async restore(s: Snapshot): Promise<ComputeHandle> {
     this.restoreCalls++;
     this.lastRestored = s;
-    return { kind: this.kind, name: "fake-fc", meta: { restored: true } };
+    return { kind: this.kind, name: "fake-k8s", meta: { restored: true } };
   }
 }
 
 /** Create a compute row if it doesn't already exist. */
-async function ensureCompute(ctx: AppContext, name: string, _provider: string, computeKind?: string): Promise<void> {
+async function ensureCompute(ctx: AppContext, name: string, computeKind?: string): Promise<void> {
   if (await ctx.computes.get(name)) return;
   await ctx.computeService.create({
     name,
-    compute: (computeKind ?? "firecracker") as any,
+    compute: (computeKind ?? "k8s") as any,
     isolation: "direct",
     config: {},
   });
@@ -129,14 +131,14 @@ async function startSession(opts: Record<string, unknown> = {}): Promise<string>
 
 describe("session/pause", async () => {
   it("on a snapshot-capable compute: calls compute.snapshot() and persists via SnapshotStore", async () => {
-    // Register the fake firecracker first so `computeService.create` finds
-    // a Compute for the kind (firecracker isn't auto-registered on macOS
-    // test runners -- requires /dev/kvm).
+    // Register the fake snapshot-capable compute under `k8s` so it overrides
+    // the real (snapshot-incapable) K8sCompute and `computeService.create`
+    // resolves a snapshot-capable Compute for the kind.
     const fake = new FakeSnapshotCompute();
     app.registerCompute(fake);
-    await ensureCompute(app, "firecracker-1", "firecracker", "firecracker");
+    await ensureCompute(app, "k8s-1", "k8s");
 
-    const id = await startSession({ compute_name: "firecracker-1" });
+    const id = await startSession({ compute_name: "k8s-1" });
 
     const res = await router.dispatch(createRequest(2, "session/pause", { sessionId: id, reason: "test" }));
     const result = (res as JsonRpcResponse).result as Record<string, any>;
@@ -145,7 +147,7 @@ describe("session/pause", async () => {
     expect(fake.snapshotCalls).toBe(1);
     expect(result.snapshot).toBeDefined();
     expect(result.snapshot.id).toBeTruthy();
-    expect(result.snapshot.computeKind).toBe("firecracker");
+    expect(result.snapshot.computeKind).toBe("k8s");
     expect(result.snapshot.sessionId).toBe(id);
     expect(result.snapshot.metadata).toEqual({ memFilePath: "/tmp/m", stateFilePath: "/tmp/s" });
 
@@ -172,11 +174,11 @@ describe("session/pause", async () => {
 
 describe("session/resume", async () => {
   it("restores from the session's last snapshot and clears blocked state", async () => {
-    await ensureCompute(app, "firecracker-resume", "firecracker", "firecracker");
+    await ensureCompute(app, "k8s-resume", "k8s");
     const fake = new FakeSnapshotCompute();
     app.registerCompute(fake);
 
-    const id = await startSession({ compute_name: "firecracker-resume" });
+    const id = await startSession({ compute_name: "k8s-resume" });
     // Pause to produce a snapshot.
     const pauseRes = await router.dispatch(createRequest(2, "session/pause", { sessionId: id }));
     const pauseResult = (pauseRes as JsonRpcResponse).result as Record<string, any>;

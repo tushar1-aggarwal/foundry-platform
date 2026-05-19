@@ -74,7 +74,7 @@ export class SessionService {
       throw new ValidationError(
         `Hosted mode requires an explicit non-local compute_name -- 'local' would run the agent ` +
           `inside the control-plane/temporal-worker pod with zero isolation. Pass a registered ` +
-          `compute target (k8s / ec2 / docker / firecracker).`,
+          `compute target (k8s / ec2 / docker).`,
       );
     }
 

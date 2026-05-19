@@ -23,7 +23,6 @@ import { buildContainer } from "./di/index.js";
 import { loadConfig, loadAppConfig, type ArkConfig } from "./config.js";
 import { eventBus } from "./hooks.js";
 import type { Compute as NewCompute, Isolation as NewIsolation, ComputeKind, IsolationKind } from "./compute/types.js";
-import type { ComputePool } from "./compute/warm-pool/types.js";
 import type { SnapshotStore } from "./compute/snapshot-store.js";
 import type { Compute, Session } from "../types/index.js";
 import { track } from "./observability/telemetry.js";
@@ -745,7 +744,7 @@ export class AppContext {
     return this._container;
   }
 
-  // ── Compute / Isolation / Pool registries ──────────────────────────────
+  // ── Compute / Isolation registries ─────────────────────────────────────
 
   registerCompute(c: NewCompute): void {
     this._registries.registerCompute(c);
@@ -764,19 +763,6 @@ export class AppContext {
   }
   listIsolations(): IsolationKind[] {
     return this._registries.listIsolations();
-  }
-
-  registerComputePool(pool: ComputePool): void {
-    this._registries.registerPool(pool);
-  }
-  deregisterComputePool(kind: ComputeKind): void {
-    this._registries.deregisterPool(kind);
-  }
-  getComputePool(kind: ComputeKind): ComputePool | null {
-    return this._registries.getPool(kind);
-  }
-  listComputePools(): ComputeKind[] {
-    return this._registries.listPools();
   }
 
   /** Resolve the ComputeTarget for a session. Delegated to compute-resolver.ts. */

@@ -160,7 +160,6 @@ describe("EC2Compute", async () => {
     expect(c.kind).toBe("ec2");
     expect(c.capabilities).toEqual({
       snapshot: false,
-      pool: true,
       networkIsolation: true,
       provisionLatency: "minutes",
       singleton: false,

@@ -16,10 +16,10 @@
 // ── Kinds ──────────────────────────────────────────────────────────────────
 
 /** Where the compute lives. */
-export type ComputeKind = "local" | "firecracker" | "ec2" | "k8s" | "k8s-kata";
+export type ComputeKind = "local" | "ec2" | "k8s";
 
 /** How the agent process is sandboxed inside the compute. */
-export type IsolationKind = "direct" | "docker" | "compose" | "devcontainer";
+export type IsolationKind = "direct" | "docker" | "compose" | "devcontainer" | "worktree";
 
 /** Provision latency bucket, used for pool sizing decisions. */
 export type ProvisionLatency = "instant" | "seconds" | "minutes";
@@ -48,7 +48,6 @@ export interface IsolationMode {
  */
 export interface ComputeCapabilities {
   readonly snapshot: boolean;
-  readonly pool: boolean;
   readonly networkIsolation: boolean;
   readonly provisionLatency: ProvisionLatency;
   /**

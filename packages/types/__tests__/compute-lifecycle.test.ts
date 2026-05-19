@@ -13,10 +13,8 @@ describe("compute lifecycle classification", () => {
     expect(COMPUTE_KIND_LIFECYCLE.ec2).toBe("persistent");
   });
 
-  it("k8s, k8s-kata, firecracker are template compute kinds", () => {
+  it("k8s is a template compute kind", () => {
     expect(COMPUTE_KIND_LIFECYCLE.k8s).toBe("template");
-    expect(COMPUTE_KIND_LIFECYCLE["k8s-kata"]).toBe("template");
-    expect(COMPUTE_KIND_LIFECYCLE.firecracker).toBe("template");
   });
 
   it("direct is the only persistent isolation kind", () => {
@@ -24,6 +22,7 @@ describe("compute lifecycle classification", () => {
     expect(ISOLATION_KIND_LIFECYCLE.docker).toBe("template");
     expect(ISOLATION_KIND_LIFECYCLE.compose).toBe("template");
     expect(ISOLATION_KIND_LIFECYCLE.devcontainer).toBe("template");
+    expect(ISOLATION_KIND_LIFECYCLE.worktree).toBe("template");
   });
 
   it("effectiveLifecycle: persistent only when both axes are persistent", () => {
@@ -33,8 +32,6 @@ describe("compute lifecycle classification", () => {
 
   it("effectiveLifecycle: template kind always wins", () => {
     expect(effectiveLifecycle("k8s", "direct")).toBe("template");
-    expect(effectiveLifecycle("firecracker", "direct")).toBe("template");
-    expect(effectiveLifecycle("k8s-kata", "direct")).toBe("template");
   });
 
   it("effectiveLifecycle: template isolation makes a persistent kind ephemeral", () => {
@@ -45,14 +42,14 @@ describe("compute lifecycle classification", () => {
   });
 
   it("every ComputeKindName has a lifecycle entry", () => {
-    const kinds: ComputeKindName[] = ["local", "firecracker", "ec2", "k8s", "k8s-kata"];
+    const kinds: ComputeKindName[] = ["local", "ec2", "k8s"];
     for (const k of kinds) {
       expect(COMPUTE_KIND_LIFECYCLE[k]).toBeDefined();
     }
   });
 
   it("every IsolationKindName has a lifecycle entry", () => {
-    const kinds: IsolationKindName[] = ["direct", "docker", "compose", "devcontainer"];
+    const kinds: IsolationKindName[] = ["direct", "docker", "compose", "devcontainer", "worktree"];
     for (const k of kinds) {
       expect(ISOLATION_KIND_LIFECYCLE[k]).toBeDefined();
     }

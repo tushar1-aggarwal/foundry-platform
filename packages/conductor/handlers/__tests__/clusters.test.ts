@@ -138,7 +138,7 @@ describe("cluster/list merges system + tenant layers", () => {
         tenant_id: tenantId,
         yaml: `
 - name: prod
-  kind: k8s-kata
+  kind: k8s
   apiEndpoint: https://prod.TENANT.example.com
   auth:
     kind: token
@@ -151,7 +151,7 @@ describe("cluster/list merges system + tenant layers", () => {
     const res = (await dispatchAs("cluster/list", {}, admin)) as JsonRpcResponse;
     const clusters = (res.result as any).clusters as Array<{ name: string; kind: string; apiEndpoint: string }>;
     const prod = clusters.find((c) => c.name === "prod")!;
-    expect(prod.kind).toBe("k8s-kata");
+    expect(prod.kind).toBe("k8s");
     expect(prod.apiEndpoint).toBe("https://prod.TENANT.example.com");
     // auth block never escapes over the wire
     expect((prod as any).auth).toBeUndefined();

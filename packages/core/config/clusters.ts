@@ -40,7 +40,7 @@ export interface ClusterConfig {
   /** Unique name within a layer, e.g. "prod-us-east". Cross-layer collision -> later layer wins. */
   name: string;
   /** Compute kind the cluster backs. */
-  kind: "k8s" | "k8s-kata";
+  kind: "k8s";
   /** Kubernetes API endpoint (https://...). */
   apiEndpoint: string;
   /** PEM-encoded CA data, inline. Mutually exclusive with `caSecret` inside auth blocks. */
@@ -96,8 +96,8 @@ export function validateClusterConfig(raw: unknown, path = "cluster"): ClusterCo
     throw new Error(`${path}.name: required, must be a non-empty string`);
   }
   const kind = obj.kind;
-  if (kind !== "k8s" && kind !== "k8s-kata") {
-    throw new Error(`${path}.kind: must be "k8s" or "k8s-kata"`);
+  if (kind !== "k8s") {
+    throw new Error(`${path}.kind: must be "k8s"`);
   }
   const apiEndpoint = obj.apiEndpoint ?? obj.api_endpoint;
   if (typeof apiEndpoint !== "string" || apiEndpoint.length === 0) {

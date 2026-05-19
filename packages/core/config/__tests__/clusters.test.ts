@@ -48,7 +48,7 @@ describe("parseClustersYaml", () => {
     const yaml = `
 clusters:
   - name: a
-    kind: k8s-kata
+    kind: k8s
     apiEndpoint: https://a.example.com
     auth:
       kind: token
@@ -56,12 +56,23 @@ clusters:
 `;
     const parsed = parseClustersYaml(yaml);
     expect(parsed.length).toBe(1);
-    expect(parsed[0].kind).toBe("k8s-kata");
+    expect(parsed[0].kind).toBe("k8s");
     if (parsed[0].auth.kind === "token") {
       expect(parsed[0].auth.tokenSecret).toBe("A_TOKEN");
     } else {
       throw new Error("expected token auth");
     }
+  });
+
+  it('rejects a non-"k8s" cluster kind (k8s-kata is no longer valid)', () => {
+    const yaml = `
+- name: a
+  kind: k8s-kata
+  apiEndpoint: https://a.example.com
+  auth:
+    kind: in_cluster
+`;
+    expect(() => parseClustersYaml(yaml)).toThrow(/kind: must be "k8s"/);
   });
 
   it("rejects malformed YAML with a clear error", () => {
@@ -149,14 +160,14 @@ describe("mergeClusterLayers", () => {
     const overlay: ClusterConfig[] = [
       {
         name: "prod",
-        kind: "k8s-kata",
+        kind: "k8s",
         apiEndpoint: "https://prod.OVERLAY.example.com",
         auth: { kind: "token", tokenSecret: "OVER_TOKEN" },
       },
     ];
     const merged = mergeClusterLayers(base, overlay);
     const prod = merged.find((c) => c.name === "prod")!;
-    expect(prod.kind).toBe("k8s-kata");
+    expect(prod.kind).toBe("k8s");
     expect(prod.apiEndpoint).toBe("https://prod.OVERLAY.example.com");
     expect(prod.auth.kind).toBe("token");
     // base-only fields NOT re-merged: full replacement.
@@ -203,7 +214,7 @@ describe("resolveEffectiveClusters (system ∪ tenant)", () => {
     const tenantId = "collision-tenant";
     const overlayYaml = `
 - name: prod
-  kind: k8s-kata
+  kind: k8s
   apiEndpoint: https://prod.TENANT.example.com
   auth:
     kind: token
@@ -217,7 +228,7 @@ describe("resolveEffectiveClusters (system ∪ tenant)", () => {
 
     // Assert: tenant "prod" wins, system "dev" survives.
     const prod = effective.find((c) => c.name === "prod")!;
-    expect(prod.kind).toBe("k8s-kata");
+    expect(prod.kind).toBe("k8s");
     expect(prod.apiEndpoint).toBe("https://prod.TENANT.example.com");
     expect(prod.auth.kind).toBe("token");
     const names = effective.map((c) => c.name);

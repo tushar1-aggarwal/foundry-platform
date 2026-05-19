@@ -5,12 +5,12 @@ export type ComputeProviderName = "local" | "docker" | "ec2" | "remote-arkd";
  * Where the compute lives. Mirrors `ComputeKind` in packages/core/compute/types.ts
  * (duplicated here as a string union to avoid a cross-package import cycle).
  */
-export type ComputeKindName = "local" | "firecracker" | "ec2" | "k8s" | "k8s-kata";
+export type ComputeKindName = "local" | "ec2" | "k8s";
 
 /**
  * How the agent process is sandboxed inside the compute. Mirrors `IsolationKind`.
  */
-export type IsolationKindName = "direct" | "docker" | "compose" | "devcontainer";
+export type IsolationKindName = "direct" | "docker" | "compose" | "devcontainer" | "worktree";
 
 /**
  * Lifecycle classification for a compute kind.
@@ -26,9 +26,9 @@ export type IsolationKindName = "direct" | "docker" | "compose" | "devcontainer"
  *   down on cleanup. The "row" itself can be ephemeral and is safe to
  *   garbage-collect when no sessions reference it.
  *
- * Local + EC2 + remote-arkd are persistent. Docker/compose/devcontainer/k8s/
- * k8s-kata/firecracker are templates -- their per-session workload (container,
- * pod, microVM) is the real lifecycle, not the target row.
+ * Local + EC2 + remote-arkd are persistent. Docker/compose/devcontainer/k8s
+ * are templates -- their per-session workload (container, pod) is the real
+ * lifecycle, not the target row.
  */
 export type ComputeLifecycle = "persistent" | "template";
 
@@ -36,9 +36,7 @@ export type ComputeLifecycle = "persistent" | "template";
 export const COMPUTE_KIND_LIFECYCLE: Record<ComputeKindName, ComputeLifecycle> = {
   local: "persistent",
   ec2: "persistent",
-  firecracker: "template",
   k8s: "template",
-  "k8s-kata": "template",
 };
 
 /** Lifecycle for each isolation kind. Used when the compute kind is `local`. */
@@ -47,6 +45,7 @@ export const ISOLATION_KIND_LIFECYCLE: Record<IsolationKindName, ComputeLifecycl
   docker: "template", // container per session
   compose: "template", // compose project per session
   devcontainer: "template", // container per session
+  worktree: "template", // git worktree per session
 };
 
 /**

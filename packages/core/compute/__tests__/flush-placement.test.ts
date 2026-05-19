@@ -19,8 +19,6 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { LocalCompute } from "../local.js";
 import { EC2Compute, type EC2HandleMeta } from "../ec2/compute.js";
 import { K8sCompute, type K8sHandleMeta } from "../k8s.js";
-import { KataCompute } from "../k8s-kata.js";
-import { FirecrackerCompute, type FirecrackerMeta } from "../firecracker/compute.js";
 import { DeferredPlacementCtx } from "../../secrets/deferred-placement-ctx.js";
 import type { PlacementCtx } from "../../secrets/placement-types.js";
 import type { ComputeHandle } from "../types.js";
@@ -107,25 +105,6 @@ function k8sHandle(overrides: Partial<K8sHandleMeta> = {}): ComputeHandle {
     ...overrides,
   };
   return { kind: "k8s", name: "k8s-test", meta: { k8s: meta } };
-}
-
-function kataHandle(overrides: Partial<K8sHandleMeta> = {}): ComputeHandle {
-  return { ...k8sHandle(overrides), kind: "k8s-kata", name: "kata-test" };
-}
-
-function fcHandle(overrides: Partial<FirecrackerMeta> = {}): ComputeHandle {
-  const meta: FirecrackerMeta = {
-    vmId: "ark-fc-test",
-    socketPath: "/tmp/fc.sock",
-    guestIp: "172.17.0.2",
-    hostIp: "172.17.0.1",
-    tapName: "fc-tap0",
-    kernelPath: "/tmp/vmlinux",
-    rootfsPath: "/tmp/rootfs.ext4",
-    arkdUrl: "http://172.17.0.2:19300",
-    ...overrides,
-  };
-  return { kind: "firecracker", name: "fc-test", meta: { firecracker: meta } };
 }
 
 // ── LocalCompute ────────────────────────────────────────────────────────────
@@ -280,72 +259,6 @@ describe("K8sCompute.flushPlacement", () => {
 
     const deferred = new DeferredPlacementCtx("/root");
     await c.flushPlacement!(k8sHandle(), { placement: deferred, sessionId: "s-test" });
-
-    expect(factoryCalls).toBe(0);
-  });
-});
-
-// ── KataCompute (inherits from K8sCompute) ──────────────────────────────────
-
-describe("KataCompute.flushPlacement", () => {
-  test("inherits K8s flushPlacement; uses k8s meta + factory unchanged", async () => {
-    const c = new KataCompute(app);
-    const ctx = makeRecordingCtx();
-    const factoryArgs: Array<Record<string, unknown>> = [];
-    c.setPlacementCtxFactoryForTesting((deps) => {
-      factoryArgs.push(deps);
-      return ctx;
-    });
-
-    const deferred = new DeferredPlacementCtx("/root");
-    await deferred.writeFile("/root/.config/x", 0o600, new Uint8Array([1]));
-
-    await c.flushPlacement!(kataHandle(), { placement: deferred, sessionId: "s-test" });
-
-    expect(factoryArgs).toHaveLength(1);
-    expect(factoryArgs[0]).toEqual({ namespace: "ark", podName: "ark-test-pod" });
-    expect(ctx.writeCalls).toHaveLength(1);
-  });
-});
-
-// ── FirecrackerCompute ──────────────────────────────────────────────────────
-
-describe("FirecrackerCompute.flushPlacement", () => {
-  test("constructs a FirecrackerPlacementCtx with vmId + guestIp from meta.firecracker", async () => {
-    // FirecrackerCompute requires the availability gate to pass on
-    // construction; stub it via deps so the test runs on macOS.
-    const c = new FirecrackerCompute(app, {
-      isFirecrackerAvailable: () => ({ ok: true }),
-    });
-    const ctx = makeRecordingCtx();
-    const factoryArgs: Array<Record<string, unknown>> = [];
-    c.setPlacementCtxFactoryForTesting((deps) => {
-      factoryArgs.push(deps);
-      return ctx;
-    });
-
-    const deferred = new DeferredPlacementCtx("/root");
-    await deferred.writeFile("/root/.ssh/id_test", 0o600, new Uint8Array([9]));
-
-    await c.flushPlacement!(fcHandle(), { placement: deferred, sessionId: "s-test" });
-
-    expect(factoryArgs).toHaveLength(1);
-    expect(factoryArgs[0]).toEqual({ vmId: "ark-fc-test", guestIp: "172.17.0.2" });
-    expect(ctx.writeCalls).toHaveLength(1);
-  });
-
-  test("no-op on empty queue", async () => {
-    const c = new FirecrackerCompute(app, {
-      isFirecrackerAvailable: () => ({ ok: true }),
-    });
-    let factoryCalls = 0;
-    c.setPlacementCtxFactoryForTesting(() => {
-      factoryCalls++;
-      return makeRecordingCtx();
-    });
-
-    const deferred = new DeferredPlacementCtx("/root");
-    await c.flushPlacement!(fcHandle(), { placement: deferred, sessionId: "s-test" });
 
     expect(factoryCalls).toBe(0);
   });

@@ -238,8 +238,6 @@ function legacyProviderNameToAxes(name: string): {
       return { compute_kind: "local", isolation_kind: "docker" };
     case "devcontainer":
       return { compute_kind: "local", isolation_kind: "devcontainer" };
-    case "firecracker":
-      return { compute_kind: "firecracker", isolation_kind: "direct" };
     case "ec2":
     case "remote-arkd":
     case "remote-worktree":
@@ -252,8 +250,6 @@ function legacyProviderNameToAxes(name: string): {
       return { compute_kind: "ec2", isolation_kind: "devcontainer" };
     case "k8s":
       return { compute_kind: "k8s", isolation_kind: "direct" };
-    case "k8s-kata":
-      return { compute_kind: "k8s-kata", isolation_kind: "direct" };
     default:
       return { compute_kind: "local", isolation_kind: "direct" };
   }

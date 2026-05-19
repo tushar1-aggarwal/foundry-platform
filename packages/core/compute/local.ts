@@ -34,7 +34,6 @@ export class LocalCompute implements Compute {
   readonly kind: ComputeKind = "local";
   readonly capabilities: ComputeCapabilities = {
     snapshot: false,
-    pool: false,
     networkIsolation: false,
     provisionLatency: "instant",
     // The host running ark itself: only one row per tenant, can't be deleted,

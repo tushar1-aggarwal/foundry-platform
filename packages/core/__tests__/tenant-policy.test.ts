@@ -154,7 +154,7 @@ describe("TenantPolicyManager", async () => {
     it("allows only listed providers", async () => {
       await pm.setPolicy({
         tenant_id: "restricted-tenant",
-        allowed_providers: ["k8s", "k8s-kata"],
+        allowed_providers: ["k8s", "ec2"],
         default_provider: "k8s",
         max_concurrent_sessions: 10,
         max_cost_per_day_usd: null,
@@ -162,8 +162,8 @@ describe("TenantPolicyManager", async () => {
       });
 
       expect(await pm.isProviderAllowed("restricted-tenant", "k8s")).toBe(true);
-      expect(await pm.isProviderAllowed("restricted-tenant", "k8s-kata")).toBe(true);
-      expect(await pm.isProviderAllowed("restricted-tenant", "ec2")).toBe(false);
+      expect(await pm.isProviderAllowed("restricted-tenant", "ec2")).toBe(true);
+      expect(await pm.isProviderAllowed("restricted-tenant", "local")).toBe(false);
       expect(await pm.isProviderAllowed("restricted-tenant", "docker")).toBe(false);
     });
   });

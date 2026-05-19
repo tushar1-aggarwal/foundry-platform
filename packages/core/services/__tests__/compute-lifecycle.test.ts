@@ -1,7 +1,7 @@
 /**
  * Lifecycle GC tests.
  *
- * Validates that template-lifecycle compute rows (k8s, firecracker, docker)
+ * Validates that template-lifecycle compute rows (k8s, docker)
  * get garbage-collected when no live sessions reference them, while
  * persistent-lifecycle rows (local, ec2) stick around regardless.
  */

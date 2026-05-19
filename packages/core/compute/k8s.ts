@@ -199,7 +199,6 @@ export class K8sCompute extends RemoteArkdCompute {
   readonly kind: ComputeKind = "k8s";
   readonly capabilities: ComputeCapabilities = {
     snapshot: false,
-    pool: true,
     networkIsolation: false,
     provisionLatency: "seconds",
     singleton: false,

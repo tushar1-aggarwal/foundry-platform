@@ -45,5 +45,5 @@ export async function resolveComputeTarget(
   if (!c || !r) return { target: null, compute };
 
   const { ComputeTarget } = await import("./compute/compute-target.js");
-  return { target: new ComputeTarget(c, r, app), compute };
+  return { target: new ComputeTarget(c, r), compute };
 }

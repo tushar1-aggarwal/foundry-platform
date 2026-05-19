@@ -170,7 +170,8 @@ describe("compute/read", async () => {
     const result = ok(res);
     expect(result.compute).toBeDefined();
     expect((result.compute as Record<string, unknown>).name).toBe(name);
-    expect((result.compute as Record<string, unknown>).provider).toBe("docker");
+    expect((result.compute as Record<string, unknown>).compute_kind).toBe("local");
+    expect((result.compute as Record<string, unknown>).isolation_kind).toBe("docker");
   });
 
   it("returns error for unknown compute", async () => {
