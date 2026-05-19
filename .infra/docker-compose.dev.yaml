@@ -1,10 +1,15 @@
-# Local Postgres + Redis + Temporal worker for Ark control-plane mode dev.
+# Local Postgres + Redis + LocalStack + Temporal worker for Ark control-plane
+# mode dev.
 #
 # Brings up:
 #   - ark-postgres        : Postgres 16 on :15433, db `ark`, user/pass `ark`/`ark`.
 #                           (Non-default host port so it can't clash with a host-side
 #                           Postgres or an RDS SSH tunnel that already grabbed :5432.)
 #   - ark-redis           : Redis 7 on :6379, no auth.
+#   - ark-localstack      : LocalStack S3 (s3 only) on :4566, bucket `ark-local`.
+#                           Hosted-mode boot rejects LocalDiskBlobStore as
+#                           pod-ephemeral; LocalStack is the laptop stand-in
+#                           for real S3 so the same code path runs locally.
 #   - temporal-worker     : Ark Temporal worker (image ark-temporal-worker:dev).
 #                           Connects to the ark-temporal compose project's server
 #                           via host.docker.internal:7233 and to the ark server on
@@ -58,6 +63,31 @@ services:
       timeout: 5s
       retries: 30
 
+  localstack:
+    image: localstack/localstack:3
+    container_name: ark-localstack
+    restart: unless-stopped
+    ports:
+      - "4566:4566"
+    environment:
+      # s3 is the only service the control plane actually touches in dev
+      # (`.env.control-plane` keeps ARK_SECRETS_BACKEND=file, so SSM is dead
+      # weight). Match the helm chart's intent without paying for unused services.
+      SERVICES: s3
+      DEBUG: "0"
+      PERSISTENCE: "0"
+      ARK_S3_BUCKET: ark-local
+    volumes:
+      # ready.d runs once per container start, after services report READY.
+      # Idempotent bucket creation matches the helm chart pattern.
+      - ./localstack-init:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
   temporal-worker:
     build:
       context: ..
@@ -66,6 +96,8 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
+        condition: service_healthy
+      localstack:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -80,7 +112,15 @@ services:
       ARK_TEMPORAL_ORCHESTRATION: "true"
       ARK_PROFILE: control-plane
       ARK_LOG_LEVEL: info
-      ARK_BLOB_BACKEND: local
+      # Hosted mode (control-plane profile) requires s3-backed blobs; LocalStack
+      # is the laptop stand-in. Endpoint is the in-network DNS name, not
+      # host.docker.internal -- localstack is a sibling service in this project.
+      ARK_BLOB_BACKEND: s3
+      ARK_S3_BUCKET: ark-local
+      ARK_S3_REGION: us-east-1
+      ARK_S3_ENDPOINT: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
       ARK_SECRETS_BACKEND: file
       ARK_AUTH_REQUIRE_TOKEN: "false"
       ARK_DEFAULT_TENANT: default
