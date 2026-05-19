@@ -15,6 +15,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
+import { reconcileForEachSessions } from "../app-boot.js";
 import { ForEachDispatcher } from "../services/dispatch/dispatch-foreach.js";
 import type { DispatchInlineSubStageCb } from "../services/dispatch/dispatch-foreach.js";
 import type { StageDefinition } from "../services/flow.js";
@@ -426,7 +427,7 @@ describe("for_each checkpoint -- boot reconciliation dispatches running sessions
     expect(hasOurSession).toBe(true);
 
     // Actually call reconcile.
-    await app._reconcileForEachSessions();
+    await reconcileForEachSessions(app);
 
     // After reconcile + dispatch, the session should have been processed.
     // The for_each stage with "bare" flow will either complete or fail --

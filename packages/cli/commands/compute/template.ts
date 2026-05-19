@@ -51,7 +51,7 @@ export function registerTemplateCommands(computeCmd: Command) {
           .map((t) => ({
             name: t.name,
             description: t.description,
-            provider: t.provider,
+            provider: legacyLabel({ compute: t.compute, isolation: t.isolation }),
           }));
         const allTemplates: TemplateRow[] = [...dbRows, ...cfgRows];
 
@@ -93,7 +93,7 @@ export function registerTemplateCommands(computeCmd: Command) {
               description: cfgTmpl.description,
               config: cfgTmpl.config,
             };
-            providerLabel = cfgTmpl.provider;
+            providerLabel = legacyLabel({ compute: cfgTmpl.compute, isolation: cfgTmpl.isolation });
           }
         }
 

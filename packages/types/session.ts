@@ -162,9 +162,9 @@ export interface Session {
    */
   workspace_id: string | null;
   /**
-   * Orchestrator that drives this session's state machine. `"custom"` is the
-   * in-tree engine under `packages/core/services/flow.ts`. `"temporal"` routes
-   * through a Temporal workflow (see packages/core/temporal/).
+   * Orchestrator that drives this session's state machine. Always
+   * `"temporal"` -- every session routes through a Temporal workflow
+   * (see packages/core/temporal/).
    */
   orchestrator: SessionOrchestrator;
   /**
@@ -301,10 +301,8 @@ export interface CreateSessionOpts {
    */
   attachments?: Array<{ name: string; content?: string; type: string; locator?: string }>;
   /**
-   * Orchestrator override. Defaults to `"custom"` (in-tree engine). Pass
-   * `"temporal"` when creating a session that will be driven by Temporal.
-   * Injected by `SessionService.start()` when `features.temporalOrchestration`
-   * is enabled -- callers outside the service layer should leave this unset.
+   * Stamped to `"temporal"` by `SessionService.start()` -- every session
+   * is driven by a Temporal workflow. Callers should leave this unset.
    */
   orchestrator?: SessionOrchestrator;
 }

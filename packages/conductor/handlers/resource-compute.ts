@@ -573,17 +573,14 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
     }));
     const cfgWire = configTemplates
       .filter((t) => !dbNames.has(t.name))
-      .map((t) => {
-        const axes = legacyProviderToAxes(t.provider ?? "local");
-        return {
-          name: t.name,
-          description: t.description ?? undefined,
-          provider: t.provider,
-          compute: axes.compute_kind,
-          isolation: axes.isolation_kind,
-          config: t.config,
-        };
-      });
+      .map((t) => ({
+        name: t.name,
+        description: t.description ?? undefined,
+        provider: legacyProviderLabel({ compute_kind: t.compute, isolation_kind: t.isolation }),
+        compute: t.compute,
+        isolation: t.isolation,
+        config: t.config,
+      }));
     return { templates: [...dbWire, ...cfgWire] };
   });
 
@@ -597,13 +594,12 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
     } else {
       const cfgTmpl = (app.config.computeTemplates ?? []).find((t) => t.name === name);
       if (cfgTmpl) {
-        const axes = legacyProviderToAxes(cfgTmpl.provider ?? "local");
         tmpl = {
           name: cfgTmpl.name,
           description: cfgTmpl.description,
-          provider: cfgTmpl.provider,
-          compute: axes.compute_kind,
-          isolation: axes.isolation_kind,
+          provider: legacyProviderLabel({ compute_kind: cfgTmpl.compute, isolation_kind: cfgTmpl.isolation }),
+          compute: cfgTmpl.compute,
+          isolation: cfgTmpl.isolation,
           config: cfgTmpl.config,
         };
       }

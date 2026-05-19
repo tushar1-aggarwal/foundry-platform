@@ -10,20 +10,8 @@ function deps(): OrchestrationDeps {
 }
 
 /**
- * Apply a review-gate rejection.
- *
- * The rework-loop policy lives in `SessionReviewer.reject` (intact): if
- * `on_reject.max_rejections` is exceeded it marks the session `failed`;
- * otherwise it renders the `on_reject` prompt with `{{rejection_reason}}`,
- * bumps `rejection_count`, writes the stage-done contract
- * (`status:"ready"` + cleared `session_id`) with `rework_prompt` set, and
- * re-dispatches the stage agent for rework.
- *
- * This activity is the deterministic-workflow boundary for that policy:
- * the workflow signal handler stays a pure flag-flip; this runs the
- * non-deterministic reject (DB reads, prompt render, dispatch) and reports
- * which branch was taken so the workflow can either fail or await + re-park
- * the gate for re-review.
+ * Runs the rework-loop policy (SessionReviewer.reject) off the workflow so
+ * the signal handler stays deterministic; reports which branch was taken.
  */
 export async function applyReviewRejectActivity(input: {
   sessionId: string;
@@ -35,9 +23,7 @@ export async function applyReviewRejectActivity(input: {
 
   await app.sessionReviewer.reject(input.sessionId, input.reason);
 
-  // reject() drives the row: capped -> status:"failed"; rework ->
-  // status:"ready" (+rework_prompt). Read it back rather than infer from
-  // the {ok,message} return, which also reports unrelated failures.
+  // Read the row back: reject()'s {ok} also reports unrelated failures.
   const session = await d.sessions.get(input.sessionId);
   return { outcome: session?.status === "failed" ? "failed" : "rework" };
 }

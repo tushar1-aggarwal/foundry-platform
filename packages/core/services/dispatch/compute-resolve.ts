@@ -38,7 +38,7 @@ export class ComputeResolver {
       const cfgTmpl = (this.deps.config.computeTemplates ?? []).find((t) => t.name === ref);
       if (cfgTmpl) {
         log(`Seeding template '${ref}' from config`);
-        const { compute, isolation } = templateAxesFromConfig(cfgTmpl);
+        const { compute, isolation } = cfgTmpl;
         await this.deps.computeService.create({
           name: cfgTmpl.name,
           compute,
@@ -56,49 +56,5 @@ export class ComputeResolver {
     // materialized per session by the provision path (an ephemeral pod
     // bound to the session via its handle); no row is cloned here.
     return existing.name;
-  }
-}
-
-/**
- * Resolve the (compute, isolation) pair for a config-defined template. Config
- * still carries a single `provider` string for back-compat; this helper maps
- * the well-known names back onto the two-axis representation. Unknown names
- * default to `local + direct`.
- */
-function templateAxesFromConfig(t: { provider?: string; compute?: string; isolation?: string }): {
-  compute: import("../../../types/index.js").ComputeKindName;
-  isolation: import("../../../types/index.js").IsolationKindName;
-} {
-  if (t.compute && t.isolation) {
-    return {
-      compute: t.compute as import("../../../types/index.js").ComputeKindName,
-      isolation: t.isolation as import("../../../types/index.js").IsolationKindName,
-    };
-  }
-  switch (t.provider) {
-    case "local":
-      return { compute: "local", isolation: "direct" };
-    case "docker":
-      return { compute: "local", isolation: "docker" };
-    case "devcontainer":
-      return { compute: "local", isolation: "devcontainer" };
-    case "firecracker":
-      return { compute: "firecracker", isolation: "direct" };
-    case "ec2":
-    case "remote-arkd":
-    case "remote-worktree":
-      return { compute: "ec2", isolation: "direct" };
-    case "ec2-docker":
-    case "remote-docker":
-      return { compute: "ec2", isolation: "docker" };
-    case "ec2-devcontainer":
-    case "remote-devcontainer":
-      return { compute: "ec2", isolation: "devcontainer" };
-    case "k8s":
-      return { compute: "k8s", isolation: "direct" };
-    case "k8s-kata":
-      return { compute: "k8s-kata", isolation: "direct" };
-    default:
-      return { compute: "local", isolation: "direct" };
   }
 }

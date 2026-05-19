@@ -6,28 +6,10 @@ import { emitStageSpanStart, emitStageSpanEnd, emitSessionSpanEnd, flushSpans } 
 import { logDebug } from "../../observability/structured-log.js";
 
 /**
- * The single lifecycle-projection seam.
- *
- * The bespoke StageAdvanceService owned every half of a lifecycle
- * transition cohesively: the row mutation, the event that records it
- * (`stage_ready` / `stage_completed` / `session_completed` /
- * `session_failed`), and the side-effects that must happen atomically with
- * it (spans, PLAN.md snapshot, checkpoint, poller stop, stage isolation,
- * non-Claude billing, usage rollup). The Temporal port had split projection
- * into thin "apply a row patch" activities and dropped the rest -- so the
- * row could reach `completed` while the event stream, the traces, and
- * codex/gemini billing never saw the transition.
- *
- * Compute GC is intentionally NOT here: under Template materialization
- * there are no per-session clone rows to reap, and template-lifecycle
- * computes (firecracker / k8s) are durable registered targets that must
- * survive session completion.
- *
- * This module restores the full cohesion in ONE place. A transition is the
- * row change PLUS its event PLUS its side-effects, all derived from the
- * same transition so they cannot diverge. `projectStage` / `projectSession`
- * are thin delegations. Side-effects are best-effort: observability or
- * billing must never fail the transition itself.
+ * The single seam where a lifecycle transition's row change, its event, and
+ * its side-effects happen together so they cannot diverge. Compute GC is
+ * deliberately excluded -- template-lifecycle computes must survive
+ * completion and there are no per-session clone rows to reap.
  */
 
 export type LifecycleScope = "stage" | "session";
@@ -75,9 +57,8 @@ export async function projectLifecycle(d: OrchestrationDeps, input: LifecyclePro
   const isTerminalStatus = status === "completed" || status === "failed";
   const enteringNewStage = input.scope === "stage" && !!stageName && stageName !== prevStage && !isTerminalStatus;
 
-  // Stage entry: snapshot + checkpoint the LEAVING stage before the row
-  // moves, and reset stage isolation. Fresh isolation (the default) drops
-  // the prior runtime session so the next stage gets a clean agent.
+  // Snapshot/checkpoint the leaving stage before the row moves; fresh
+  // isolation drops the prior runtime so the next stage gets a clean agent.
   if (enteringNewStage) {
     if (session) {
       await bestEffort("agent_turn", () =>
@@ -93,10 +74,8 @@ export async function projectLifecycle(d: OrchestrationDeps, input: LifecyclePro
     }
   }
 
-  // Invariant guard: SessionRepository rejects status="running" when
-  // session_id would be null (running implies a live handle). Action
-  // stages launch no executor, so the workflow's post-dispatch running
-  // projection has no session_id -- drop it; the action completed sync.
+  // running implies a live handle; an action stage has no session_id, so
+  // drop the transition rather than trip SessionRepository's invariant.
   if (updates.status === "running" && updates.session_id === undefined && !session?.session_id) {
     delete updates.status;
   }
@@ -105,8 +84,6 @@ export async function projectLifecycle(d: OrchestrationDeps, input: LifecyclePro
     await d.sessions.update(input.sessionId, updates as never);
   }
 
-  // The transition's implied lifecycle event + its side-effects. The row
-  // update above and everything below are halves of one transition.
   if (input.scope === "stage") {
     if (enteringNewStage) {
       await d.events.log(input.sessionId, "stage_ready", {
@@ -139,7 +116,6 @@ export async function projectLifecycle(d: OrchestrationDeps, input: LifecyclePro
     return;
   }
 
-  // Session scope: terminal transition -> terminal event + teardown.
   if (status === "completed" || status === "failed") {
     await d.events.log(input.sessionId, status === "completed" ? "session_completed" : "session_failed", {
       stage: prevStage,
