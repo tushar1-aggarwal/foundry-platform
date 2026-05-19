@@ -38,9 +38,19 @@ backend is the source of truth:
 - **SSM** (hosted control plane): `SecureString` parameters under
   `/ark/<tid>/...`, encrypted with KMS, audited in CloudTrail.
 - **File** (local dev): `~/.ark/secrets.json`, AES-256-GCM encrypted at
-  rest with a machine-scoped key. Legacy flat names (`ANTHROPIC_API_KEY`)
-  are still readable; they're treated as living at
-  `/ark/<tid>/tenant/<NAME>` on read.
+  rest with a machine-scoped key.
+
+All scopes use the same path layout:
+
+```
+/ark/<tid>/users/<uid>/<KEY>        (user override)
+/ark/<tid>/teams/<seg>[/<seg>]/<KEY> (team override)
+/ark/<tid>/tenant/<KEY>             (tenant default)
+```
+
+The CLI, the v1 RPC surface (`secret/list`, `secret/get`, `secret/set`,
+`secret/delete`), and the dispatch resolver all read and write the same
+paths -- there is no legacy flat shape (`/ark/<tid>/<KEY>`).
 
 ## Stage YAML `secrets:` is assert-only
 
@@ -57,15 +67,15 @@ The runtime-level `secrets:` YAML block has been dropped entirely from
 
 ## CLI cheatsheet
 
-### Set a tenant-default secret (back-compat shape)
+### Set a tenant-default secret
 
 ```sh
 ark secrets set ANTHROPIC_API_KEY            # prompts masked
 echo "sk-..." | ark secrets set ANTHROPIC_API_KEY
 ```
 
-This keeps writing the legacy flat shape; reads still discover it under
-`/ark/<tid>/tenant/ANTHROPIC_API_KEY`.
+Writes `/ark/<tid>/tenant/ANTHROPIC_API_KEY`. Visible to every dispatch
+in the tenant unless a team or user scope shadows it.
 
 ### Set a team-scoped secret
 
@@ -92,9 +102,9 @@ everyone else.
 ### List by scope
 
 ```sh
-ark secrets list                                # legacy tenant view
-ark secrets list --scope user --scope-id u1     # path-aware view
-ark secrets list --scope team --scope-id eng    # team view
+ark secrets list                                # tenant-default view
+ark secrets list --scope user --scope-id u1     # user-scoped view
+ark secrets list --scope team --scope-id eng    # team-scoped view
 ```
 
 ### Get / delete / describe by scope
@@ -105,9 +115,8 @@ ark secrets delete FOO --scope team --scope-id eng/infra -y
 ark secrets describe FOO --scope user --scope-id u1
 ```
 
-Bare `ark secrets get FOO` (or `delete` / `describe`) keeps using the
-existing RPC path against the tenant default -- no observable change for
-operators who never touch `--scope`.
+Bare `ark secrets get FOO` (or `delete` / `describe`) targets the
+tenant-default scope (`/ark/<tid>/tenant/FOO`).
 
 ## Worked example
 
@@ -159,8 +168,67 @@ this incremental without any data migration.
 - The resolver issues parallel `listAt()` calls per prefix and a single
   batched `batchGet()` for the winners. Large tenants with many keys
   may want to consider per-session memoisation -- not done in v1.
-- Migration of legacy flat entries to the new `/ark/<tid>/tenant/` shape
-  happens lazily on read; explicit migration is **not** required.
-- Phase 1's KEK seam (`packages/secrets/kek/*`) is unchanged. The Phase 2
-  resolver intentionally does NOT consume the KEK -- the backend (SSM /
-  file) handles encryption end-to-end.
+- All scopes use a single canonical layout under `/ark/<tid>/{tenant,teams,users}/...`.
+  The legacy flat shape `/ark/<tid>/<KEY>` is no longer produced or read
+  by any code path (CLI, v1 RPC, dispatch resolver). Pre-existing flat
+  entries from earlier deployments are NOT migrated automatically -- if
+  you have them, re-seed at the canonical path or delete them.
+- The KEK seam (`packages/secrets/kek/*`) is loaded at boot but not yet
+  consumed by the resolver. v1 ships **the KEK seam only**; envelope
+  encryption with tenant DEKs is the next iteration (see
+  "What the KEK is for today" below).
+
+## What the KEK is for today
+
+The master KEK is loaded at app boot from `/ark/kek/<env>` (e.g.
+`/ark/kek/dev`, `/ark/kek/prod`) and held in a `SecureBuffer` for the
+process lifetime. **It does not encrypt or decrypt secrets in v1.**
+
+| Layer | What actually does the crypto in v1 |
+|---|---|
+| SSM SecureString encryption | AWS KMS (alias `alias/aws/ssm` or `secrets.awsKmsKeyId`) |
+| SSM SecureString decryption | AWS KMS (transparent on `GetParameters` with `WithDecryption=true`) |
+| File-provider encryption | AES-256-GCM with a machine-derived key (FileSecretsProvider) |
+| Master KEK | Boot-time presence check + DI registration; **reserved** for envelope encryption |
+
+The KEK exists to:
+
+1. **Fail loud at boot** if the deployment is misconfigured (no KMS access,
+   wrong region, missing parameter). A bad config can't silently start a
+   server that dispatches sessions with broken secret resolution.
+2. **Pin a per-environment identity.** `/ark/kek/dev` ≠ `/ark/kek/prod`.
+   Reading the wrong env's KEK is impossible by accident.
+3. **Provide the seam** for the next layer: tenant DEKs wrapped by KEK,
+   per-secret ciphertext encrypted by DEK. That layer is not in v1.
+
+Per-env separation **today** is enforced by three independent things:
+
+1. A distinct KMS key alias / IAM-role policy per env (KMS does the
+   actual SecureString crypto).
+2. A distinct `/ark/kek/<env>` SSM parameter (boot-time gate).
+3. A distinct `/ark/<tid>/...` path prefix per tenant (resolver walks).
+
+## Local dev with LocalStack
+
+For offline / no-AWS-SSO dev, the SSM backend can point at LocalStack.
+
+`make` your way to it:
+
+```bash
+docker compose -f .infra/docker-compose.dev.yaml up -d localstack
+# auto-seeds /ark/kek/dev on first boot via .infra/localstack-init/01-seed-kek.sh
+```
+
+Then export the LocalStack env before starting Ark:
+
+```bash
+export AWS_REGION=ap-south-1
+export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+export ARK_KEK_BACKEND=ssm ARK_KEK_SSM_PARAMETER=/ark/kek/dev \
+       ARK_KEK_SSM_ENDPOINT=http://localhost:4566
+export ARK_SECRETS_BACKEND=aws ARK_SECRETS_AWS_ENDPOINT=http://localhost:4566
+make dev
+```
+
+`ARK_KEK_SSM_ENDPOINT` and `ARK_SECRETS_AWS_ENDPOINT` are both optional
+overrides on top of the standard SSM client; production never sets them.

@@ -175,3 +175,64 @@ There is nothing to migrate. No production deployments depend on `EnvKekBackend`
 - `packages/core/secrets/aws-provider.ts` -- existing SSM SDK usage pattern reused here
 - `packages/core/storage/__tests__/localstack-helper.ts` -- LocalStack helper pattern extended for SSM
 - `packages/core/app.ts:118` -- `AppContext.boot()` integration point
+
+---
+
+## Shipped status (post-merge addendum)
+
+As of the `feature/ssm-kek-backend` branch, the following has landed beyond what the original spec contemplated:
+
+### Path-layout cleanup (no back-compat)
+
+The legacy flat shape `/ark/<tid>/<KEY>` is **removed entirely**. CLI, v1 RPC (`secret/list`, `secret/get`, `secret/set`, `secret/delete`), and the dispatch resolver all read and write the same canonical layout:
+
+```
+/ark/<tid>/users/<uid>/<KEY>            (user override)
+/ark/<tid>/teams/<seg>[/<seg>...]/<KEY> (team override)
+/ark/<tid>/tenant/<KEY>                 (tenant default)
+```
+
+Pre-existing `/ark/<tid>/<KEY>` entries from older deployments are NOT migrated automatically. Operators must re-seed at the canonical path. The resolver does not walk the legacy prefix.
+
+### LocalStack as a first-class dev target
+
+- `.infra/docker-compose.dev.yaml` -- new `localstack` service (SSM + KMS, persisted volume) on `:4566`.
+- `.infra/localstack-init/01-seed-kek.sh` -- idempotent ready.d hook that writes `/ark/kek/dev` on first boot.
+- `AwsSecretsConfig.endpoint` -- new optional field on `AwsSecretsProvider`, parsed from `ARK_SECRETS_AWS_ENDPOINT`. Mirrors `SsmKekBackendConfig.endpoint` (which already existed). Dev story is one compose command + four env vars; no SSO required.
+- `SecretsCapability.listAt(prefix, { recursive })` -- new optional flag; default `true` preserves prior behaviour. Backwards-compatible API improvement.
+
+### Operator workflow (LocalStack variant)
+
+```bash
+docker compose -f .infra/docker-compose.dev.yaml up -d localstack
+export AWS_REGION=ap-south-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+export ARK_KEK_BACKEND=ssm ARK_KEK_SSM_PARAMETER=/ark/kek/dev \
+       ARK_KEK_SSM_ENDPOINT=http://localhost:4566
+export ARK_SECRETS_BACKEND=aws ARK_SECRETS_AWS_ENDPOINT=http://localhost:4566
+make dev
+```
+
+No SSO refresh, no expired tokens, identical code path as prod.
+
+### Out-of-band operational scripts
+
+Two one-shot scripts are checked in under `scripts/`:
+
+- `scripts/seed-tenant.ts` -- creates a tenant by calling `app.tenants.create()` in-process. Bypasses the RPC tenant-admin gate (the `admin/tenant/create` handler hard-throws `system-admin role; unavailable in the tenant-admin model` per `packages/conductor/handlers/admin.ts:60`). Operational path for tenant creation until the system-admin role is introduced.
+- `scripts/test-resolver.ts` -- probes `HierarchicalSecretResolver.resolveAll` for a given `(tenant_id, user_id, team_chain)` shape and prints the resolved env map. Verifies SSM precedence (`user > team > tenant`) without dispatching a full session.
+
+### What did NOT ship (still future work)
+
+The original spec named tenant DEKs and per-secret envelope encryption as the next layer. **None of that lands in this branch.** The KEK is loaded at boot, registered in DI, and disposed on shutdown -- nothing consumes it yet. AWS KMS does the actual SecureString crypto on SSM round-trips. The KEK exists today as:
+
+1. A boot-time gate (loud failure on misconfig).
+2. A per-environment identity pin (`/ark/kek/dev` ≠ `/ark/kek/prod`).
+3. The seam where `tenant_deks` will eventually be unwrapped.
+
+See `docs/secrets-usage.md` -- section "What the KEK is for today" -- for the operator-facing explanation.
+
+### Known follow-ups noted but not addressed
+
+- `--scope tenant` UI in the web app -- the SecretsPage only writes tenant scope; team/user scope is CLI-only.
+- Resolver caching -- every dispatch issues fresh `listAt` + `batchGet` calls. Per-session memoisation noted in `docs/secrets-usage.md` operator notes.
+- Bulk import/export, tenant cloning -- for 50-tenant scale these are the next operational wins.

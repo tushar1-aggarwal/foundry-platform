@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Breaking changes
+- **Secrets path layout consolidated to `/ark/<tid>/{tenant,teams,users}/<KEY>`.** The legacy flat shape `/ark/<tid>/<KEY>` is no longer produced or read by the CLI, v1 RPC (`secret/list`, `secret/get`, `secret/set`, `secret/delete`), or the Phase-2 dispatch resolver. Pre-existing flat entries are NOT migrated automatically -- re-seed at the canonical path (`/ark/<tid>/tenant/<KEY>`) or delete them. `AwsSecretsProvider` and tests updated; `FileSecretsProvider` already used the canonical layout internally.
+
+### Features
+- **SSM-KEK backend wired through dispatch.** `AppContext.boot()` loads the master KEK from `/ark/kek/<env>` (`ARK_KEK_BACKEND=ssm`, `ARK_KEK_SSM_PARAMETER=...`) into a `SecureBuffer` and registers it in the DI container. The hierarchical resolver walks `/ark/<tid>/users/<uid>/`, `/ark/<tid>/teams/<seg>/...`, and `/ark/<tid>/tenant/` in precedence order at dispatch time. KEK is presence-checked and identity-pinned per environment; envelope encryption (tenant DEKs + per-secret cipher) is reserved for the next iteration.
+- **LocalStack as a first-class dev target.** `.infra/docker-compose.dev.yaml` now provisions a `localstack` service (SSM + KMS on `:4566`) with an idempotent init script that seeds `/ark/kek/dev` on first boot. `AwsSecretsProvider` gained an `endpoint` field plumbed through `ARK_SECRETS_AWS_ENDPOINT`, matching the existing `ARK_KEK_SSM_ENDPOINT` on the KEK backend. Offline / no-SSO dev is one compose command + four env vars; identical code path as prod.
+- **Web UI Secrets page reachable.** `#secrets` route is whitelisted in `useHashRouter` and the sidebar has a new Secrets entry (key icon between Integrations and Costs). Page still writes tenant scope only -- team/user scope remains CLI-only on this branch.
+- **`SecretsCapability.listAt(prefix, { recursive })`** -- new optional flag; default `true` preserves prior behaviour.
+
+### Tools (out-of-band scripts)
+- `scripts/seed-tenant.ts` -- creates a tenant in-process via `app.tenants.create()`, bypassing the RPC `admin/tenant/create` gate (which hard-throws `system-admin role; unavailable in the tenant-admin model`). Operational path until a system-admin role is introduced.
+- `scripts/test-resolver.ts` -- probes `HierarchicalSecretResolver.resolveAll` for a given `(tenant, user, team-chain)` and prints the resolved env. Verifies SSM precedence (`user > team > tenant`) without dispatching a session.
+
 ### Removed
 - **Electron desktop app (`packages/desktop/`)** -- Web UI + CLI are now the only supported product surfaces. Removed the Electron shell, electron-builder packaging, the desktop release matrix in CI, and the `make desktop` / `build-desktop` / `package-desktop` targets. `make package` no longer produces `.dmg` / `.AppImage` artifacts. The web dashboard (`ark web`) remains the primary GUI; install via the tarball or `make install`.
 

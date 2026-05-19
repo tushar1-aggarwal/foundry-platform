@@ -319,19 +319,26 @@ export class FileSecretsProvider implements SecretsCapability {
    * and we want a single read pass for the hierarchical resolver. Order
    * is undefined (the resolver dedups by key with explicit precedence).
    */
-  async listAt(prefix: string): Promise<{ name: string }[]> {
+  async listAt(prefix: string, opts?: { recursive?: boolean }): Promise<{ name: string }[]> {
     if (typeof prefix !== "string" || !prefix.startsWith("/ark/")) {
       throw new Error("listAt: prefix must start with /ark/");
     }
+    const recursive = opts?.recursive ?? true;
     const store = this.loadStore();
     const out: { name: string }[] = [];
+    // Direct-child depth: a non-recursive walk matches paths whose
+    // remainder after `prefix` contains no further `/`.
+    const prefixDepth = prefix.endsWith("/") ? prefix : `${prefix}/`;
     for (const tid of Object.keys(store.secrets)) {
       const tenant = store.secrets[tid];
       for (const storedName of Object.keys(tenant)) {
         const full = this.effectiveFullPath(tid, storedName);
-        if (full && full.startsWith(prefix)) {
-          out.push({ name: full });
+        if (!full || !full.startsWith(prefix)) continue;
+        if (!recursive) {
+          const remainder = full.slice(prefixDepth.length);
+          if (remainder.includes("/")) continue;
         }
+        out.push({ name: full });
       }
     }
     return out;

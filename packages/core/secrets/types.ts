@@ -81,8 +81,13 @@ export interface SecretsCapability {
    * Returns objects carrying the full path as `name`. No values are
    * returned -- this is a discovery API. Blob namespaces (e.g.
    * `/ark/<tid>/blobs/...`) and internal sentinels are excluded.
+   *
+   * By default the walk is recursive (everything under `prefix`). Pass
+   * `{recursive: false}` to limit to direct children -- used by the
+   * resolver to discover legacy flat-shape `/ark/<tid>/<KEY>` entries
+   * without re-enumerating `/ark/<tid>/{tenant,teams,users}/...`.
    */
-  listAt(prefix: string): Promise<{ name: string }[]>;
+  listAt(prefix: string, opts?: { recursive?: boolean }): Promise<{ name: string }[]>;
 
   /**
    * Fetch values for every full path in `paths` in a single call. Paths

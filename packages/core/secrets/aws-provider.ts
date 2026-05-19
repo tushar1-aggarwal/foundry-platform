@@ -106,15 +106,20 @@ export function decodeDescriptionEnvelope(raw: string | undefined): DescriptionE
 }
 
 // ── SSM path helpers ────────────────────────────────────────────────────────
+//
+// v1 tenant-default surface (`set`/`get`/`list`/`delete`) writes Phase-2
+// hierarchical paths -- `/ark/<tid>/tenant/<KEY>`. The legacy flat shape
+// `/ark/<tid>/<KEY>` is no longer produced or read by this provider, so
+// the resolver, CLI, and v1 RPC surface all converge on one path layout.
 
 const PATH_ROOT = "/ark";
 
 function paramPath(tenantId: string, name: string): string {
-  return `${PATH_ROOT}/${tenantId}/${name}`;
+  return `${PATH_ROOT}/${tenantId}/tenant/${name}`;
 }
 
 function tenantPrefix(tenantId: string): string {
-  return `${PATH_ROOT}/${tenantId}/`;
+  return `${PATH_ROOT}/${tenantId}/tenant/`;
 }
 
 function nameFromPath(path: string, tenantId: string): string | null {
@@ -317,10 +322,11 @@ export class AwsSecretsProvider implements SecretsCapability {
    * Errors are re-thrown with a sanitised message that does NOT echo
    * `prefix` -- the prefix may carry a user id or team chain.
    */
-  async listAt(prefix: string): Promise<{ name: string }[]> {
+  async listAt(prefix: string, opts?: { recursive?: boolean }): Promise<{ name: string }[]> {
     if (typeof prefix !== "string" || prefix.length === 0) {
       throw new Error("listAt: prefix must be a non-empty string");
     }
+    const recursive = opts?.recursive ?? true;
     const { GetParametersByPathCommand } = await import("@aws-sdk/client-ssm");
     const ssm = await this.client();
     const out: { name: string }[] = [];
@@ -330,7 +336,7 @@ export class AwsSecretsProvider implements SecretsCapability {
         const res: { Parameters?: Array<{ Name?: string }>; NextToken?: string } = await ssm.send(
           new GetParametersByPathCommand({
             Path: prefix,
-            Recursive: true,
+            Recursive: recursive,
             WithDecryption: false,
             NextToken: nextToken,
           }),

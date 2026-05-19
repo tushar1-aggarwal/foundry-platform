@@ -59,7 +59,7 @@ beforeEach(() => {
 });
 
 describe("AwsSecretsProvider", () => {
-  it("writes under /ark/<tenant>/<NAME> as a SecureString with the configured KMS key", async () => {
+  it("writes under /ark/<tenant>/tenant/<NAME> as a SecureString with the configured KMS key", async () => {
     const pWithKms = new AwsSecretsProvider({
       region: "us-east-1",
       kmsKeyId: "alias/ark-secrets",
@@ -70,7 +70,7 @@ describe("AwsSecretsProvider", () => {
     const put = client.calls[0];
     expect(put.command).toBe("PutParameterCommand");
     expect(put.input).toMatchObject({
-      Name: "/ark/acme/ANTHROPIC_API_KEY",
+      Name: "/ark/acme/tenant/ANTHROPIC_API_KEY",
       Value: "sk-xyz",
       Type: "SecureString",
       Overwrite: true,
@@ -87,16 +87,16 @@ describe("AwsSecretsProvider", () => {
   it("paginates list across NextToken pages and returns refs only", async () => {
     let page = 0;
     client.responders.GetParametersByPath = (input: any) => {
-      expect(input.Path).toBe("/ark/acme/");
+      expect(input.Path).toBe("/ark/acme/tenant/");
       expect(input.WithDecryption).toBe(false);
       if (page++ === 0) {
         return {
-          Parameters: [{ Name: "/ark/acme/FOO", LastModifiedDate: new Date("2025-01-01T00:00:00Z") }],
+          Parameters: [{ Name: "/ark/acme/tenant/FOO", LastModifiedDate: new Date("2025-01-01T00:00:00Z") }],
           NextToken: "tok-1",
         };
       }
       expect(input.NextToken).toBe("tok-1");
-      return { Parameters: [{ Name: "/ark/acme/BAR", LastModifiedDate: new Date("2025-02-01T00:00:00Z") }] };
+      return { Parameters: [{ Name: "/ark/acme/tenant/BAR", LastModifiedDate: new Date("2025-02-01T00:00:00Z") }] };
     };
     const refs = await p.list("acme");
     expect(refs.map((r) => r.name)).toEqual(["BAR", "FOO"]);
@@ -112,11 +112,11 @@ describe("AwsSecretsProvider", () => {
   it("resolveMany issues a single GetParameters (not N GetParameter calls)", async () => {
     client.responders.GetParameters = (input: any) => {
       expect(input.WithDecryption).toBe(true);
-      expect((input.Names as string[]).sort()).toEqual(["/ark/acme/BAR", "/ark/acme/FOO"]);
+      expect((input.Names as string[]).sort()).toEqual(["/ark/acme/tenant/BAR", "/ark/acme/tenant/FOO"]);
       return {
         Parameters: [
-          { Name: "/ark/acme/FOO", Value: "fv" },
-          { Name: "/ark/acme/BAR", Value: "bv" },
+          { Name: "/ark/acme/tenant/FOO", Value: "fv" },
+          { Name: "/ark/acme/tenant/BAR", Value: "bv" },
         ],
       };
     };
@@ -128,7 +128,7 @@ describe("AwsSecretsProvider", () => {
 
   it("resolveMany throws with the full missing list when any names are absent", async () => {
     client.responders.GetParameters = () => ({
-      Parameters: [{ Name: "/ark/acme/FOO", Value: "fv" }],
+      Parameters: [{ Name: "/ark/acme/tenant/FOO", Value: "fv" }],
     });
     let err: Error | null = null;
     try {

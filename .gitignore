@@ -57,3 +57,4 @@ PLAN.md
 out/
 .env.iso
 .env.test
+.envrc.localstack
