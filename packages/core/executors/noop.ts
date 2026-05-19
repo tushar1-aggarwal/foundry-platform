@@ -51,4 +51,4 @@ export const noopExecutor: Executor = {
 };
 
 /** Names the test-mode registry must override with the noop stub. */
-export const NOOP_EXECUTOR_NAMES = ["claude-code", "claude-agent", "goose", "cli-agent", "subprocess"] as const;
+export const NOOP_EXECUTOR_NAMES: string[] = ["claude-agent", "subprocess"];

@@ -27,7 +27,11 @@ export interface RuntimeStore {
  * old names; this map redirects them to the new on-disk YAML files.
  */
 export const RUNTIME_NAME_ALIASES: Record<string, string> = {
-  claude: "claude-code",
+  // claude-agent is the sole runtime; legacy names all redirect to it so
+  // sessions/agents persisted before the runtime collapse still resolve.
+  claude: "claude-agent",
+  "claude-code": "claude-agent",
+  "claude-max": "claude-agent",
   "agent-sdk": "claude-agent",
 };
 

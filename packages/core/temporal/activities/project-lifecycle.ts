@@ -1,7 +1,6 @@
 import type { OrchestrationDeps } from "../../services/deps.js";
 import { capturePlanMdIfPresent } from "../../services/plan-artifact.js";
 import { saveCheckpoint } from "../../session/checkpoint.js";
-import { captureNonClaudeUsage } from "../../services/non-claude-usage.js";
 import { recordEvent } from "../../observability.js";
 import { emitStageSpanStart, emitStageSpanEnd, emitSessionSpanEnd, flushSpans } from "../../observability/otlp.js";
 import { logDebug } from "../../observability/structured-log.js";
@@ -136,9 +135,6 @@ export async function projectLifecycle(d: OrchestrationDeps, input: LifecyclePro
           data: { stage: completed, stage_idx: input.stageIdx },
         });
       }
-      // Recover codex/gemini token usage from the transcript now the
-      // stage's agent has exited (Claude is billed live via hooks).
-      if (session) await bestEffort("nonClaudeUsage", () => captureNonClaudeUsage(d, session));
     }
     return;
   }

@@ -62,41 +62,32 @@ describe("claude-agent runtime resolution", () => {
     expect(agent!._resolved_runtime_type).toBe("claude-agent");
   });
 
-  it("all six builtin runtimes are loadable including claude-agent", async () => {
-    const names = ["claude-code", "claude-max", "codex", "gemini", "goose", "claude-agent"];
-    for (const name of names) {
-      const runtime = await app.runtimes.get(name);
-      expect(runtime).not.toBeNull();
-      expect(runtime!.name).toBe(name);
+  it("claude-agent is the sole builtin runtime; removed runtimes are gone", async () => {
+    const claudeAgent = await app.runtimes.get("claude-agent");
+    expect(claudeAgent).not.toBeNull();
+    expect(claudeAgent!.name).toBe("claude-agent");
+    for (const removed of ["claude-code", "claude-max", "codex", "gemini", "goose"]) {
+      // Legacy claude* names alias to claude-agent; the others are fully gone.
+      const r = await app.runtimes.get(removed);
+      if (r) expect(r.type).toBe("claude-agent");
     }
   });
 
-  it("claude-agent runtime type maps to claude-agent executor (not cli-agent)", async () => {
+  it("claude-agent runtime maps to the claude-agent executor type", async () => {
     const runtime = await app.runtimes.get("claude-agent");
     expect(runtime!.type).toBe("claude-agent");
-    // Verify this is distinct from gemini which uses cli-agent
-    const gemini = await app.runtimes.get("gemini");
-    expect(gemini!.type).toBe("cli-agent");
-    expect(runtime!.type).not.toBe(gemini!.type);
   });
 
-  // ── Backward-compat alias for the May 2026 runtime rename ─────────────────
-  it("legacy runtime name `agent-sdk` resolves to claude-agent via alias", async () => {
-    const aliased = await app.runtimes.get("agent-sdk");
+  // ── Backward-compat aliases: every legacy runtime name -> claude-agent ────
+  it("legacy runtime names (`agent-sdk`, `claude`, `claude-code`) alias to claude-agent", async () => {
     const canonical = await app.runtimes.get("claude-agent");
-    expect(aliased).not.toBeNull();
     expect(canonical).not.toBeNull();
-    expect(aliased!.name).toBe(canonical!.name);
-    expect(aliased!.type).toBe(canonical!.type);
-  });
-
-  it("legacy runtime name `claude` resolves to claude-code via alias", async () => {
-    const aliased = await app.runtimes.get("claude");
-    const canonical = await app.runtimes.get("claude-code");
-    expect(aliased).not.toBeNull();
-    expect(canonical).not.toBeNull();
-    expect(aliased!.name).toBe(canonical!.name);
-    expect(aliased!.type).toBe(canonical!.type);
+    for (const legacy of ["agent-sdk", "claude", "claude-code", "claude-max"]) {
+      const aliased = await app.runtimes.get(legacy);
+      expect(aliased).not.toBeNull();
+      expect(aliased!.name).toBe(canonical!.name);
+      expect(aliased!.type).toBe(canonical!.type);
+    }
   });
 });
 

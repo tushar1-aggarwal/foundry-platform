@@ -16,22 +16,14 @@ import { join } from "path";
 
 import type { Executor } from "../executor.js";
 
-import { claudeCodeExecutor } from "./claude-code.js";
 import { subprocessExecutor } from "./subprocess.js";
-import { cliAgentExecutor } from "./cli-agent.js";
-import { gooseExecutor } from "./goose.js";
 import { claudeAgentExecutor } from "./claude-agent.js";
 
-export { claudeCodeExecutor, subprocessExecutor, cliAgentExecutor, gooseExecutor, claudeAgentExecutor };
+export { subprocessExecutor, claudeAgentExecutor };
 
-/** Built-in executors shipped with every Ark bundle. */
-export const builtinExecutors: Executor[] = [
-  claudeCodeExecutor,
-  subprocessExecutor,
-  cliAgentExecutor,
-  gooseExecutor,
-  claudeAgentExecutor,
-];
+/** Built-in executors shipped with every Ark bundle. claude-agent is the
+ *  sole agent runtime; subprocess remains for the stub-runner/plugin path. */
+export const builtinExecutors: Executor[] = [subprocessExecutor, claudeAgentExecutor];
 
 /**
  * Discover and load user-provided executor plugins from

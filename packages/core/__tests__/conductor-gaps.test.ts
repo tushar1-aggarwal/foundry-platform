@@ -535,43 +535,6 @@ describe("archive(getApp()) and restore(getApp())", async () => {
   });
 });
 
-// ── cli-agent executor ──────────────────────────────────────────────────────
-
-import { cliAgentExecutor } from "../executors/cli-agent.js";
-
-describe("cli-agent executor", async () => {
-  it("is exported and registered", () => {
-    expect(typeof cliAgentExecutor).toBe("object");
-    expect(cliAgentExecutor.name).toBe("cli-agent");
-  });
-
-  it("launch fails without command", async () => {
-    const result = await cliAgentExecutor.launch({
-      sessionId: "s-test",
-      workdir: "/tmp",
-      task: "test",
-      agent: {
-        name: "test",
-        model: "test",
-        max_turns: 1,
-        system_prompt: "",
-        tools: [],
-        skills: [],
-        mcp_servers: [],
-        permission_mode: "bypassPermissions",
-        env: {},
-      },
-    });
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("no command");
-  });
-
-  it("status returns not_found for unknown handle", async () => {
-    const status = await cliAgentExecutor.status("nonexistent-handle");
-    expect(status.state).toBe("not_found"); // tmux session doesn't exist = not_found
-  });
-});
-
 // ── status poller ───────────────────────────────────────────────────────────
 
 describe("status poller", async () => {
