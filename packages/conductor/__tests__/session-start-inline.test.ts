@@ -48,9 +48,7 @@ beforeEach(() => {
 });
 
 describe("session/start: inline flow payloads", () => {
-  it(
-    "accepts an inline flow object and registers it on the overlay",
-    async () => {
+  it("accepts an inline flow object and registers it on the overlay", async () => {
     const inlineFlow = {
       name: "my-inline",
       description: "built-on-the-wire",
@@ -81,13 +79,9 @@ describe("session/start: inline flow payloads", () => {
     expect(def).toBeDefined();
     expect(def?.stages[0]?.name).toBe("main");
     await waitForSessionStatus(app, session.id as string, ["completed", "failed"]);
-  },
-  45_000,
-  );
+  }, 45_000);
 
-  it(
-    "accepts an inline agent at stage.agent",
-    async () => {
+  it("accepts an inline agent at stage.agent", async () => {
     const inlineFlow = {
       name: "with-inline-agent",
       stages: [
@@ -119,9 +113,7 @@ describe("session/start: inline flow payloads", () => {
     expect(agent.runtime).toBe("claude-agent");
     expect(agent.model).toBe("sonnet");
     await waitForSessionStatus(app, session.id as string, ["completed", "failed"]);
-  },
-  45_000,
-  );
+  }, 45_000);
 
   it("rejects an inline flow with zero stages", async () => {
     const req = createRequest(3, "session/start", {

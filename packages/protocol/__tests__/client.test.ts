@@ -19,7 +19,10 @@ beforeAll(async () => {
   app = await AppContext.forTestAsync();
   const flowDir = join(app.config.dirs.ark, "flows");
   mkdirSync(flowDir, { recursive: true });
-  writeFileSync(join(flowDir, "x-auto.yaml"), `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`);
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+  );
   await app.boot();
   detach = await attachTemporalTestHarness(app);
 });

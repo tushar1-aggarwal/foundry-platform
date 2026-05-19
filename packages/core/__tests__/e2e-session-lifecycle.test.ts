@@ -14,11 +14,7 @@ import { describe, it, expect, afterEach, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { AppContext } from "../app.js";
-import {
-  attachTemporalTestHarness,
-  drainTemporalTestHarness,
-  waitForSessionStatus,
-} from "../temporal/test-harness.js";
+import { attachTemporalTestHarness, drainTemporalTestHarness, waitForSessionStatus } from "../temporal/test-harness.js";
 
 let app: AppContext;
 let detach: () => void;

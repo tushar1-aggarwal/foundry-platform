@@ -1,11 +1,7 @@
 // Import the harness FIRST so its top-level Temporal module substitutes are
 // installed before any transitive import pulls in the real client; otherwise
 // sessionCreator.start() dials a non-existent Temporal server.
-import {
-  attachTemporalTestHarness,
-  drainTemporalTestHarness,
-  waitForSessionStatus,
-} from "../temporal/test-harness.js";
+import { attachTemporalTestHarness, drainTemporalTestHarness, waitForSessionStatus } from "../temporal/test-harness.js";
 import { describe, it, expect } from "bun:test";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -32,32 +28,28 @@ describe("buildReplay", async () => {
     expect(steps).toEqual([]);
   });
 
-  it(
-    "returns steps in chronological order",
-    async () => {
-      writeXAuto();
-      const detach = await attachTemporalTestHarness(getApp());
-      const session = await getApp().sessionCreator.start({ summary: "test replay", flow: "x-auto" });
-      await waitForSessionStatus(getApp(), session.id, ["completed", "failed"]);
-      await getApp().events.log(session.id, "stage_ready", { stage: "plan", data: { stage: "plan" } });
-      await getApp().events.log(session.id, "stage_started", {
-        stage: "plan",
-        actor: "planner",
-        data: { stage: "plan", agent: "planner" },
-      });
+  it("returns steps in chronological order", async () => {
+    writeXAuto();
+    const detach = await attachTemporalTestHarness(getApp());
+    const session = await getApp().sessionCreator.start({ summary: "test replay", flow: "x-auto" });
+    await waitForSessionStatus(getApp(), session.id, ["completed", "failed"]);
+    await getApp().events.log(session.id, "stage_ready", { stage: "plan", data: { stage: "plan" } });
+    await getApp().events.log(session.id, "stage_started", {
+      stage: "plan",
+      actor: "planner",
+      data: { stage: "plan", agent: "planner" },
+    });
 
-      const steps = await buildReplay(getApp(), session.id);
-      expect(steps.length).toBeGreaterThanOrEqual(3);
+    const steps = await buildReplay(getApp(), session.id);
+    expect(steps.length).toBeGreaterThanOrEqual(3);
 
-      // Verify chronological order
-      for (let i = 1; i < steps.length; i++) {
-        expect(steps[i].timestamp >= steps[i - 1].timestamp).toBe(true);
-      }
-      await drainTemporalTestHarness();
-      detach();
-    },
-    45_000,
-  );
+    // Verify chronological order
+    for (let i = 1; i < steps.length; i++) {
+      expect(steps[i].timestamp >= steps[i - 1].timestamp).toBe(true);
+    }
+    await drainTemporalTestHarness();
+    detach();
+  }, 45_000);
 
   it("steps have correct index values", async () => {
     const session = await getApp().sessions.create({ summary: "test indexing" });
@@ -70,22 +62,18 @@ describe("buildReplay", async () => {
     });
   });
 
-  it(
-    "steps have elapsed time formatted as HH:MM:SS",
-    async () => {
-      writeXAuto();
-      const detach = await attachTemporalTestHarness(getApp());
-      const session = await getApp().sessionCreator.start({ summary: "elapsed test", flow: "x-auto" });
-      await waitForSessionStatus(getApp(), session.id, ["completed", "failed"]);
-      const steps = await buildReplay(getApp(), session.id);
-      expect(steps.length).toBeGreaterThan(0);
-      // First step should be near 00:00:00
-      expect(steps[0].elapsed).toMatch(/^\d{2}:\d{2}:\d{2}$/);
-      await drainTemporalTestHarness();
-      detach();
-    },
-    45_000,
-  );
+  it("steps have elapsed time formatted as HH:MM:SS", async () => {
+    writeXAuto();
+    const detach = await attachTemporalTestHarness(getApp());
+    const session = await getApp().sessionCreator.start({ summary: "elapsed test", flow: "x-auto" });
+    await waitForSessionStatus(getApp(), session.id, ["completed", "failed"]);
+    const steps = await buildReplay(getApp(), session.id);
+    expect(steps.length).toBeGreaterThan(0);
+    // First step should be near 00:00:00
+    expect(steps[0].elapsed).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    await drainTemporalTestHarness();
+    detach();
+  }, 45_000);
 
   it("session_created event has meaningful summary", async () => {
     const session = await getApp().sessions.create({ summary: "My important task", flow: "quick" });

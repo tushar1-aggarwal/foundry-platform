@@ -30,22 +30,18 @@ afterAll(async () => {
 });
 
 describe("session_start", () => {
-  it(
-    "creates a session and returns its id",
-    async () => {
-      const result = (await h.callTool("session_start", {
-        flow: "x-auto",
-        summary: "mcp-start-test",
-        compute: "local",
-      })) as { sessionId: string };
-      expect(result.sessionId).toMatch(/^s-/);
-      const session = await h.app.sessions.get(result.sessionId);
-      expect(session?.summary).toBe("mcp-start-test");
-      expect(session?.flow).toBe("x-auto");
-      await waitForSessionStatus(h.app, result.sessionId, ["completed", "failed"]);
-    },
-    45_000,
-  );
+  it("creates a session and returns its id", async () => {
+    const result = (await h.callTool("session_start", {
+      flow: "x-auto",
+      summary: "mcp-start-test",
+      compute: "local",
+    })) as { sessionId: string };
+    expect(result.sessionId).toMatch(/^s-/);
+    const session = await h.app.sessions.get(result.sessionId);
+    expect(session?.summary).toBe("mcp-start-test");
+    expect(session?.flow).toBe("x-auto");
+    await waitForSessionStatus(h.app, result.sessionId, ["completed", "failed"]);
+  }, 45_000);
 });
 
 describe("session_kill", () => {

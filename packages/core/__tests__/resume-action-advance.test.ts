@@ -18,11 +18,7 @@ import { afterAll, beforeAll, afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { AppContext } from "../app.js";
-import {
-  attachTemporalTestHarness,
-  drainTemporalTestHarness,
-  waitForSessionStatus,
-} from "../temporal/test-harness.js";
+import { attachTemporalTestHarness, drainTemporalTestHarness, waitForSessionStatus } from "../temporal/test-harness.js";
 
 let app: AppContext;
 let detach: () => void;
@@ -94,9 +90,7 @@ describe("action stage auto-advances on success", () => {
     // The action's event must have fired -- proves the action actually ran
     // (not just a status flip elsewhere).
     const events = await app.events.list(session.id);
-    const actionEv = events.find(
-      (e) => e.type === "action_executed" && (e.data as any)?.action === "close",
-    );
+    const actionEv = events.find((e) => e.type === "action_executed" && (e.data as any)?.action === "close");
     expect(actionEv).toBeDefined();
   }, 45_000);
 });

@@ -42,7 +42,7 @@ describe("skill injection via buildClaudeArgs", () => {
     const agent = makeAgent({ name: "test-agent", skills: ["test-skill"] });
     await getApp().agents.save(agent.name, agent, "global");
 
-    const args = (await buildClaudeArgs(agent, { app: getApp() }));
+    const args = await buildClaudeArgs(agent, { app: getApp() });
     const systemPromptArg = args.join(" ");
 
     expect(systemPromptArg).toContain("You are a developer");
@@ -55,7 +55,7 @@ describe("skill injection via buildClaudeArgs", () => {
     await getApp().agents.save(agent.name, agent, "global");
 
     // Should not throw, just skip missing skills
-    const args = (await buildClaudeArgs(agent, { app: getApp() }));
+    const args = await buildClaudeArgs(agent, { app: getApp() });
     expect(args.length).toBeGreaterThan(0);
     // The nonexistent skill prompt should not appear
     const systemPromptArg = args.join(" ");
@@ -66,7 +66,7 @@ describe("skill injection via buildClaudeArgs", () => {
     const agent = makeAgent({ name: "plain-agent", skills: [] });
     await getApp().agents.save(agent.name, agent, "global");
 
-    const args = (await buildClaudeArgs(agent, { app: getApp() }));
+    const args = await buildClaudeArgs(agent, { app: getApp() });
     expect(args.length).toBeGreaterThan(0);
     const systemPromptArg = args.join(" ");
     expect(systemPromptArg).toContain("You are a developer");
@@ -97,7 +97,7 @@ describe("skill injection via buildClaudeArgs", () => {
     const agent = makeAgent({ name: "multi-skill-agent", skills: ["skill-a", "skill-b"] });
     await getApp().agents.save(agent.name, agent, "global");
 
-    const args = (await buildClaudeArgs(agent, { app: getApp() }));
+    const args = await buildClaudeArgs(agent, { app: getApp() });
     const systemPromptArg = args.join(" ");
 
     expect(systemPromptArg).toContain("## Skill: skill-a");

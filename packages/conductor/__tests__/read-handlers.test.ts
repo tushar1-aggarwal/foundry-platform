@@ -59,17 +59,13 @@ async function createSession(summary: string): Promise<string> {
 // ── session/read ───────────────────────────────────────────────────────────
 
 describe("session/read", async () => {
-  it(
-    "returns session by id",
-    async () => {
-      const id = await createSession("read-basic");
-      const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id }));
-      const result = ok(res);
-      expect((result.session as Record<string, unknown>).id).toBe(id);
-      expect((result.session as Record<string, unknown>).summary).toBe("read-basic");
-    },
-    45_000,
-  );
+  it("returns session by id", async () => {
+    const id = await createSession("read-basic");
+    const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id }));
+    const result = ok(res);
+    expect((result.session as Record<string, unknown>).id).toBe(id);
+    expect((result.session as Record<string, unknown>).summary).toBe("read-basic");
+  }, 45_000);
 
   it("returns error for unknown session id", async () => {
     const res = await router.dispatch(createRequest(1, "session/read", { sessionId: "s-does-not-exist" }));
@@ -77,71 +73,55 @@ describe("session/read", async () => {
     expect(err(res).code).toBe(-32002);
   });
 
-  it(
-    "includes events when requested",
-    async () => {
-      const id = await createSession("read-events");
-      await app.events.log(id, "test-event", { stage: "init", data: { foo: "bar" } });
+  it("includes events when requested", async () => {
+    const id = await createSession("read-events");
+    await app.events.log(id, "test-event", { stage: "init", data: { foo: "bar" } });
 
-      const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id, include: ["events"] }));
-      const result = ok(res);
-      expect(result.events).toBeDefined();
-      const events = result.events as Array<Record<string, unknown>>;
-      expect(events.length).toBeGreaterThanOrEqual(1);
-      expect(events.some((e) => e.type === "test-event")).toBe(true);
-    },
-    45_000,
-  );
+    const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id, include: ["events"] }));
+    const result = ok(res);
+    expect(result.events).toBeDefined();
+    const events = result.events as Array<Record<string, unknown>>;
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events.some((e) => e.type === "test-event")).toBe(true);
+  }, 45_000);
 
-  it(
-    "includes messages when requested",
-    async () => {
-      const id = await createSession("read-messages");
-      await app.messages.send(id, "user", "hello from test");
+  it("includes messages when requested", async () => {
+    const id = await createSession("read-messages");
+    await app.messages.send(id, "user", "hello from test");
 
-      const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id, include: ["messages"] }));
-      const result = ok(res);
-      expect(result.messages).toBeDefined();
-      const messages = result.messages as Array<Record<string, unknown>>;
-      expect(messages.length).toBeGreaterThanOrEqual(1);
-      expect(messages.some((m) => m.content === "hello from test")).toBe(true);
-    },
-    45_000,
-  );
+    const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id, include: ["messages"] }));
+    const result = ok(res);
+    expect(result.messages).toBeDefined();
+    const messages = result.messages as Array<Record<string, unknown>>;
+    expect(messages.length).toBeGreaterThanOrEqual(1);
+    expect(messages.some((m) => m.content === "hello from test")).toBe(true);
+  }, 45_000);
 
-  it(
-    "includes both events and messages when requested",
-    async () => {
-      const id = await createSession("read-both");
-      await app.events.log(id, "both-event");
-      await app.messages.send(id, "system", "both-msg");
+  it("includes both events and messages when requested", async () => {
+    const id = await createSession("read-both");
+    await app.events.log(id, "both-event");
+    await app.messages.send(id, "system", "both-msg");
 
-      const res = await router.dispatch(
-        createRequest(2, "session/read", { sessionId: id, include: ["events", "messages"] }),
-      );
-      const result = ok(res);
-      expect(result.events).toBeDefined();
-      expect(result.messages).toBeDefined();
-      expect((result.events as unknown[]).length).toBeGreaterThanOrEqual(1);
-      expect((result.messages as unknown[]).length).toBeGreaterThanOrEqual(1);
-    },
-    45_000,
-  );
+    const res = await router.dispatch(
+      createRequest(2, "session/read", { sessionId: id, include: ["events", "messages"] }),
+    );
+    const result = ok(res);
+    expect(result.events).toBeDefined();
+    expect(result.messages).toBeDefined();
+    expect((result.events as unknown[]).length).toBeGreaterThanOrEqual(1);
+    expect((result.messages as unknown[]).length).toBeGreaterThanOrEqual(1);
+  }, 45_000);
 
-  it(
-    "omits events and messages when include is not specified",
-    async () => {
-      const id = await createSession("read-no-include");
-      await app.events.log(id, "omitted-event");
-      await app.messages.send(id, "user", "omitted-msg");
+  it("omits events and messages when include is not specified", async () => {
+    const id = await createSession("read-no-include");
+    await app.events.log(id, "omitted-event");
+    await app.messages.send(id, "user", "omitted-msg");
 
-      const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id }));
-      const result = ok(res);
-      expect(result.events).toBeUndefined();
-      expect(result.messages).toBeUndefined();
-    },
-    45_000,
-  );
+    const res = await router.dispatch(createRequest(2, "session/read", { sessionId: id }));
+    const result = ok(res);
+    expect(result.events).toBeUndefined();
+    expect(result.messages).toBeUndefined();
+  }, 45_000);
 });
 
 // ── agent/read ─────────────────────────────────────────────────────────────

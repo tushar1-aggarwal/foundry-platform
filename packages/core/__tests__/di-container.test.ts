@@ -20,11 +20,7 @@ import { TodoRepository } from "../repositories/todo.js";
 import { SessionService } from "../services/session.js";
 import { ComputeService } from "../services/compute.js";
 import { clearApp, getApp, setApp } from "./test-helpers.js";
-import {
-  attachTemporalTestHarness,
-  drainTemporalTestHarness,
-  waitForSessionStatus,
-} from "../temporal/test-harness.js";
+import { attachTemporalTestHarness, drainTemporalTestHarness, waitForSessionStatus } from "../temporal/test-harness.js";
 
 let app: AppContext | null = null;
 let detach: (() => void) | null = null;

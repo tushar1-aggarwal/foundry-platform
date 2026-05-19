@@ -195,8 +195,7 @@ async function runConsumerLoop(
     if (entry.triggerSessionId) {
       try {
         const s = await app.sessions.get(entry.triggerSessionId);
-        const terminal =
-          !s || ["completed", "failed", "stopped", "cancelled", "deleting"].includes(s.status as string);
+        const terminal = !s || ["completed", "failed", "stopped", "cancelled", "deleting"].includes(s.status as string);
         if (terminal) {
           logInfo(
             "conductor",

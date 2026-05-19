@@ -25,11 +25,7 @@ import { join } from "path";
 import { AppContext } from "../app.js";
 import { executeAction } from "../services/actions/index.js";
 import { depsFromApp } from "../services/deps.js";
-import {
-  attachTemporalTestHarness,
-  drainTemporalTestHarness,
-  waitForSessionStatus,
-} from "../temporal/test-harness.js";
+import { attachTemporalTestHarness, drainTemporalTestHarness, waitForSessionStatus } from "../temporal/test-harness.js";
 
 let app: AppContext;
 let detach: () => void;
@@ -179,9 +175,7 @@ describe("action stage chaining", () => {
     expect(final.status).toBe("completed");
 
     const events = await app.events.list(session.id);
-    const actionEvents = events.filter(
-      (e) => e.type === "action_executed" && (e.data as any)?.action === "close",
-    );
+    const actionEvents = events.filter((e) => e.type === "action_executed" && (e.data as any)?.action === "close");
     expect(actionEvents.length).toBeGreaterThanOrEqual(2);
   }, 45_000);
 
@@ -202,9 +196,7 @@ describe("action stage chaining", () => {
 
     // first (close) DID run before the chain failed on second (auto_merge).
     const events = await app.events.list(session.id);
-    const actionExecuted = events
-      .filter((e) => e.type === "action_executed")
-      .map((e) => (e.data as any)?.action);
+    const actionExecuted = events.filter((e) => e.type === "action_executed").map((e) => (e.data as any)?.action);
     expect(actionExecuted).toContain("close");
   }, 45_000);
 
@@ -222,9 +214,7 @@ describe("action stage chaining", () => {
     expect(final.stage).toBe("pr");
 
     const events = await app.events.list(session.id);
-    const mergeEvents = events.filter(
-      (e) => e.type === "action_executed" && (e.data as any)?.action === "auto_merge",
-    );
+    const mergeEvents = events.filter((e) => e.type === "action_executed" && (e.data as any)?.action === "auto_merge");
     expect(mergeEvents.length).toBe(0);
   }, 45_000);
 
@@ -239,9 +229,7 @@ describe("action stage chaining", () => {
 
     // The close action ran between the two agent stages.
     const events = await app.events.list(session.id);
-    const actionEvents = events.filter(
-      (e) => e.type === "action_executed" && (e.data as any)?.action === "close",
-    );
+    const actionEvents = events.filter((e) => e.type === "action_executed" && (e.data as any)?.action === "close");
     expect(actionEvents.length).toBe(1);
   }, 45_000);
 
@@ -255,9 +243,7 @@ describe("action stage chaining", () => {
     expect(final.status).toBe("completed");
 
     const events = await app.events.list(session.id);
-    const actionEvents = events.filter(
-      (e) => e.type === "action_executed" && (e.data as any)?.action === "close",
-    );
+    const actionEvents = events.filter((e) => e.type === "action_executed" && (e.data as any)?.action === "close");
     expect(actionEvents.length).toBe(1);
   }, 45_000);
 

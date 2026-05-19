@@ -37,78 +37,62 @@ afterAll(async () => {
 });
 
 describe("spawnSubagent", () => {
-  it(
-    "creates a child session with parent reference",
-    async () => {
-      const parent = await app.sessions.create({ summary: "parent" });
-      await app.sessions.update(parent.id, { agent: "implementer" });
+  it("creates a child session with parent reference", async () => {
+    const parent = await app.sessions.create({ summary: "parent" });
+    await app.sessions.update(parent.id, { agent: "implementer" });
 
-      const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "subtask" });
-      expect(result.ok).toBe(true);
-      expect(result.sessionId).toBeDefined();
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "subtask" });
+    expect(result.ok).toBe(true);
+    expect(result.sessionId).toBeDefined();
 
-      const child = await app.sessions.get(result.sessionId!);
-      expect(child).not.toBeNull();
-      expect(child!.summary).toBe("subtask");
-      expect(child!.parent_id).toBe(parent.id);
-      expect(child!.agent).toBe("implementer");
+    const child = await app.sessions.get(result.sessionId!);
+    expect(child).not.toBeNull();
+    expect(child!.summary).toBe("subtask");
+    expect(child!.parent_id).toBe(parent.id);
+    expect(child!.agent).toBe("implementer");
 
-      await waitForSessionStatus(app, result.sessionId!, ["completed", "failed"]);
-    },
-    45_000,
-  );
+    await waitForSessionStatus(app, result.sessionId!, ["completed", "failed"]);
+  }, 45_000);
 
-  it(
-    "allows agent override",
-    async () => {
-      const parent = await app.sessions.create({ summary: "parent" });
-      await app.sessions.update(parent.id, { agent: "implementer" });
+  it("allows agent override", async () => {
+    const parent = await app.sessions.create({ summary: "parent" });
+    await app.sessions.update(parent.id, { agent: "implementer" });
 
-      const result = await spawnSubagent(depsFromApp(app), parent.id, {
-        task: "review task",
-        agent: "reviewer",
-      });
-      const child = await app.sessions.get(result.sessionId!);
-      expect(child!.agent).toBe("reviewer");
+    const result = await spawnSubagent(depsFromApp(app), parent.id, {
+      task: "review task",
+      agent: "reviewer",
+    });
+    const child = await app.sessions.get(result.sessionId!);
+    expect(child!.agent).toBe("reviewer");
 
-      await waitForSessionStatus(app, result.sessionId!, ["completed", "failed"]);
-    },
-    45_000,
-  );
+    await waitForSessionStatus(app, result.sessionId!, ["completed", "failed"]);
+  }, 45_000);
 
   it("rejects non-existent parent", async () => {
     const result = await spawnSubagent(depsFromApp(app), "nope", { task: "orphan" });
     expect(result.ok).toBe(false);
   });
 
-  it(
-    "sets subagent config flag",
-    async () => {
-      const parent = await app.sessions.create({ summary: "parent" });
-      await app.sessions.update(parent.id, { agent: "worker" });
+  it("sets subagent config flag", async () => {
+    const parent = await app.sessions.create({ summary: "parent" });
+    await app.sessions.update(parent.id, { agent: "worker" });
 
-      const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "sub" });
-      const child = await app.sessions.get(result.sessionId!);
-      expect(child!.config.subagent).toBe(true);
-      expect(child!.config.parent_id).toBe(parent.id);
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "sub" });
+    const child = await app.sessions.get(result.sessionId!);
+    expect(child!.config.subagent).toBe(true);
+    expect(child!.config.parent_id).toBe(parent.id);
 
-      await waitForSessionStatus(app, result.sessionId!, ["completed", "failed"]);
-    },
-    45_000,
-  );
+    await waitForSessionStatus(app, result.sessionId!, ["completed", "failed"]);
+  }, 45_000);
 
-  it(
-    "uses quick flow for subagents",
-    async () => {
-      const parent = await app.sessions.create({ summary: "parent" });
-      await app.sessions.update(parent.id, { agent: "worker" });
+  it("uses quick flow for subagents", async () => {
+    const parent = await app.sessions.create({ summary: "parent" });
+    await app.sessions.update(parent.id, { agent: "worker" });
 
-      const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "sub" });
-      const child = await app.sessions.get(result.sessionId!);
-      expect(child!.flow).toBe("quick");
+    const result = await spawnSubagent(depsFromApp(app), parent.id, { task: "sub" });
+    const child = await app.sessions.get(result.sessionId!);
+    expect(child!.flow).toBe("quick");
 
-      await waitForSessionStatus(app, result.sessionId!, ["completed", "failed"]);
-    },
-    45_000,
-  );
+    await waitForSessionStatus(app, result.sessionId!, ["completed", "failed"]);
+  }, 45_000);
 });

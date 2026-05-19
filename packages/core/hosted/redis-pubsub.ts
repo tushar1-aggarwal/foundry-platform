@@ -22,8 +22,7 @@ export interface RedisPubSubClient {
 
 export type RedisClientFactory = (redisUrl: string) => RedisPubSubClient;
 
-const defaultFactory: RedisClientFactory = (url) =>
-  createClient({ url }) as unknown as RedisPubSubClient;
+const defaultFactory: RedisClientFactory = (url) => createClient({ url }) as unknown as RedisPubSubClient;
 
 let factory: RedisClientFactory = defaultFactory;
 
