@@ -11,6 +11,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { AppContext } from "../../app.js";
 import { executeAction, getAction, listActions } from "../actions/index.js";
+import { depsFromApp } from "../deps.js";
 
 let app: AppContext;
 
@@ -42,14 +43,14 @@ describe("action registry", async () => {
   });
 
   it("executeAction returns not-found when session is missing", async () => {
-    const res = await executeAction(app, "no-such-session", "close");
+    const res = await executeAction(depsFromApp(app), "no-such-session", "close");
     expect(res.ok).toBe(false);
     expect(res.message).toBe("Session not found");
   });
 
   it("executeAction logs a skipped event for unknown actions and returns ok", async () => {
     const s = await app.sessions.create({ summary: "unknown-action test", flow: "default" });
-    const res = await executeAction(app, s.id, "invented_action");
+    const res = await executeAction(depsFromApp(app), s.id, "invented_action");
     expect(res.ok).toBe(true);
     expect(res.message).toContain("unknown");
     const events = await app.events.list(s.id);
@@ -60,7 +61,7 @@ describe("action registry", async () => {
 
   it("close action logs action_executed and returns ok", async () => {
     const s = await app.sessions.create({ summary: "close test", flow: "default" });
-    const res = await executeAction(app, s.id, "close");
+    const res = await executeAction(depsFromApp(app), s.id, "close");
     expect(res.ok).toBe(true);
     const events = await app.events.list(s.id);
     const executed = events.find((e) => e.type === "action_executed" && e.data?.action === "close");
@@ -69,7 +70,7 @@ describe("action registry", async () => {
 
   it("close_ticket (canonical) logs action_executed and returns ok", async () => {
     const s = await app.sessions.create({ summary: "close-canonical test", flow: "default" });
-    const res = await executeAction(app, s.id, "close_ticket");
+    const res = await executeAction(depsFromApp(app), s.id, "close_ticket");
     expect(res.ok).toBe(true);
     const events = await app.events.list(s.id);
     const executed = events.find((e) => e.type === "action_executed" && e.data?.action === "close_ticket");
@@ -79,7 +80,7 @@ describe("action registry", async () => {
   it("create_pr short-circuits when session already tracks a pr_url", async () => {
     const s = await app.sessions.create({ summary: "pr-already test", flow: "default" });
     await app.sessions.update(s.id, { pr_url: "https://github.com/owner/repo/pull/42" });
-    const res = await executeAction(app, s.id, "create_pr");
+    const res = await executeAction(depsFromApp(app), s.id, "create_pr");
     expect(res.ok).toBe(true);
     expect(res.message).toContain("PR already exists");
     const events = await app.events.list(s.id);
@@ -94,7 +95,7 @@ describe("action registry", async () => {
   it("auto_merge fails fast when session has no pr_url (no create_pr produced one)", async () => {
     const s = await app.sessions.create({ summary: "auto-merge no-pr test", flow: "default" });
     // Explicitly NOT setting pr_url -- this is the s-vpp1r7a4h5 repro.
-    const res = await executeAction(app, s.id, "auto_merge");
+    const res = await executeAction(depsFromApp(app), s.id, "auto_merge");
     expect(res.ok).toBe(false);
     expect(res.message).toMatch(/no PR URL/i);
   });

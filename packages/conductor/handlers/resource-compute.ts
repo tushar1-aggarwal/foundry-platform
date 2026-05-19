@@ -14,70 +14,7 @@ import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
 import { logDebug } from "../../core/observability/structured-log.js";
-import type {
-  Compute,
-  ComputeKindName,
-  IsolationKindName,
-  ComputeNameParams,
-  ComputeUpdateParams,
-} from "../../types/index.js";
-
-/**
- * Display-only helper -- compose a `${compute_kind}+${isolation_kind}` label
- * back into the legacy provider-name string the wire format used to carry.
- * Mirrors the (now-deleted) `pairToProvider` helper from compute/adapters/.
- */
-function legacyProviderLabel(c: Pick<Compute, "compute_kind" | "isolation_kind">): string {
-  const ck = c.compute_kind;
-  const ik = c.isolation_kind;
-  if (ck === "local") {
-    if (ik === "direct") return "local";
-    if (ik === "docker") return "docker";
-    if (ik === "devcontainer") return "devcontainer";
-  }
-  if (ck === "ec2") {
-    if (ik === "direct") return "ec2";
-    if (ik === "docker") return "ec2-docker";
-    if (ik === "devcontainer") return "ec2-devcontainer";
-  }
-  if (ck === "firecracker") return "firecracker";
-  if (ck === "k8s") return "k8s";
-  if (ck === "k8s-kata") return "k8s-kata";
-  return ck;
-}
-
-/**
- * Reverse of legacyProviderLabel -- used only for back-compat handling of
- * RPC callers that still pass `{provider}` instead of `{compute, isolation}`.
- */
-function legacyProviderToAxes(name: string): { compute_kind: ComputeKindName; isolation_kind: IsolationKindName } {
-  switch (name) {
-    case "local":
-      return { compute_kind: "local", isolation_kind: "direct" };
-    case "docker":
-      return { compute_kind: "local", isolation_kind: "docker" };
-    case "devcontainer":
-      return { compute_kind: "local", isolation_kind: "devcontainer" };
-    case "firecracker":
-      return { compute_kind: "firecracker", isolation_kind: "direct" };
-    case "ec2":
-    case "remote-arkd":
-    case "remote-worktree":
-      return { compute_kind: "ec2", isolation_kind: "direct" };
-    case "ec2-docker":
-    case "remote-docker":
-      return { compute_kind: "ec2", isolation_kind: "docker" };
-    case "ec2-devcontainer":
-    case "remote-devcontainer":
-      return { compute_kind: "ec2", isolation_kind: "devcontainer" };
-    case "k8s":
-      return { compute_kind: "k8s", isolation_kind: "direct" };
-    case "k8s-kata":
-      return { compute_kind: "k8s-kata", isolation_kind: "direct" };
-    default:
-      return { compute_kind: "local", isolation_kind: "direct" };
-  }
-}
+import type { ComputeKindName, IsolationKindName, ComputeNameParams, ComputeUpdateParams } from "../../types/index.js";
 
 /**
  * Kill tmux sessions for zombie ark sessions (no DB record or terminal status).
@@ -108,27 +45,19 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
     if (include === "template") targets = await app.computes.listTemplates();
     else if (include === "concrete") targets = await app.computes.listConcrete();
     else targets = await app.computes.list();
-    // Wire-format back-compat: include the legacy `provider` label on each
-    // row so existing clients keep rendering. Will be dropped once the web
-    // UI moves to `${compute_kind}+${isolation_kind}` directly.
-    return { targets: targets.map((t) => ({ ...t, provider: legacyProviderLabel(t) })) };
+    return { targets };
   });
 
   router.handle("compute/create", async (p) => {
-    // Accept either legacy `{provider}` or new `{compute, isolation}`. The
-    // legacy form maps to a (compute_kind, isolation_kind) pair via
-    // `legacyProviderToAxes`; the new form is passed through verbatim.
     const {
       name,
-      provider,
-      compute: computeKind,
-      isolation: isolationKind,
+      compute: effectiveCompute,
+      isolation: effectiveIsolation,
       config,
       is_template,
       cloned_from,
     } = extract<{
       name: string;
-      provider?: string;
       compute?: ComputeKindName;
       isolation?: IsolationKindName;
       config?: Partial<import("../../types/index.js").ComputeConfig>;
@@ -136,25 +65,14 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
       cloned_from?: string;
     }>(p, ["name"]);
 
-    let effectiveCompute = computeKind;
-    let effectiveIsolation = isolationKind;
-    if (!effectiveCompute && !effectiveIsolation && provider) {
-      const axes = legacyProviderToAxes(provider);
-      effectiveCompute = axes.compute_kind;
-      effectiveIsolation = axes.isolation_kind;
+    if (!effectiveCompute || !effectiveIsolation) {
+      throw new RpcError("compute/create requires `compute` and `isolation`", ErrorCodes.INVALID_PARAMS);
     }
 
     // K8s targets must specify context, namespace, image up-front -- fail at
     // create time rather than letting a misconfigured target provision pods
-    // into the wrong cluster/namespace later. Match on the new compute kind
-    // (preferred) and the legacy provider string (back-compat callers).
-    const providerStr = String(provider ?? "");
-    const isK8s =
-      effectiveCompute === "k8s" ||
-      effectiveCompute === "k8s-kata" ||
-      providerStr === "k8s" ||
-      providerStr === "k8s-kata";
-    if (isK8s) {
+    // into the wrong cluster/namespace later.
+    if (effectiveCompute === "k8s") {
       const cfg = (config ?? {}) as Record<string, unknown>;
       const missing = ["context", "namespace", "image"].filter((k) => !cfg[k]);
       if (missing.length) {
@@ -199,9 +117,7 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
       }
       throw err;
     }
-    // RPC wire format still carries `provider` for back-compat clients;
-    // derive the legacy label from the (compute_kind, isolation_kind) axes.
-    return { compute: { ...created, provider: legacyProviderLabel(created) } };
+    return { compute: created };
   });
 
   // Discover available k8s contexts + namespaces from the local kubeconfig
@@ -257,7 +173,7 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
     const { name } = extract<ComputeNameParams>(p, ["name"]);
     const compute = await app.computes.get(name);
     if (!compute) throw new RpcError("Compute not found", ErrorCodes.SESSION_NOT_FOUND);
-    return { compute: { ...compute, provider: legacyProviderLabel(compute) } };
+    return { compute };
   });
 
   /**
@@ -277,7 +193,6 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
     const caps = computeImpl.capabilities;
     return {
       capabilities: {
-        provider: legacyProviderLabel(compute),
         singleton: caps.singleton,
         canReboot: caps.canReboot,
         canDelete: caps.canDelete,
@@ -559,31 +474,22 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
     const dbTemplates = await app.computeTemplates.list();
     const configTemplates = app.config.computeTemplates ?? [];
     const dbNames = new Set(dbTemplates.map((t) => t.name));
-    // DB rows carry the two-axis (compute, isolation) pair directly.
-    // Config-defined rows still carry a legacy `provider` field; we map it
-    // through `legacyProviderToAxes` here. Wire format includes the legacy
-    // `provider` label so existing clients keep rendering.
     const dbWire = dbTemplates.map((t) => ({
       name: t.name,
       description: t.description,
-      provider: legacyProviderLabel({ compute_kind: t.compute, isolation_kind: t.isolation }),
       compute: t.compute,
       isolation: t.isolation,
       config: t.config,
     }));
     const cfgWire = configTemplates
       .filter((t) => !dbNames.has(t.name))
-      .map((t) => {
-        const axes = legacyProviderToAxes(t.provider ?? "local");
-        return {
-          name: t.name,
-          description: t.description ?? undefined,
-          provider: t.provider,
-          compute: axes.compute_kind,
-          isolation: axes.isolation_kind,
-          config: t.config,
-        };
-      });
+      .map((t) => ({
+        name: t.name,
+        description: t.description ?? undefined,
+        compute: t.compute,
+        isolation: t.isolation,
+        config: t.config,
+      }));
     return { templates: [...dbWire, ...cfgWire] };
   });
 
@@ -591,19 +497,15 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
     const { name } = extract<{ name: string }>(p, ["name"]);
     let tmpl: any = await app.computeTemplates.get(name);
     if (tmpl) {
-      // Template view carries the two-axis pair; re-emit the legacy label
-      // for back-compat clients that still key off it.
-      tmpl = { ...tmpl, provider: legacyProviderLabel({ compute_kind: tmpl.compute, isolation_kind: tmpl.isolation }) };
+      // Template row already carries the two-axis (compute, isolation) pair.
     } else {
       const cfgTmpl = (app.config.computeTemplates ?? []).find((t) => t.name === name);
       if (cfgTmpl) {
-        const axes = legacyProviderToAxes(cfgTmpl.provider ?? "local");
         tmpl = {
           name: cfgTmpl.name,
           description: cfgTmpl.description,
-          provider: cfgTmpl.provider,
-          compute: axes.compute_kind,
-          isolation: axes.isolation_kind,
+          compute: cfgTmpl.compute,
+          isolation: cfgTmpl.isolation,
           config: cfgTmpl.config,
         };
       }
@@ -614,31 +516,25 @@ export function registerComputeHandlers(router: Router, app: AppContext): void {
   router.handle("compute/template/create", async (p) => {
     const {
       name,
-      provider,
-      compute: computeKind,
-      isolation: isolationKind,
+      compute: effectiveCompute,
+      isolation: effectiveIsolation,
       config,
       description,
     } = extract<{
       name: string;
-      provider?: string;
       compute?: ComputeKindName;
       isolation?: IsolationKindName;
       config?: Record<string, unknown>;
       description?: string;
     }>(p, ["name"]);
-    let effectiveCompute = computeKind;
-    let effectiveIsolation = isolationKind;
-    if ((!effectiveCompute || !effectiveIsolation) && provider) {
-      const axes = legacyProviderToAxes(provider);
-      effectiveCompute = effectiveCompute ?? axes.compute_kind;
-      effectiveIsolation = effectiveIsolation ?? axes.isolation_kind;
+    if (!effectiveCompute || !effectiveIsolation) {
+      throw new RpcError("compute/template/create requires `compute` and `isolation`", ErrorCodes.INVALID_PARAMS);
     }
     await app.computeTemplates.create({
       name,
       description: description ?? undefined,
-      compute: (effectiveCompute ?? "local") as ComputeKindName,
-      isolation: (effectiveIsolation ?? "direct") as IsolationKindName,
+      compute: effectiveCompute as ComputeKindName,
+      isolation: effectiveIsolation as IsolationKindName,
       config: (config ?? {}) as Record<string, unknown>,
       tenant_id: "default",
     });

@@ -9,7 +9,6 @@
 
 import { asFunction, Lifetime } from "awilix";
 import type { AppContainer } from "../container.js";
-import type { DatabaseAdapter } from "../database/index.js";
 import type { AppContext } from "../app.js";
 import type { ArkConfig } from "../config.js";
 import type { SessionRepository } from "../repositories/session.js";
@@ -30,16 +29,23 @@ import type { TranscriptParserRegistry } from "../runtimes/transcript-parser.js"
 import type { StatusPollerRegistry } from "../executors/status-poller.js";
 import { SessionService, ComputeService } from "../services/index.js";
 import { SessionHooks } from "../services/session-hooks/index.js";
-import { SessionLifecycle } from "../services/session/index.js";
+import {
+  SessionCreator,
+  SessionTerminator,
+  SessionSuspender,
+  SessionForker,
+  SessionReviewer,
+} from "../services/session/index.js";
+import type { SessionLifecycleDeps } from "../services/session/index.js";
 import { SessionAttachService } from "../services/session/attach.js";
 import { DispatchService } from "../services/dispatch/index.js";
-import { StageAdvanceService } from "../services/stage-advance/index.js";
+import { SessionProgression } from "../services/session-progression.js";
 import { executeAction } from "../services/actions/index.js";
+import { depsFromApp } from "../services/deps.js";
 import { getOutput } from "../services/session-output.js";
 import { removeSessionWorktree } from "../services/worktree/index.js";
 import { deletePerSessionCredsSecret, materializeClaudeAuthForDispatch } from "../services/dispatch-claude-auth.js";
 import { garbageCollectComputeIfTemplate } from "../services/compute-lifecycle.js";
-import { capturePlanMdIfPresent } from "../services/plan-artifact.js";
 import { saveCheckpoint } from "../session/checkpoint.js";
 import { provisionWorkspaceWorkdir } from "../workspace/provisioner.js";
 import { buildFlowCallbacks } from "../services/flow-callbacks.js";
@@ -62,9 +68,73 @@ import type { PluginRegistry } from "../plugins/registry.js";
  * services close over the tenant-scoped repos + tenant-scoped `c.app` instead
  * of the root singletons. See `tenant-scope.ts` for the rationale: with awilix
  * `strict: true`, singleton deps resolve through the parent scope, which would
- * otherwise bind every tenant's `dispatchService` / `sessionLifecycle` /
+ * otherwise bind every tenant's `dispatchService` / session sub-services /
  * `sessionHooks` to the default-tenant repositories.
  */
+interface SessionLifecycleCradle {
+  sessions: SessionRepository;
+  events: EventRepository;
+  messages: MessageRepository;
+  todos: TodoRepository;
+  computes: ComputeRepository;
+  flows: FlowStore;
+  runtimes: RuntimeStore;
+  workspaces: WorkspaceStore;
+  usageRecorder: UsageRecorder;
+  statusPollers: StatusPollerRegistry;
+  config: ArkConfig;
+  app: AppContext;
+}
+
+/**
+ * Build the shared `SessionLifecycleDeps` cradle-slice consumed by every
+ * session sub-service. Each sub-service is registered independently in the
+ * container; they all close over the same narrow capability set.
+ */
+function buildSessionLifecycleDeps(c: SessionLifecycleCradle): SessionLifecycleDeps {
+  return {
+    sessions: c.sessions,
+    events: c.events,
+    messages: c.messages,
+    todos: c.todos,
+    computes: c.computes,
+    flows: c.flows,
+    runtimes: c.runtimes,
+    workspaces: c.workspaces,
+    config: c.config,
+    usageRecorder: c.usageRecorder,
+    statusPollers: c.statusPollers,
+    dispatch: (id) => c.app.dispatchService.dispatch(id),
+    removeWorktree: (session) => removeSessionWorktree(depsFromApp(c.app), session),
+    deleteCredsSecret: (session, compute) => deletePerSessionCredsSecret(depsFromApp(c.app), session, compute),
+    gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(depsFromApp(c.app), computeName ?? null),
+    resolveComputeTarget: (session) => c.app.resolveComputeTarget(session),
+    advance: (id) => c.app.sessionProgression.stageDone(id),
+    cleanupSession: async (session) => {
+      const { cleanupSession } = await import("../services/session/cleanup.js");
+      await cleanupSession(depsFromApp(c.app), session);
+    },
+    provisionWorkspaceWorkdir: (session, ws, opts) => provisionWorkspaceWorkdir(c.app, session, ws, opts),
+    // Temporal is the sole orchestrator: every session is driven by a
+    // sessionWorkflow. Lazy async import so the @temporalio packages load
+    // only when a session is actually created.
+    startTemporalWorkflow: async (sessionId: string, flowName: string, tenantId: string) => {
+      const { getTemporalClient } = await import("../temporal/client.js");
+      const client = await getTemporalClient(c.config.temporal);
+      const wfId = `session-${sessionId}`;
+      const handle = await client.workflow.start("sessionWorkflow", {
+        taskQueue: `ark.${tenantId}.stages`,
+        workflowId: wfId,
+        // Hard wall-clock cap so a stuck workflow eventually closes
+        // itself. See SessionService.start() for rationale.
+        workflowExecutionTimeout: (c.config.temporal?.workflowExecutionTimeout ?? "24h") as any,
+        args: [{ sessionId, tenantId, flowName }],
+      });
+      return { workflowId: wfId, runId: handle.firstExecutionRunId };
+    },
+  };
+}
+
 export function registerServices(
   container: AppContainer,
   lifetime: Lifetime.SINGLETON | Lifetime.SCOPED = Lifetime.SINGLETON,
@@ -81,7 +151,7 @@ export function registerServices(
       { lifetime },
     ),
 
-    sessionAttach: asFunction((c: { app: AppContext }) => new SessionAttachService(c.app), { lifetime }),
+    sessionAttach: asFunction((c: { app: AppContext }) => new SessionAttachService(depsFromApp(c.app)), { lifetime }),
 
     sessionHooks: asFunction(
       (c: {
@@ -106,80 +176,34 @@ export function registerServices(
           flows: c.flows,
           usageRecorder: c.usageRecorder,
           transcriptParsers: c.transcriptParsers,
-          advance: (id, force, outcome) => c.app.stageAdvance.advance(id, force, outcome),
+          advance: (id) => c.app.sessionProgression.stageDone(id),
           dispatch: (id) => c.app.dispatchService.dispatch(id),
-          executeAction: (id, action) => c.app.stageAdvance.executeAction(id, action),
-          runVerification: (id) => c.app.sessionLifecycle.runVerification(id),
+          executeAction: (id, action) => executeAction(depsFromApp(c.app), id, action),
+          runVerification: (id) => c.app.sessionReviewer.runVerification(id),
           recordSessionUsage: (session, usage, provider, source) =>
-            c.app.sessionLifecycle.recordSessionUsage(session, usage, provider, source),
-          getOutput: (id, opts) => getOutput(c.app, id, opts),
-          cleanupOnTerminal: (id) => c.app.sessionLifecycle.cleanupOnTerminal(id),
+            c.app.sessionCreator.recordUsage(session, usage, provider, source),
+          getOutput: (id, opts) => getOutput(depsFromApp(c.app), id, opts),
+          cleanupOnTerminal: (id) => c.app.sessionTerminator.cleanupOnTerminal(id),
           ...buildFlowCallbacks(c.app),
         }),
       { lifetime },
     ),
 
-    sessionLifecycle: asFunction(
-      (c: {
-        sessions: SessionRepository;
-        events: EventRepository;
-        messages: MessageRepository;
-        todos: TodoRepository;
-        computes: ComputeRepository;
-        flows: FlowStore;
-        runtimes: RuntimeStore;
-        workspaces: WorkspaceStore;
-        usageRecorder: UsageRecorder;
-        statusPollers: StatusPollerRegistry;
-        config: ArkConfig;
-        app: AppContext;
-      }) =>
-        new SessionLifecycle({
-          sessions: c.sessions,
-          events: c.events,
-          messages: c.messages,
-          todos: c.todos,
-          computes: c.computes,
-          flows: c.flows,
-          runtimes: c.runtimes,
-          workspaces: c.workspaces,
-          config: c.config,
-          usageRecorder: c.usageRecorder,
-          statusPollers: c.statusPollers,
-          dispatch: (id) => c.app.dispatchService.dispatch(id),
-          removeWorktree: (session) => removeSessionWorktree(c.app, session),
-          deleteCredsSecret: (session, compute) => deletePerSessionCredsSecret(c.app, session, compute),
-          gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
-          resolveComputeTarget: (session) => c.app.resolveComputeTarget(session),
-          advance: (id, force) => c.app.stageAdvance.advance(id, force),
-          cleanupSession: async (session) => {
-            const { cleanupSession } = await import("../services/session/cleanup.js");
-            await cleanupSession(c.app, session);
-          },
-          provisionWorkspaceWorkdir: (session, ws, opts) => provisionWorkspaceWorkdir(c.app, session, ws, opts),
-          // Wire Temporal workflow starter when hosted mode + flag enabled.
-          // Uses a lazy async import so the @temporalio packages are only
-          // loaded when actually needed (avoids startup cost in local mode).
-          startTemporalWorkflow:
-            c.config.features.temporalOrchestration && (c.config.database?.url?.startsWith("postgres") ?? false)
-              ? async (sessionId: string, flowName: string, tenantId: string) => {
-                  const { getTemporalClient } = await import("../temporal/client.js");
-                  const client = await getTemporalClient(c.config.temporal);
-                  const wfId = `session-${sessionId}`;
-                  const handle = await client.workflow.start("sessionWorkflow", {
-                    taskQueue: `ark.${tenantId}.stages`,
-                    workflowId: wfId,
-                    // Hard wall-clock cap so a stuck workflow eventually closes
-                    // itself. See SessionService.start() for rationale.
-                    workflowExecutionTimeout: (c.config.temporal?.workflowExecutionTimeout ?? "24h") as any,
-                    args: [{ sessionId, tenantId, flowName }],
-                  });
-                  return { workflowId: wfId, runId: handle.firstExecutionRunId };
-                }
-              : undefined,
-        }),
-      { lifetime },
-    ),
+    sessionCreator: asFunction((c: SessionLifecycleCradle) => new SessionCreator(buildSessionLifecycleDeps(c)), {
+      lifetime,
+    }),
+    sessionTerminator: asFunction((c: SessionLifecycleCradle) => new SessionTerminator(buildSessionLifecycleDeps(c)), {
+      lifetime,
+    }),
+    sessionSuspender: asFunction((c: SessionLifecycleCradle) => new SessionSuspender(buildSessionLifecycleDeps(c)), {
+      lifetime,
+    }),
+    sessionForker: asFunction((c: SessionLifecycleCradle) => new SessionForker(buildSessionLifecycleDeps(c)), {
+      lifetime,
+    }),
+    sessionReviewer: asFunction((c: SessionLifecycleCradle) => new SessionReviewer(buildSessionLifecycleDeps(c)), {
+      lifetime,
+    }),
 
     // DispatchService -- RF-3 narrow deps. No AppContext field. Callbacks
     // wrap the still-AppContext-taking helpers (buildTaskWithHandoff,
@@ -228,9 +252,10 @@ export function registerServices(
 
           // Flow + task-building callbacks
           ...buildFlowCallbacks(c.app),
-          buildTask: (session, stage, agentName) => buildTaskWithHandoff(c.app, session, stage, agentName),
-          extractSubtasks: (session) => extractSubtasks(c.app, session),
-          materializeClaudeAuth: (session, compute) => materializeClaudeAuthForDispatch(c.app, session, compute),
+          buildTask: (session, stage, agentName) => buildTaskWithHandoff(depsFromApp(c.app), session, stage, agentName),
+          extractSubtasks: (session) => extractSubtasks(depsFromApp(c.app), session),
+          materializeClaudeAuth: (session, compute) =>
+            materializeClaudeAuthForDispatch(depsFromApp(c.app), session, compute),
           resolveAgent: (agentName, sessionVars, opts) =>
             agentRegistry.resolveAgentWithRuntime(c.app, agentName, sessionVars, opts),
           buildClaudeArgs: (agent, opts) =>
@@ -245,10 +270,9 @@ export function registerServices(
           checkpoint: (sessionId) => {
             void saveCheckpoint({ sessions: c.sessions, events: c.events }, sessionId);
           },
-          mediateStageHandoff: (sessionId, opts) => c.app.sessionHooks.mediateStageHandoff(sessionId, opts),
-          executeAction: (sessionId, action) => c.app.stageAdvance.executeAction(sessionId, action),
+          executeAction: (sessionId, action) => executeAction(depsFromApp(c.app), sessionId, action),
           dispatchChild: (childId) => c.app.dispatchService.dispatch(childId),
-          fork: (parentId, task, opts) => forkFn(c.app, parentId, task, opts),
+          fork: (parentId, task, opts) => forkFn(depsFromApp(c.app), parentId, task, opts),
           startStatusPoller: (sessionId, tmuxName, runtime) => startStatusPoller(c.app, sessionId, tmuxName, runtime),
 
           // Executor-interface coupling: LaunchOpts.app is required until
@@ -258,50 +282,19 @@ export function registerServices(
       { lifetime },
     ),
 
-    // StageAdvanceService -- RF-3 narrow deps. No AppContext. Callbacks break
-    // the StageAdvance <-> SessionLifecycle cycle (clone / runVerification /
-    // recordSessionUsage) and keep the class free of back-refs.
-    stageAdvance: asFunction(
-      (c: {
-        sessions: SessionRepository;
-        events: EventRepository;
-        messages: MessageRepository;
-        todos: TodoRepository;
-        flowStates: FlowStateRepository;
-        flows: FlowStore;
-        runtimes: RuntimeStore;
-        transcriptParsers: TranscriptParserRegistry;
-        usageRecorder: UsageRecorder;
-        config: ArkConfig;
-        db: DatabaseAdapter;
-        app: AppContext;
-      }) =>
-        new StageAdvanceService({
+    // SessionProgression -- the out-of-workflow driver for Temporal
+    // sessions. Replaces the bespoke StageAdvanceService: the running
+    // workflow owns stage iteration/routing/gates/fan-out; this only
+    // exposes stageDone (the status:"ready" signal) + handoff
+    // (clone+dispatch). All advance side-effects now live in the Temporal
+    // lifecycle seam (temporal/activities/project-lifecycle.ts).
+    sessionProgression: asFunction(
+      (c: { sessions: SessionRepository; events: EventRepository; app: AppContext }) =>
+        new SessionProgression({
           sessions: c.sessions,
           events: c.events,
-          messages: c.messages,
-          todos: c.todos,
-          flowStates: c.flowStates,
-          flows: c.flows,
-          runtimes: c.runtimes,
-          transcriptParsers: c.transcriptParsers,
-          usageRecorder: c.usageRecorder,
-          config: c.config,
-          db: c.db,
+          sessionClone: (id, instructions) => c.app.sessionForker.clone(id, instructions),
           dispatch: (id) => c.app.dispatchService.dispatch(id),
-          executeAction: (id, action, opts) => executeAction(c.app, id, action, opts),
-          runVerification: (id) => c.app.sessionLifecycle.runVerification(id),
-          recordSessionUsage: (session, usage, provider, source) =>
-            c.app.sessionLifecycle.recordSessionUsage(session, usage, provider, source),
-          sessionClone: (id, newName) => c.app.sessionLifecycle.clone(id, newName),
-          capturePlanMd: (session) => capturePlanMdIfPresent(c.app, session),
-          gcComputeIfTemplate: (computeName) => garbageCollectComputeIfTemplate(c.app, computeName ?? null),
-          saveCheckpoint: (sessionId) => saveCheckpoint({ sessions: c.sessions, events: c.events }, sessionId),
-          ...buildFlowCallbacks(c.app),
-          // Stop the previous stage's poller before sessions.update clears
-          // session_id. Closes the stale-handle race documented at
-          // executors/status-poller.ts#L205.
-          stopStatusPoller: (sessionId) => c.app.statusPollers.stop(sessionId),
         }),
       { lifetime },
     ),

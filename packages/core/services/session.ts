@@ -15,21 +15,11 @@ import type { EventRepository } from "../repositories/event.js";
 import type { MessageRepository } from "../repositories/message.js";
 import type { AppContext } from "../app.js";
 import { logDebug } from "../observability/structured-log.js";
-import { SessionDispatchListeners, markDispatchFailedShared } from "./session-dispatch-listeners.js";
 import { ValidationError } from "./orchestrator-errors.js";
 
 // ── SessionService ───────────────────────────────────────────────────────────
 
 export class SessionService {
-  /**
-   * `app` is optional so a SessionService can be constructed with just repos
-   * in pure-unit tests that only exercise `start()` + direct repo pass-throughs.
-   * Methods that reach into other AppContext services (stop, dispatch, spawn,
-   * advance, ...) throw via the `app` accessor when the service was built
-   * without one.
-   */
-  private readonly dispatchListeners: SessionDispatchListeners;
-
   /**
    * Factory for the Temporal client. Overridable in tests (assign a stub
    * function to `(service as any)._temporalClientFactory`) without needing
@@ -42,15 +32,7 @@ export class SessionService {
     private events: EventRepository,
     private messages: MessageRepository,
     private readonly _app: AppContext | null = null,
-  ) {
-    // The default dispatcher routes through DispatchService.dispatch (typed
-    // DispatchResult) rather than the SessionService.dispatch wrapper which
-    // returns the looser SessionOpResult shape. The listener relies on the
-    // typed `launched:boolean` discriminator.
-    this.dispatchListeners = new SessionDispatchListeners(this.sessions, this.events, (sessionId) =>
-      this.app.dispatchService.dispatch(sessionId),
-    );
-  }
+  ) {}
 
   private get app(): AppContext {
     if (!this._app) {
@@ -81,13 +63,25 @@ export class SessionService {
     // Tests that need the legacy NULL behaviour go through
     // `app.sessions.create()` directly. See #472.
     const app = this._app;
-    const usesTemporal =
-      app !== null && app.mode.kind === "hosted" && app.config.features.temporalOrchestration === true;
+
+    // Per-stage-pod invariant: in hosted mode `local` compute would execute
+    // the agent in-process on the control-plane / temporal-worker pod with
+    // zero isolation (it competes with the control plane for resources and
+    // breaks the "one pod per flow stage" model). Reject early and loudly
+    // instead of silently running it in the worker.
+    const effectiveComputeName = opts.compute_name ?? "local";
+    if (app !== null && app.mode.kind === "hosted" && effectiveComputeName === "local") {
+      throw new ValidationError(
+        `Hosted mode requires an explicit non-local compute_name -- 'local' would run the agent ` +
+          `inside the control-plane/temporal-worker pod with zero isolation. Pass a registered ` +
+          `compute target (k8s / ec2 / docker).`,
+      );
+    }
 
     const session = await this.sessions.create({
       ...opts,
-      compute_name: opts.compute_name ?? "local",
-      orchestrator: usesTemporal ? "temporal" : "custom",
+      compute_name: effectiveComputeName,
+      orchestrator: "temporal",
     });
 
     // Apply agent override if specified
@@ -105,35 +99,9 @@ export class SessionService {
       },
     });
 
-    if (usesTemporal) {
-      const { getTemporalClient } = await import("../temporal/client.js");
-      const client = await getTemporalClient(app.config.temporal);
-      const wfId = `session-${session.id}`;
-      const handle = await client.workflow.start("sessionWorkflow", {
-        taskQueue: `ark.${app.tenantId ?? "default"}.stages`,
-        workflowId: wfId,
-        // Hard wall-clock cap so a stuck workflow eventually closes itself.
-        // Without this, an orphan (worker crash, stop() that didn't terminate,
-        // signal that never arrives) stays Running until namespace retention.
-        workflowExecutionTimeout: (app.config.temporal?.workflowExecutionTimeout ?? "24h") as any,
-        args: [
-          {
-            sessionId: session.id,
-            tenantId: app.tenantId ?? "default",
-            flowName: (opts as any).flow ?? "default",
-          },
-        ],
-      });
-      await this.sessions.update(session.id, {
-        workflow_id: wfId,
-        workflow_run_id: handle.firstExecutionRunId,
-      } as Partial<Session>);
-    }
-    // Phase 3 cutover: bespoke dispatch only fires when Temporal is OFF.
-    // In Temporal mode the workflow drives every stage via dispatchStageActivity.
-    if (!usesTemporal) {
-      this.emitSessionCreated(session.id);
-    }
+    // Temporal is the sole orchestrator: the session-workflow loop drives
+    // every stage via dispatchStageActivity. There is no bespoke fallback.
+    await this.startSessionWorkflow(session.id, `session-${session.id}`, (opts as any).flow ?? "default");
     return (await this.sessions.get(session.id))!;
   }
 
@@ -157,7 +125,7 @@ export class SessionService {
     // orchestration for full cleanup (tmux kill, provider cleanup, hooks removal)
     if (session.session_id) {
       try {
-        return await this.app.sessionLifecycle.stop(id, opts);
+        return await this.app.sessionTerminator.stop(id, opts);
       } catch {
         logDebug("session", "AppContext not available (e.g. unit tests) -- fall through to local stop");
       }
@@ -200,6 +168,39 @@ export class SessionService {
   }
 
   /**
+   * Start the Temporal session-workflow for a session and persist its
+   * workflow id/run id. Shared by `start()` (fresh) and `resume()` (a new
+   * workflow id since the prior one was terminated/completed).
+   */
+  private async startSessionWorkflow(sessionId: string, workflowId: string, flowName: string): Promise<void> {
+    const app = this.app;
+    const { getTemporalClient } = await import("../temporal/client.js");
+    const factory = this._temporalClientFactory ?? getTemporalClient;
+    const client = await factory(app.config.temporal);
+    const handle = await client.workflow.start("sessionWorkflow", {
+      taskQueue: `ark.${app.tenantId ?? "default"}.stages`,
+      workflowId,
+      // Hard wall-clock cap so a stuck workflow eventually closes itself.
+      // Without this, an orphan (worker crash, stop() that didn't terminate,
+      // signal that never arrives) stays Running until namespace retention.
+      workflowExecutionTimeout: (app.config.temporal?.workflowExecutionTimeout ?? "24h") as any,
+      args: [{ sessionId, tenantId: app.tenantId ?? "default", flowName }],
+    });
+    await this.sessions.update(sessionId, {
+      workflow_id: workflowId,
+      workflow_run_id: handle.firstExecutionRunId,
+    } as Partial<Session>);
+  }
+
+  /**
+   * Start the Temporal session-workflow for an already-created session row
+   * (subagents / fan-out children whose row is built outside `start()`).
+   */
+  async startWorkflowFor(sessionId: string, flowName: string): Promise<void> {
+    await this.startSessionWorkflow(sessionId, `session-${sessionId}`, flowName);
+  }
+
+  /**
    * Stop all running sessions. Used during test teardown and hosted shutdown.
    * Goes through the proper stop sequence for each (provider kill + cleanup).
    *
@@ -228,39 +229,12 @@ export class SessionService {
     for (const s of all) {
       if (s.session_id) {
         try {
-          await this.app.sessionLifecycle.stop(s.id, { force: true });
+          await this.app.sessionTerminator.stop(s.id, { force: true });
         } catch (err: any) {
           logDebug("session", `stopAll: ${s.id}: ${err?.message ?? err}`);
         }
       }
     }
-  }
-
-  // ── Lifecycle-driven dispatch ─────────────────────────────────────────────
-  //
-  // The service owns every "a new session was created, launch it" moment.
-  // Callers -- handlers, CLI, fork/clone/spawn orchestration -- just notify
-  // the service that a session was created; dispatch happens automatically
-  // in the background via SessionDispatchListeners (see sibling file).
-
-  /** @see SessionDispatchListeners.subscribe */
-  onSessionCreated(listener: (sessionId: string) => void): () => void {
-    return this.dispatchListeners.subscribe(listener);
-  }
-
-  /** @see SessionDispatchListeners.emit */
-  emitSessionCreated(sessionId: string): void {
-    this.dispatchListeners.emit(sessionId);
-  }
-
-  /** @see SessionDispatchListeners.registerDefaultDispatcher */
-  registerDefaultDispatcher(onDispatched: (session: Session | null) => void): () => void {
-    return this.dispatchListeners.registerDefaultDispatcher(onDispatched);
-  }
-
-  /** @see SessionDispatchListeners.drain -- await in-flight dispatches at shutdown. */
-  async drainPendingDispatches(): Promise<void> {
-    await this.dispatchListeners.drain();
   }
 
   /**
@@ -388,107 +362,16 @@ export class SessionService {
       },
     });
 
-    // Route based on the (post-rewind) stage's action type: agent stages go
-    // through the usual dispatcher (tmux + claude launch). Action stages
-    // (`create_pr`, `merge`, ...) are not dispatchable -- `dispatch()` returns
-    // `ok:false` with "Stage 'X' is action, not agent". For those, re-run the
-    // action via `executeAction`, matching the auto-handoff path at
-    // `session-hooks.ts:737`. Without this branch, Restart on any session
-    // whose current stage is an action is silently a no-op.
-    const route = await this.resolveResumeRoute(id, session.flow, targetStage);
-    if (route === "agent") {
-      // Re-emit the session_created lifecycle moment so the registered
-      // default dispatcher picks it up. That path owns its own pending-set
-      // tracking and dispatch_failed surfacing -- no need for a private
-      // kickDispatch shim on SessionService.
-      this.emitSessionCreated(id);
-    } else if (route === "action") {
-      this.kickActionStage(id);
-    }
+    // Restart the Temporal session-workflow: the prior workflow was
+    // terminated (stop/fail/delete) or completed, so re-running the flow
+    // means starting a fresh execution. The workflow loop drives both agent
+    // and action stages via dispatchStageActivity -- there is no in-process
+    // resume routing. A run-suffixed workflow id avoids colliding with the
+    // terminated/closed prior execution that still carries `session-<id>`.
+    await this.terminateTemporalWorkflowIfAny(session, "resumed -- restarting workflow");
+    await this.startSessionWorkflow(id, `session-${id}-r${Date.now().toString(36)}`, session.flow);
 
     return { ok: true, message: "OK", sessionId: id };
-  }
-
-  /** Pick the re-run path for the session's current stage. */
-  private async resolveResumeRoute(
-    sessionId: string,
-    flowName: string,
-    stage: string | null,
-  ): Promise<"agent" | "action" | "noop"> {
-    if (!stage) return "noop";
-    try {
-      const flow = await import("./flow.js");
-      const action = flow.getStageAction(this.app, flowName, stage);
-      if (action.type === "agent" || action.type === "fork") return "agent";
-      if (action.type === "action") return "action";
-    } catch (err) {
-      await this.events.log(sessionId, "dispatch_failed", {
-        actor: "system",
-        data: { reason: `resolveResumeRoute failed: ${err instanceof Error ? err.message : String(err)}` },
-      });
-    }
-    return "noop";
-  }
-
-  /**
-   * Re-run a non-agent action stage in the background. Mirrors the handoff
-   * path in `session-hooks.ts` but without the auto-advance chaining -- the
-   * user explicitly asked to re-run THIS stage; if the action succeeds the
-   * normal post-action handoff takes over from there.
-   */
-  private kickActionStage(sessionId: string): void {
-    const promise = (async () => {
-      try {
-        const session = await this.sessions.get(sessionId);
-        if (!session?.stage) return;
-        const flow = await import("./flow.js");
-        const action = flow.getStageAction(this.app, session.flow, session.stage);
-        if (action.type !== "action" || !action.action) return;
-        const { executeAction } = await import("./actions/index.js");
-        const result = await executeAction(this.app, sessionId, action.action);
-        if (!result.ok) {
-          // Without flipping status to `failed`, an action stage that errors
-          // on resume (`create_pr`, `merge`, ...) emits the dispatch_failed
-          // event but the session row stays at `status=ready` forever. Use
-          // the shared helper so resume + auto-handoff produce the same
-          // event + status-update shape on action failure.
-          await markDispatchFailedShared(
-            this.sessions,
-            this.events,
-            sessionId,
-            `action '${action.action}' failed: ${result.message}`,
-          );
-          return;
-        }
-        // Success: advance the flow. Without this, an action stage
-        // re-run via resume (e.g. a create_pr that failed once and got
-        // retried) completes the action but leaves the session sitting
-        // at `status=ready, stage=<action>` forever. The regular
-        // dispatch path handles this via `mediateStageHandoff` after
-        // `executeAction` returns (see dispatch-core.ts); mirror that
-        // here so resume behaves the same way.
-        const postAction = await this.sessions.get(sessionId);
-        if (postAction?.status === "ready") {
-          await this.app.sessionHooks.mediateStageHandoff(sessionId, {
-            autoDispatch: true,
-            source: "resume_action",
-          });
-        }
-      } catch (err) {
-        // Mirror the action-failure branch above: thrown errors leave the
-        // session at status=ready otherwise. markDispatchFailedShared logs
-        // the dispatch_failed event AND flips status to failed.
-        await markDispatchFailedShared(
-          this.sessions,
-          this.events,
-          sessionId,
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-    })();
-    // Register on the listener's pending set so app.shutdown() awaits this
-    // background promise alongside listener-owned dispatches.
-    this.dispatchListeners.track(promise);
   }
 
   /**
@@ -535,28 +418,6 @@ export class SessionService {
   }
 
   /**
-   * Interrupt a running agent (Ctrl+C) without killing the tmux session.
-   * Delegates to session-orchestration.ts interrupt().
-   */
-  async interrupt(id: string): Promise<SessionOpResult> {
-    return this.app.sessionLifecycle.interrupt(id);
-  }
-
-  /**
-   * Archive a session for later reference.
-   */
-  async archive(id: string): Promise<SessionOpResult> {
-    return this.app.sessionLifecycle.archive(id);
-  }
-
-  /**
-   * Restore an archived session back to stopped.
-   */
-  async restore(id: string): Promise<SessionOpResult> {
-    return this.app.sessionLifecycle.restore(id);
-  }
-
-  /**
    * Soft-delete a session (90s undo window).
    * Port of session.ts deleteSessionAsync() -- simplified: no tmux/provider
    * cleanup (caller handles), just state transition.
@@ -586,149 +447,13 @@ export class SessionService {
     return { ok: true, message: "OK", sessionId: id };
   }
 
-  // ── Delegating methods (complex orchestration -- call through to session.ts) ──
-
-  /**
-   * Dispatch a session: resolve agent, build task, launch executor.
-   * Delegates to the DispatchService which owns tmux/executor/flow logic.
-   */
-  async dispatch(id: string, opts?: { onLog?: (msg: string) => void }): Promise<SessionOpResult> {
-    return this.app.dispatchService.dispatch(id, opts);
-  }
-
-  /**
-   * Advance a session to the next flow stage.
-   * Delegates to the StageAdvanceService which owns gate evaluation and flow progression.
-   */
-  async advance(id: string, force?: boolean): Promise<SessionOpResult> {
-    return this.app.stageAdvance.advance(id, force);
-  }
-
-  /**
-   * Get captured output from a running session's tmux pane.
-   */
-  async getOutput(id: string, opts?: { lines?: number; ansi?: boolean }): Promise<string> {
-    const { getOutput: legacyGetOutput } = await import("./session-output.js");
-    return legacyGetOutput(this.app, id, opts);
-  }
-
   /**
    * Send a message to a running session's tmux pane.
    */
   async send(id: string, message: string): Promise<SessionOpResult> {
     const { send: legacySend } = await import("./session-output.js");
-    return legacySend(this.app, id, message);
-  }
-
-  /**
-   * Poll until session reaches a terminal state (completed/failed/stopped).
-   */
-  async waitForCompletion(
-    id: string,
-    opts?: { timeoutMs?: number; pollMs?: number; onStatus?: (status: string) => void },
-  ): Promise<{ session: Session | null; timedOut: boolean }> {
-    return this.app.sessionLifecycle.waitForCompletion(id, opts);
-  }
-
-  /**
-   * Fork a session: create a new session from the same point in the flow.
-   */
-  async fork(id: string, name?: string): Promise<SessionOpResult> {
-    // session.ts has a narrower local SessionOpResult (no `message` on success)
-    return this.app.sessionLifecycle.fork(id, name, {
-      onCreated: (sid) => this.emitSessionCreated(sid),
-    }) as unknown as SessionOpResult;
-  }
-
-  /**
-   * Clone a session: deep copy including claude_session_id for --resume.
-   */
-  async clone(id: string, name?: string): Promise<SessionOpResult> {
-    return this.app.sessionLifecycle.clone(id, name, {
-      onCreated: (sid) => this.emitSessionCreated(sid),
-    }) as unknown as SessionOpResult;
-  }
-
-  /**
-   * Spawn a subagent session under a parent.
-   */
-  async spawn(
-    parentId: string,
-    opts: {
-      task: string;
-      agent?: string;
-      group_name?: string;
-      extensions?: string[];
-    },
-  ): Promise<SessionOpResult> {
-    const { spawnSubagent } = await import("./subagents.js");
-    return spawnSubagent(this.app, parentId, opts);
-  }
-
-  /**
-   * Fan-out: create parallel child sessions from a parent.
-   */
-  async fanOut(sessionId: string, opts: { tasks: Array<{ summary: string; agent?: string; flow?: string }> }) {
-    const { fanOut } = await import("./fork-join.js");
-    return fanOut(this.app, sessionId, opts);
-  }
-
-  /**
-   * Handoff: clone session to a different agent and dispatch.
-   */
-  async handoff(id: string, agent: string, instructions?: string): Promise<SessionOpResult> {
-    return this.app.stageAdvance.handoff(id, agent, instructions);
-  }
-
-  /**
-   * Get a diff summary for a session's worktree branch vs its base branch.
-   */
-  async worktreeDiff(id: string, opts?: { base?: string }): Promise<any> {
-    const { worktreeDiff: legacyDiff } = await import("./worktree/index.js");
-    return legacyDiff(this.app, id, opts);
-  }
-
-  /**
-   * Finish a worktree: merge back and clean up.
-   */
-  async finishWorktree(
-    id: string,
-    opts?: {
-      into?: string;
-      noMerge?: boolean;
-      keepBranch?: boolean;
-      createPR?: boolean;
-    },
-  ): Promise<SessionOpResult> {
-    const { finishWorktree: legacyFinish } = await import("./worktree/index.js");
-    return legacyFinish(this.app, id, opts);
-  }
-
-  /**
-   * Rebase a session's branch onto the base branch.
-   */
-  async rebaseOntoBase(id: string, opts?: { base?: string }): Promise<SessionOpResult> {
-    const { rebaseOntoBase: legacyRebase } = await import("./worktree/index.js");
-    return legacyRebase(this.app, id, opts);
-  }
-
-  /**
-   * Create a GitHub PR from a session's worktree branch.
-   */
-  async createWorktreePR(
-    id: string,
-    opts?: { title?: string; body?: string; base?: string; draft?: boolean },
-  ): Promise<SessionOpResult & { pr_url?: string }> {
-    const { createWorktreePR: legacyCreatePR } = await import("./worktree/index.js");
-    return legacyCreatePR(this.app, id, opts);
-  }
-
-  /**
-   * Join forked children back into parent session.
-   */
-  async join(parentId: string, force?: boolean): Promise<SessionOpResult> {
-    const { joinFork } = await import("./fork-join.js");
-    return joinFork(this.app, parentId, force);
+    const { depsFromApp } = await import("./deps.js");
+    return legacySend(depsFromApp(this.app), id, message);
   }
 
   /**
@@ -752,8 +477,8 @@ export class SessionService {
       return { ok: true, message: "OK", sessionId: id };
     }
 
-    const { approveReviewGate: legacyApprove } = await import("./review-gate.js");
-    return legacyApprove(this.app, id);
+    // Temporal is the sole orchestrator; a session without it is corrupt.
+    return { ok: false, message: `Session ${id} is not Temporal-orchestrated` };
   }
 
   /**
@@ -780,10 +505,8 @@ export class SessionService {
       return { ok: true, message: "OK", sessionId: id };
     }
 
-    const { rejectReviewGate: legacyReject } = await import("./review-gate.js");
-    const r = await legacyReject(this.app, id, reason ?? "");
-    // review-gate returns { ok, message } without sessionId; widen to SessionOpResult.
-    return { ...r, sessionId: id } as SessionOpResult;
+    // Temporal is the sole orchestrator; a session without it is corrupt.
+    return { ok: false, message: `Session ${id} is not Temporal-orchestrated` };
   }
 
   // ── Query helpers ─────────────────────────────────────────────────────────

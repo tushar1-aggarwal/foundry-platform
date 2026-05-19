@@ -265,13 +265,19 @@ describe("writeChannelConfig", () => {
     expect(content.mcpServers["ark-channel"]).toBeDefined();
   });
 
-  it("uses bun path from home directory in command", () => {
+  it("launches the channel with the running runtime executable", () => {
     const workdir = getCtx().arkDir;
     writeChannelConfig("s-test", "deploy", 19400, workdir);
 
     const content = JSON.parse(readFileSync(join(workdir, ".mcp.json"), "utf-8"));
     const channelConfig = content.mcpServers["ark-channel"];
-    expect(channelConfig.command).toContain(".bun/bin/bun");
+    // The channel subprocess must run under the exact runtime executing now
+    // (process.execPath), not a hardcoded install layout -- bun may be
+    // installed via the official installer, mise, asdf, nix, or Homebrew.
+    expect(channelConfig.command).toBe(process.execPath);
+    expect(existsSync(channelConfig.command)).toBe(true);
+    // Dev mode: args = [<repo>/packages/cli/index.ts, "channel"].
+    expect(channelConfig.args).toContain("channel");
   });
 
   it("merges MCP servers from original repo into worktree", () => {

@@ -46,15 +46,7 @@ export { type SkillDefinition } from "./agent/skill.js";
 // Executor
 export type { Executor, LaunchOpts, LaunchResult, ExecutorStatus } from "./executor.js";
 export { registerExecutor, getExecutor, listExecutors, resetExecutors } from "./executor.js";
-export {
-  claudeCodeExecutor,
-  subprocessExecutor,
-  cliAgentExecutor,
-  gooseExecutor,
-  builtinExecutors,
-  loadPluginExecutors,
-} from "./executors/index.js";
-export { buildGooseCommand } from "./executors/goose.js";
+export { subprocessExecutor, builtinExecutors, loadPluginExecutors } from "./executors/index.js";
 
 // Plugin registry -- canonical source for extensible collections
 export type { PluginRegistry, PluginEntry, PluginKind, PluginKindMap, PluginSource } from "./plugins/registry.js";
@@ -167,8 +159,6 @@ export {
   type FindOpts,
 } from "./runtimes/transcript-parser.js";
 export { ClaudeTranscriptParser } from "./runtimes/claude/parser.js";
-export { CodexTranscriptParser } from "./runtimes/codex/parser.js";
-export { GeminiTranscriptParser } from "./runtimes/gemini/parser.js";
 
 // Reliable send
 export { sendReliable, hasPasteMarker, isReadyForInput, type SendOptions } from "./send-reliable.js";

@@ -81,7 +81,7 @@ dev: ## Hot-reload: API + Vite HMR + daemon
 	@echo ""
 	@trap 'kill 0' EXIT; \
 	  $(BUN) --watch packages/cli/index.ts web --port 8420 --api-only 2>&1 | sed 's/^/[api] /' & \
-	  sleep 1 && cd packages/web && npx vite --port 5173 2>&1 | sed 's/^/[web] /' & \
+	  sleep 1 && cd packages/web && bunx --bun vite --port 5173 2>&1 | sed 's/^/[web] /' & \
 	  wait
 
 dev-daemon: ## Hot-reload: server daemon (conductor :19100 + arkd :19300 + WS :19400)
@@ -107,7 +107,7 @@ dev-web: ## Hot-reload: API server (:8420) + Vite frontend (:5173)
 	@echo ""
 	@trap 'kill 0' EXIT; \
 	  $(BUN) --watch packages/cli/index.ts web --port 8420 --api-only 2>&1 | sed 's/^/[api] /' & \
-	  sleep 1 && cd packages/web && npx vite --port 5173 2>&1 | sed 's/^/[web] /' & \
+	  sleep 1 && cd packages/web && bunx --bun vite --port 5173 2>&1 | sed 's/^/[web] /' & \
 	  wait
 
 dev-temporal: ## Start local Temporal cluster (server :7233 + UI :8088) for Phase 0/1
@@ -135,14 +135,17 @@ dev-temporal-down: ## Stop and remove the local Temporal cluster + its data volu
 # ship as `docker-compose`. Some laptop setups have only one of the two.
 DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 
-dev-docker: ## Sub-target: Postgres :15433 + Redis :6379 containers (factored out of dev-control-plane)
+dev-docker: ## Sub-target: Postgres :15433 + Redis :6379 + LocalStack :4566 containers (factored out of dev-control-plane)
 	@command -v docker >/dev/null 2>&1 || { echo "Docker required. Install Docker Desktop."; exit 1; }
-	@echo "\033[1mStarting Ark dev docker (Postgres + Redis)...\033[0m"
-	# Scope to postgres+redis only. The compose file also defines `temporal-worker`,
-	# but that service depends on the Temporal server (separate `ark-temporal` project)
-	# being up at host.docker.internal:7233. `dev-control-plane` brings the worker up
-	# explicitly after `dev-temporal`; running it here would fail `--wait`.
-	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d --wait postgres redis
+	@echo "\033[1mStarting Ark dev docker (Postgres + Redis + LocalStack)...\033[0m"
+	# Scope to postgres+redis+localstack only. The compose file also defines
+	# `temporal-worker`, but that service depends on the Temporal server
+	# (separate `ark-temporal` project) being up at host.docker.internal:7233.
+	# `dev-control-plane` brings the worker up explicitly after `dev-temporal`;
+	# running it here would fail `--wait`. LocalStack must be up before the
+	# server because hosted-mode boot eagerly resolves blobStore (see
+	# packages/core/app.ts:176) and a missing endpoint fails the throw.
+	$(DOCKER_COMPOSE) -f .infra/docker-compose.dev.yaml -p ark-dev up -d --wait postgres redis localstack
 	@echo ""
 	@echo "  Postgres:  postgres://ark:ark@localhost:15433/ark"
 	@echo "  Redis:     redis://localhost:6379"
@@ -732,7 +735,7 @@ build-cli: ## Build native macOS CLI binary (current arch)
 	@echo "Built: ark-native ($$(du -h ark-native | cut -f1))"
 
 build-web: ## Build web frontend (Vite production)
-	@cd packages/web && npx vite build --logLevel error 2>/dev/null || $(BUN) run packages/web/build.ts
+	@cd packages/web && bunx --bun vite build --logLevel error 2>/dev/null || $(BUN) run build.ts
 
 # ── Packaging (all platforms) ────────────────────────────────────────────────
 

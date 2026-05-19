@@ -71,8 +71,7 @@ function configFromFlags(kind: string, isolation: string, opts: Record<string, a
       };
     }
 
-    case "k8s":
-    case "k8s-kata": {
+    case "k8s": {
       // No silent defaults -- see commit 91217e89. Empty fields stay empty so
       // a misconfigured target fails fast instead of provisioning into the
       // wrong cluster / namespace.
@@ -91,11 +90,6 @@ function configFromFlags(kind: string, isolation: string, opts: Record<string, a
       }
       return cfg;
     }
-
-    case "firecracker":
-      // Local Firecracker derives kernel/rootfs/networking from host state;
-      // no CLI-exposed knobs today.
-      return {};
 
     default:
       return {};
@@ -142,8 +136,7 @@ function displaySummary(
       return lines;
     }
 
-    case "k8s":
-    case "k8s-kata": {
+    case "k8s": {
       const lines: string[] = [];
       if (config.context) lines.push(`  Context:    ${config.context}`);
       if (config.namespace) lines.push(`  Namespace:  ${config.namespace}`);
@@ -155,9 +148,6 @@ function displaySummary(
       if (res?.cpu || res?.memory) lines.push(`  Resources:  cpu=${res?.cpu ?? "-"} mem=${res?.memory ?? "-"}`);
       return lines;
     }
-
-    case "firecracker":
-      return [];
 
     default:
       return [];
@@ -237,8 +227,8 @@ export function registerCreateCommand(computeCmd: Command) {
     .description("Create a new compute resource (concrete target or reusable template)")
     .argument("<name>", "Compute name")
     // Two-axis target.
-    .option("--kind <kind>", "Compute kind (local, firecracker, ec2, k8s, k8s-kata)")
-    .option("--isolation <kind>", "Isolation kind (direct, docker, compose, devcontainer)")
+    .option("--kind <kind>", "Compute kind (local, ec2, k8s)")
+    .option("--isolation <kind>", "Isolation kind (direct, docker, compose, devcontainer, worktree)")
     // Common.
     .option("--template", "Create a reusable template (blueprint) instead of a concrete compute target")
     .option("--no-prompt", "Skip interactive prompts (fail if required fields are missing)")
@@ -263,7 +253,7 @@ export function registerCreateCommand(computeCmd: Command) {
     .option("--namespace <ns>", "K8s namespace -- required for k8s")
     .option("--kubeconfig <path>", "Path to kubeconfig (default: in-cluster or ~/.kube/config)")
     .option("--service-account <sa>", "Pod service account name (for IRSA, etc.)")
-    .option("--runtime-class <class>", "K8s runtime class (e.g. kata-fc for Firecracker)")
+    .option("--runtime-class <class>", "K8s runtime class (e.g. gvisor)")
     .option("--cpu <amt>", "CPU request/limit (e.g. 2 or 500m)")
     .option("--memory <amt>", "Memory request/limit (e.g. 4Gi)")
     .action(async (name, opts) => {
@@ -290,7 +280,7 @@ export function registerCreateCommand(computeCmd: Command) {
 
       // K8s interactive prompts when the user omitted required fields.
       // Skip on non-TTY and when --no-prompt is passed.
-      if ((kind === "k8s" || kind === "k8s-kata") && !opts.fromTemplate) {
+      if (kind === "k8s" && !opts.fromTemplate) {
         await promptK8sIfNeeded(opts);
       }
 

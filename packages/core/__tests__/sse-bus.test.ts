@@ -1,5 +1,31 @@
 import { describe, it, expect } from "bun:test";
 import { InMemorySSEBus, createSSEBus } from "../hosted/sse-bus.js";
+import { _setRedisClientFactory, type RedisPubSubClient } from "../hosted/redis-pubsub.js";
+
+class Broker {
+  private subs = new Map<string, Set<(m: string) => void>>();
+  publish(channel: string, message: string): void {
+    for (const cb of this.subs.get(channel) ?? []) cb(message);
+  }
+  subscribe(channel: string, cb: (m: string) => void): void {
+    if (!this.subs.has(channel)) this.subs.set(channel, new Set());
+    this.subs.get(channel)!.add(cb);
+  }
+}
+
+function makeFactory(broker: Broker) {
+  return (_url: string): RedisPubSubClient => ({
+    connect: async () => {},
+    publish: (channel, message) => {
+      broker.publish(channel, message);
+      return 1;
+    },
+    subscribe: async (channel, listener) => {
+      broker.subscribe(channel, listener);
+    },
+    quit: async () => {},
+  });
+}
 
 describe("InMemorySSEBus", () => {
   it("publishes events to subscribers", () => {
@@ -126,17 +152,17 @@ describe("createSSEBus", () => {
     expect(bus).toBeInstanceOf(InMemorySSEBus);
   });
 
-  it("returns InMemorySSEBus for explicit memory type", () => {
-    const bus = createSSEBus({ type: "memory" });
+  it("returns InMemorySSEBus when no redisUrl is given", () => {
+    const bus = createSSEBus({});
     expect(bus).toBeInstanceOf(InMemorySSEBus);
   });
 
-  it("falls back to InMemorySSEBus for redis type (not yet implemented)", () => {
-    // Suppress console.warn
-    const orig = console.warn;
-    console.warn = () => {};
-    const bus = createSSEBus({ type: "redis", redisUrl: "redis://localhost:6379" });
-    expect(bus).toBeInstanceOf(InMemorySSEBus);
-    console.warn = orig;
+  it("returns a Redis-backed bus when redisUrl is set", async () => {
+    const broker = new Broker();
+    _setRedisClientFactory(makeFactory(broker));
+    const { RedisSSEBus } = await import("../hosted/sse-redis.js");
+    const bus = createSSEBus({ redisUrl: "redis://fake" });
+    expect(bus).toBeInstanceOf(RedisSSEBus);
+    _setRedisClientFactory();
   });
 });

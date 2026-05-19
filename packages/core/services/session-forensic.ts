@@ -16,7 +16,7 @@
 import { promises as fsPromises } from "node:fs";
 import { join } from "node:path";
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import type { Session } from "../../types/index.js";
 import { encodeLocator, LOCAL_TENANT_ID } from "../storage/blob-store.js";
 
@@ -157,7 +157,7 @@ export function parseJsonl(content: string): unknown[] {
  * the failure record.
  */
 export async function captureWorkerForensics(
-  app: AppContext,
+  deps: OrchestrationDeps,
   session: Session,
   arkdUrl: string,
 ): Promise<{ stdioTail: string }> {
@@ -173,7 +173,7 @@ export async function captureWorkerForensics(
         const content = res?.content ?? "";
         if (!content) continue;
         const bytes = Buffer.from(content, "utf-8").subarray(0, FORENSIC_MAX_BYTES);
-        await app.blobStore.put({ tenantId, namespace: FORENSIC_NS, id: session.id, filename: fileName }, bytes, {
+        await deps.blobStore.put({ tenantId, namespace: FORENSIC_NS, id: session.id, filename: fileName }, bytes, {
           contentType: fileName.endsWith(".jsonl") ? "application/x-ndjson" : "text/plain",
           maxBytes: FORENSIC_MAX_BYTES,
         });
@@ -197,17 +197,17 @@ export async function captureWorkerForensics(
  * someone opens the Logs tab).
  */
 export async function readSessionForensic(
-  app: AppContext,
+  deps: OrchestrationDeps,
   session: Session,
   fileName: string,
   opts: { tail?: number } = {},
 ): Promise<ForensicReadResult> {
-  const local = await readForensicFile(app.config.dirs.tracks, session.id, fileName, opts);
+  const local = await readForensicFile(deps.config.dirs.tracks, session.id, fileName, opts);
   if (local.exists || local.tooLarge) return local;
   try {
     const tenantId = session.tenant_id ?? LOCAL_TENANT_ID;
     const locator = encodeLocator({ tenantId, namespace: FORENSIC_NS, id: session.id, filename: fileName });
-    const { bytes } = await app.blobStore.get(locator, tenantId);
+    const { bytes } = await deps.blobStore.get(locator, tenantId);
     const size = bytes.byteLength;
     if (isForensicTooLarge(size, opts.tail)) {
       return { content: "", exists: true, size, tooLarge: true };

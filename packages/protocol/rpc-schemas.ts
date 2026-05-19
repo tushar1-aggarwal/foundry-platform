@@ -92,20 +92,12 @@ const sessionOpResult = z.object({
   sessionId: z.string().optional(),
 });
 
-// Legacy provider-name label kept on the wire for back-compat clients. The
-// canonical compute identity is now `compute_kind` + `isolation_kind`; the
-// legacy label is derived from that pair (see `legacyProviderLabel` in the
-// resource-compute handler). z.string() instead of z.enum() because new
-// pairs (k8s+kata, ec2+devcontainer, ...) ship labels not in the old enum.
-const computeProviderSchema = z.string();
 const computeStatusSchema = z.enum(["stopped", "running", "provisioning", "destroyed"]);
 
 const computeSchema = z
   .object({
     name: z.string(),
-    provider: computeProviderSchema,
-    // Two-axis kinds. Optional on the wire so responses from a server that
-    // hasn't shipped the schema change yet still parse.
+    // Compute identity is the two-axis (compute_kind, isolation_kind) pair.
     compute_kind: z.string().optional(),
     isolation_kind: z.string().optional(),
     status: computeStatusSchema,
@@ -504,8 +496,6 @@ export type ComputeListResponse = z.infer<typeof computeListResponse>;
 
 export const computeCreateRequest = z.object({
   name: z.string().min(1),
-  // `provider` is legacy; new callers pass `compute` + `isolation`.
-  provider: computeProviderSchema.optional(),
   compute: z.string().optional(),
   isolation: z.string().optional(),
   config: z.record(z.string(), z.unknown()).optional(),
@@ -538,7 +528,6 @@ const computeIsolationModeSchema = z.object({
 });
 
 const computeCapabilitiesSchema = z.object({
-  provider: z.string(),
   singleton: z.boolean(),
   canReboot: z.boolean(),
   canDelete: z.boolean(),
@@ -1655,8 +1644,6 @@ const computeTemplateSchema = z
   .object({
     name: z.string(),
     description: z.string().nullable().optional(),
-    provider: z.string(),
-    /** New two-axis (compute, isolation) pair derived from `provider`. */
     compute: z.string().optional(),
     isolation: z.string().optional(),
     config: z.unknown().optional(),

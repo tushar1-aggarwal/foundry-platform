@@ -162,7 +162,7 @@ describe("flow/validate handler", () => {
     expect(after).toBe(before);
     // Validate should not register the flow under its own name (or any
     // `inline-*` key we can observe) -- the overlay stays empty for this name.
-    expect(app.flows.get("ephemeral-check")).toBeNull();
+    expect(await app.flows.get("ephemeral-check")).toBeNull();
   });
 
   it("gates requires_repo: true on a named flow without a repo", async () => {

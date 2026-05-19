@@ -25,6 +25,7 @@ import { AppContext } from "../../../app.js";
 import { setApp, clearApp } from "../../../__tests__/test-helpers.js";
 import { allocatePort } from "../../../config/port-allocator.js";
 import { createWorktreePR, mergeWorktreePR, detectGitHost, parseCreatePrUrl, isGithubPrUrl } from "../pr.js";
+import { depsFromApp } from "../../deps.js";
 import type { Compute, Session } from "../../../../types/index.js";
 
 // ── Stub arkd server: records every /exec call and returns a programmable response ──
@@ -176,7 +177,7 @@ describe("mergeWorktreePR", () => {
       pr_url: "https://github.com/ytarasova/ark/tree/main",
     });
 
-    const result = await mergeWorktreePR(app, session.id);
+    const result = await mergeWorktreePR(depsFromApp(app), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/not a GitHub pull-request URL/);
     // Error message points the operator at the right fix path (#436 connector)
@@ -193,7 +194,7 @@ describe("mergeWorktreePR", () => {
       pr_url: "https://bitbucket.org/owner/repo/pull-requests/new?source=feat/x",
     });
 
-    const result = await mergeWorktreePR(app, session.id);
+    const result = await mergeWorktreePR(depsFromApp(app), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/auto-merge not supported for non-github/);
     expect(result.message).toContain("host=bitbucket");
@@ -205,7 +206,7 @@ describe("mergeWorktreePR", () => {
       flow: "quick",
       repo: "git@github.com:owner/repo.git",
     });
-    const result = await mergeWorktreePR(app, session.id);
+    const result = await mergeWorktreePR(depsFromApp(app), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/no PR URL/);
   });

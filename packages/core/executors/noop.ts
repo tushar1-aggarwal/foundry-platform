@@ -34,6 +34,16 @@ export const noopExecutor: Executor = {
     // and tests don't hang waiting for a real agent.
     return { state: "completed" as const, exitCode: 0 };
   },
+  // The prod status-poller prefers `probeStatus` over `status()` whenever a
+  // compute target resolves (every session has compute_name=local under
+  // test). Without this the poller falls to the arkd `checkAlive` path,
+  // which has no worker pod in-process and pins the session at "running"
+  // forever -- the Temporal workflow then never advances. Reporting
+  // completed here lets the real awaitStageCompletionActivity see the row
+  // flip to "ready" and the workflow progress, exactly as in prod.
+  async probeStatus() {
+    return { state: "completed" as const, exitCode: 0 };
+  },
   async send() {},
   async capture() {
     return "";
@@ -41,4 +51,4 @@ export const noopExecutor: Executor = {
 };
 
 /** Names the test-mode registry must override with the noop stub. */
-export const NOOP_EXECUTOR_NAMES = ["claude-code", "claude-agent", "goose", "cli-agent", "subprocess"] as const;
+export const NOOP_EXECUTOR_NAMES: string[] = ["claude-agent", "subprocess"];

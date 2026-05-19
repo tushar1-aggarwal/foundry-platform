@@ -80,11 +80,11 @@ describe("soft delete", () => {
   });
 });
 
-describe("sessionLifecycle.deleteSession with soft delete", async () => {
+describe("sessionTerminator.deleteSession with soft delete", async () => {
   it("soft-deletes instead of hard-deleting", async () => {
     const s = await getApp().sessions.create({ summary: "soft-kill" });
     await getApp().sessions.update(s.id, { session_id: `ark-s-${s.id}`, status: "running" });
-    const result = await getApp().sessionLifecycle.deleteSession(s.id);
+    const result = await getApp().sessionTerminator.deleteSession(s.id);
     expect(result.ok).toBe(true);
     const after = await getApp().sessions.get(s.id);
     expect(after).not.toBeNull();
@@ -92,19 +92,19 @@ describe("sessionLifecycle.deleteSession with soft delete", async () => {
   });
 });
 
-describe("sessionLifecycle.undeleteSession", async () => {
+describe("sessionTerminator.undeleteSession", async () => {
   it("restores a soft-deleted session", async () => {
     const s = await getApp().sessions.create({ summary: "restore" });
     await getApp().sessions.update(s.id, { status: "stopped" });
-    await getApp().sessionLifecycle.deleteSession(s.id);
-    const result = await getApp().sessionLifecycle.undeleteSession(s.id);
+    await getApp().sessionTerminator.deleteSession(s.id);
+    const result = await getApp().sessionTerminator.undeleteSession(s.id);
     expect(result.ok).toBe(true);
     const after = await getApp().sessions.get(s.id);
     expect(after!.status).toBe("stopped");
   });
 
   it("fails for non-existent session", async () => {
-    const result = await getApp().sessionLifecycle.undeleteSession("nope");
+    const result = await getApp().sessionTerminator.undeleteSession("nope");
     expect(result.ok).toBe(false);
   });
 });
@@ -179,18 +179,18 @@ describe("soft delete edge cases", async () => {
     expect(after.config._deleted_at).toBeUndefined();
   });
 
-  it("sessionLifecycle.undeleteSession returns error message for non-deleted session", async () => {
+  it("sessionTerminator.undeleteSession returns error message for non-deleted session", async () => {
     const s = await getApp().sessions.create({ summary: "not-deleted-async" });
     await getApp().sessions.update(s.id, { session_id: `ark-s-${s.id}`, status: "running" });
-    const result = await getApp().sessionLifecycle.undeleteSession(s.id);
+    const result = await getApp().sessionTerminator.undeleteSession(s.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found or not deleted");
   });
 
-  it("sessionLifecycle.deleteSession logs session_deleted event", async () => {
+  it("sessionTerminator.deleteSession logs session_deleted event", async () => {
     const s = await getApp().sessions.create({ summary: "event-check" });
     await getApp().sessions.update(s.id, { status: "pending" });
-    await getApp().sessionLifecycle.deleteSession(s.id);
+    await getApp().sessionTerminator.deleteSession(s.id);
     const events = await getApp().events.list(s.id);
     expect(events.some((e) => e.type === "session_deleted")).toBe(true);
   });

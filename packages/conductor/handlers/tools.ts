@@ -75,7 +75,7 @@ export function registerToolsHandlers(router: Router, app: AppContext): void {
       return { content };
     }
     if (kind === "ark-skill") {
-      const skill = app.skills.get(name, projectRoot);
+      const skill = await app.skills.get(name, projectRoot);
       return { skill };
     }
     return { content: null };

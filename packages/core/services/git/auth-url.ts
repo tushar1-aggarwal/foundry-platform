@@ -19,13 +19,13 @@
  * `BITBUCKET_USERNAME` alongside `BITBUCKET_TOKEN` lets us serve both token
  * types from a single code path.
  */
-import type { AppContext } from "../../app.js";
+import type { OrchestrationDeps } from "../deps.js";
 import type { Session } from "../../../types/index.js";
 
 /** Resolve a tenant-scoped secret with a `process.env` fallback for legacy daemons. */
-async function resolveSecret(app: AppContext, session: Session, name: string): Promise<string | undefined> {
+async function resolveSecret(deps: OrchestrationDeps, session: Session, name: string): Promise<string | undefined> {
   try {
-    const fromStore = await app.secrets.get(session.tenant_id, name);
+    const fromStore = await deps.secrets.get(session.tenant_id, name);
     if (fromStore) return fromStore;
   } catch {
     // Secret store unavailable -- fall through to env fallback.
@@ -33,16 +33,16 @@ async function resolveSecret(app: AppContext, session: Session, name: string): P
   return process.env[name] || undefined;
 }
 
-export async function resolveGithubToken(app: AppContext, session: Session): Promise<string | undefined> {
-  return resolveSecret(app, session, "GITHUB_TOKEN");
+export async function resolveGithubToken(deps: OrchestrationDeps, session: Session): Promise<string | undefined> {
+  return resolveSecret(deps, session, "GITHUB_TOKEN");
 }
 
-export async function resolveBitbucketToken(app: AppContext, session: Session): Promise<string | undefined> {
-  return resolveSecret(app, session, "BITBUCKET_TOKEN");
+export async function resolveBitbucketToken(deps: OrchestrationDeps, session: Session): Promise<string | undefined> {
+  return resolveSecret(deps, session, "BITBUCKET_TOKEN");
 }
 
-export async function resolveBitbucketUsername(app: AppContext, session: Session): Promise<string | undefined> {
-  return resolveSecret(app, session, "BITBUCKET_USERNAME");
+export async function resolveBitbucketUsername(deps: OrchestrationDeps, session: Session): Promise<string | undefined> {
+  return resolveSecret(deps, session, "BITBUCKET_USERNAME");
 }
 
 /**
@@ -56,17 +56,17 @@ export async function resolveBitbucketUsername(app: AppContext, session: Session
  * callers that subsequently log the URL should redact the token (see
  * `redactSecrets` in pr.ts for the existing pattern).
  */
-export async function buildAuthedHttpsUrl(app: AppContext, session: Session, url: string): Promise<string> {
+export async function buildAuthedHttpsUrl(deps: OrchestrationDeps, session: Session, url: string): Promise<string> {
   if (!url.startsWith("https://")) return url;
 
   if (url.startsWith("https://github.com/")) {
-    const token = await resolveGithubToken(app, session);
+    const token = await resolveGithubToken(deps, session);
     if (!token) return url;
     return `https://x-access-token:${token}@${url.slice("https://".length)}`;
   }
 
   if (url.startsWith("https://bitbucket.org/")) {
-    const token = await resolveBitbucketToken(app, session);
+    const token = await resolveBitbucketToken(deps, session);
     if (!token) return url;
     const host = url.slice("https://".length);
 
@@ -87,7 +87,7 @@ export async function buildAuthedHttpsUrl(app: AppContext, session: Session, url
     if (token.startsWith("ATATT")) {
       return `https://x-bitbucket-api-token-auth:${token}@${host}`;
     }
-    const username = await resolveBitbucketUsername(app, session);
+    const username = await resolveBitbucketUsername(deps, session);
     if (username && username.length > 0) {
       return `https://${encodeURIComponent(username)}:${token}@${host}`;
     }

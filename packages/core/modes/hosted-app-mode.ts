@@ -42,11 +42,10 @@ function makeNoopComputeBootstrap(): ComputeBootstrapCapability {
  * short-circuit to avoid nesting child scopes (which would invalidate
  * `===` identity checks on services across re-resolutions).
  *
- * Calls from the root context are memoized by tenantId so listeners
- * registered once on `root.forTenant("default").sessionService` are visible
- * to every later `root.forTenant("default")` resolution -- otherwise each
- * call returns a fresh child scope with empty SessionDispatchListeners and
- * the inline `session_created` dispatcher path silently no-ops.
+ * Calls from the root context are memoized by tenantId so a tenant's
+ * services keep stable `===` identity across every later
+ * `root.forTenant("default")` resolution instead of returning a fresh
+ * child scope each call.
  */
 function makeHostedTenantScope(): TenantScopeCapability {
   const cache = new Map<string, AppContext>();

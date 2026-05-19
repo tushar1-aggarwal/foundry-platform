@@ -23,7 +23,7 @@
  * (we apply that label below).
  */
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import type { Session, Compute } from "../../types/index.js";
 import { logDebug, logInfo, logWarn } from "../observability/structured-log.js";
 
@@ -58,17 +58,17 @@ export function perSessionSecretName(sessionId: string): string {
  * via `opts.k8sApiFactory` so unit tests never touch a real cluster.
  */
 export async function materializeClaudeAuthForDispatch(
-  app: AppContext,
+  deps: OrchestrationDeps,
   session: Session,
   compute: Compute | null,
   opts?: {
     k8sApiFactory?: (cfg: Record<string, unknown>) => Promise<K8sSecretsApi>;
   },
 ): Promise<ClaudeAuthMaterialization> {
-  const tenantId = session.tenant_id ?? app.config.authSection.defaultTenant ?? "default";
+  const tenantId = session.tenant_id ?? deps.config.authSection.defaultTenant ?? "default";
   // TenantClaudeAuthManager is a DI singleton; resolve via the accessor
   // instead of constructing per-dispatch.
-  const binding = await app.tenantClaudeAuth.get(tenantId);
+  const binding = await deps.app!.tenantClaudeAuth.get(tenantId);
   if (!binding) return EMPTY;
 
   if (binding.kind === "api_key") {
@@ -77,7 +77,7 @@ export async function materializeClaudeAuthForDispatch(
     // runs; the merge in dispatch overlays this on top so either path
     // works end-to-end.
     try {
-      const value = await app.secrets.get(tenantId, binding.secret_ref);
+      const value = await deps.secrets.get(tenantId, binding.secret_ref);
       if (!value) {
         logWarn(
           "session",
@@ -101,7 +101,7 @@ export async function materializeClaudeAuthForDispatch(
   // on a legacy provider name, so a new k8s-family Compute (e.g. EKS) gets
   // the Secret-mount path automatically by declaring `supportsSecretMount`.
   if (!compute) return EMPTY;
-  const computeImpl = app.getCompute(compute.compute_kind);
+  const computeImpl = deps.app!.getCompute(compute.compute_kind);
   if (!computeImpl || !computeImpl.capabilities.supportsSecretMount) {
     logDebug(
       "session",
@@ -115,7 +115,7 @@ export async function materializeClaudeAuthForDispatch(
   const secretName = perSessionSecretName(session.id);
 
   try {
-    const blob = await app.secrets.getBlob(tenantId, binding.secret_ref);
+    const blob = await deps.secrets.getBlob(tenantId, binding.secret_ref);
     if (!blob || Object.keys(blob).length === 0) {
       logWarn(
         "session",
@@ -134,9 +134,9 @@ export async function materializeClaudeAuthForDispatch(
     await createOrReplaceSecret(api, namespace, secretName, data, session.id, compute.name);
 
     // Mutate the cloned compute's config so K8sProvider.launch mounts it.
-    await app.computes.mergeConfig(compute.name, { credsSecretName: secretName });
+    await deps.computes.mergeConfig(compute.name, { credsSecretName: secretName });
     // Stash on session config so teardown can find + delete.
-    await app.sessions.mergeConfig(session.id, {
+    await deps.sessions.mergeConfig(session.id, {
       creds_secret_name: secretName,
       creds_secret_namespace: namespace,
     });
@@ -202,7 +202,7 @@ async function createOrReplaceSecret(
 
 /** Delete a per-session creds Secret. Safe to call when the Secret is absent. */
 export async function deletePerSessionCredsSecret(
-  app: AppContext,
+  deps: OrchestrationDeps,
   session: Session,
   compute: Compute | null,
   opts?: {
@@ -230,7 +230,7 @@ export async function deletePerSessionCredsSecret(
   } finally {
     // Clear the session config stash so repeat teardowns no-op.
     try {
-      await app.sessions.mergeConfig(session.id, {
+      await deps.sessions.mergeConfig(session.id, {
         creds_secret_name: null,
         creds_secret_namespace: null,
       });
@@ -290,7 +290,7 @@ export interface PodMetaRef {
  * we reach here, and the boot-time reconciler will catch leaks.
  */
 export async function setSecretOwnerToPod(
-  app: AppContext,
+  deps: OrchestrationDeps,
   opts: {
     clusterConfig: Record<string, unknown>;
     namespace: string;
@@ -316,10 +316,10 @@ export async function setSecretOwnerToPod(
     );
     return;
   }
-  // Narrow the AppContext reference (logs rely on structured-log's ambient
-  // arkDir which boot already wired). We don't need anything off `app`
-  // directly; keeping the param signature for symmetry with other helpers.
-  void app;
+  // Logs rely on structured-log's ambient arkDir which boot already wired.
+  // We don't need anything off `deps` directly; keeping the param signature
+  // for symmetry with other helpers.
+  void deps;
 
   try {
     const api = opts.api ?? (await (opts.k8sApiFactory ?? defaultK8sApiFactory)(clusterConfig));

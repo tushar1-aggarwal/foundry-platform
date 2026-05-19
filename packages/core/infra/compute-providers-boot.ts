@@ -15,13 +15,11 @@ export class ComputeProvidersBoot {
 
   async start(): Promise<void> {
     await safeAsync("boot: load compute providers", async () => {
-      // Compute / Isolation registrations for Kubernetes
+      // Compute registration for Kubernetes
       try {
         await import("@kubernetes/client-node");
         const { K8sCompute } = await import("../compute/k8s.js");
-        const { KataCompute } = await import("../compute/k8s-kata.js");
         this.app.registerCompute(new K8sCompute(this.app));
-        this.app.registerCompute(new KataCompute(this.app));
       } catch {
         logDebug("general", "@kubernetes/client-node not installed");
       }
@@ -33,16 +31,14 @@ export class ComputeProvidersBoot {
       const { DockerIsolation } = await import("../compute/isolation/docker.js");
       const { DevcontainerIsolation } = await import("../compute/isolation/devcontainer.js");
       const { DockerComposeIsolation } = await import("../compute/isolation/docker-compose.js");
+      const { WorktreeIsolation } = await import("../compute/isolation/worktree.js");
       this.app.registerCompute(new LocalCompute(this.app));
       this.app.registerCompute(new EC2Compute(this.app));
       this.app.registerIsolation(new DirectIsolation(this.app));
       this.app.registerIsolation(new DockerIsolation(this.app));
       this.app.registerIsolation(new DevcontainerIsolation(this.app));
       this.app.registerIsolation(new DockerComposeIsolation(this.app));
-
-      // FirecrackerCompute (gated on /dev/kvm availability)
-      const { registerFirecrackerIfAvailable } = await import("../compute/firecracker/compute.js");
-      registerFirecrackerIfAvailable(this.app);
+      this.app.registerIsolation(new WorktreeIsolation(this.app));
     });
   }
 

@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
 import { startConductor } from "./_util/start-test-server.js";
+import { ServerPollers } from "../infra/server-pollers.js";
 import { clearApp, getApp, setApp } from "./test-helpers.js";
 
 // Use a non-default port to avoid conflicts with a running conductor
@@ -295,40 +296,38 @@ describe("Conductor E2E -- report pipeline", async () => {
   });
 });
 
-describe("Conductor cleanup", async () => {
-  it("stop() clears interval timers (no leaked pollers)", async () => {
-    // Track active timers before and after conductor lifecycle
-    const timersBefore = new Set<ReturnType<typeof setInterval>>();
-
-    // Monkey-patch setInterval to track timer IDs
+describe("ServerPollers cleanup", () => {
+  it("stop() clears every interval timer it started (no leaked pollers)", () => {
     const originalSetInterval = globalThis.setInterval;
-    const trackedTimers: ReturnType<typeof setInterval>[] = [];
+    const originalClearInterval = globalThis.clearInterval;
+    const started: Array<ReturnType<typeof setInterval>> = [];
+    const cleared: Array<ReturnType<typeof setInterval>> = [];
+
     globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
       const id = originalSetInterval(...args);
-      trackedTimers.push(id);
+      started.push(id);
       return id;
     }) as typeof setInterval;
+    globalThis.clearInterval = ((id?: ReturnType<typeof setInterval>) => {
+      if (id !== undefined) cleared.push(id);
+      return originalClearInterval(id);
+    }) as typeof clearInterval;
 
-    const testServer = startConductor(app, TEST_PORT + 50, { quiet: true });
-
-    // Should have created at least 2 timers (schedule + PR poller)
-    expect(trackedTimers.length).toBeGreaterThanOrEqual(2);
-
-    // Stop the conductor -- this should clear the intervals
-    testServer.stop();
-
-    // Verify the timers were cleared by checking they don't fire
-    // We do this by trying to clear them again (clearInterval on already-cleared is no-op)
-    // The real test is that after stop(), no interval callbacks run on the wrong context
-    globalThis.setInterval = originalSetInterval;
-
-    // Verify the server is actually stopped (can't reach it)
     try {
-      await fetch(`http://localhost:${TEST_PORT + 50}/health`);
-      // If we get here, server didn't stop properly
-      expect(false).toBe(true);
-    } catch {
-      // Expected -- server is stopped
+      const before = started.length;
+      const pollers = new ServerPollers(app);
+      pollers.start();
+      // startPollers() registers schedule + PR review + PR merge unconditionally
+      // (the issue poller is only added when an issue label is configured).
+      const ours = started.slice(before);
+      expect(ours.length).toBeGreaterThanOrEqual(3);
+
+      pollers.stop();
+      // Every interval ServerPollers started must be cleared on stop().
+      for (const id of ours) expect(cleared).toContain(id);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
     }
   });
 });

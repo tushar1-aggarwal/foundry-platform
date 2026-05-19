@@ -88,7 +88,7 @@ describe("for_each + mode:spawn + inline flow templating", () => {
     // instead of timing out at the test-runner level.
     try {
       await Promise.race([
-        app.sessionService.dispatch(parent.id),
+        app.dispatchService.dispatch(parent.id),
         new Promise((_, reject) => setTimeout(() => reject(new Error("dispatch wait cap")), 3000)),
       ]);
     } catch {

@@ -51,13 +51,11 @@
  * never provision an EC2 compute.
  */
 
-import { DEFAULT_CONDUCTOR_URL } from "../../constants.js";
 import type { AppContext } from "../../app.js";
 import type { Session } from "../../../types/session.js";
 import { ArkdClient } from "../../../arkd/client/index.js";
 import { attachComputeMethods, rehydrateArkdBackedHandle, type ArkdClientFactory } from "../handle-helpers.js";
 import type {
-  Compute,
   ComputeCapabilities,
   ComputeHandle,
   ComputeKind,
@@ -65,17 +63,17 @@ import type {
   FlushPlacementOpts,
   MethodedComputeHandle,
   PersistedComputeHandleState,
-  PrepareWorkspaceOpts,
   ProvisionOpts,
+  RemoteCompute,
   Snapshot,
 } from "../types.js";
 import { NotSupportedError } from "../types.js";
+import { RemoteArkdCompute } from "../remote-arkd-compute.js";
 import { REMOTE_HOME } from "./constants.js";
-import { cloneWorkspaceViaArkd } from "../workspace-clone.js";
-import { resolveAgentIdentityForRemoteCompute } from "../git-identity.js";
 import { logDebug, logInfo } from "../../observability/structured-log.js";
 import { provisionStep } from "../../services/provisioning-steps.js";
 import { startArkdEventsConsumer } from "../../services/channel/arkd-events-consumer.js";
+import { depsFromApp } from "../../services/deps.js";
 import { EC2PlacementCtx } from "./placement-ctx.js";
 import type { PlacementCtx } from "../../secrets/placement-types.js";
 
@@ -344,11 +342,10 @@ const DEFAULT_HELPERS: EC2ComputeHelpers = {
 
 // ── The Compute impl ────────────────────────────────────────────────────────
 
-export class EC2Compute implements Compute {
+export class EC2Compute extends RemoteArkdCompute implements RemoteCompute {
   readonly kind: ComputeKind = "ec2";
   readonly capabilities: ComputeCapabilities = {
     snapshot: false,
-    pool: true,
     networkIsolation: true,
     provisionLatency: "minutes",
     singleton: false,
@@ -364,7 +361,9 @@ export class EC2Compute implements Compute {
   private helpers: EC2ComputeHelpers = DEFAULT_HELPERS;
   private clientFactory: ArkdClientFactory = (url) => new ArkdClient(url);
 
-  constructor(private readonly app: AppContext) {}
+  constructor(app: AppContext) {
+    super(app);
+  }
 
   /** Test-only: swap in a stub `ArkdClient` factory for `getMetrics`. */
   setClientFactoryForTesting(factory: ArkdClientFactory): void {
@@ -603,7 +602,7 @@ export class EC2Compute implements Compute {
     // session stuck at "ensure-reachable failed".
     if (useStep) {
       await provisionStep(
-        opts.app!,
+        depsFromApp(opts.app!),
         opts.sessionId!,
         "connectivity-check",
         async () => {
@@ -657,7 +656,7 @@ export class EC2Compute implements Compute {
     };
 
     const tunnel = useStep
-      ? await provisionStep(opts.app!, opts.sessionId!, "forward-tunnel", tunnelFn, { context: stepCtx })
+      ? await provisionStep(depsFromApp(opts.app!), opts.sessionId!, "forward-tunnel", tunnelFn, { context: stepCtx })
       : await tunnelFn();
 
     // Persist the port + pid before the health probe so a probe failure
@@ -718,7 +717,7 @@ export class EC2Compute implements Compute {
       }
     };
     if (useStep) {
-      await provisionStep(opts.app!, opts.sessionId!, "arkd-probe", probeFn, {
+      await provisionStep(depsFromApp(opts.app!), opts.sessionId!, "arkd-probe", probeFn, {
         context: { ...stepCtx, localPort: tunnel.localPort },
       });
     } else {
@@ -729,11 +728,11 @@ export class EC2Compute implements Compute {
     // for the same compute is a no-op inside startArkdEventsConsumer.
     if (useStep) {
       await provisionStep(
-        opts.app!,
+        depsFromApp(opts.app!),
         opts.sessionId!,
         "events-consumer-start",
         async () => {
-          startArkdEventsConsumer(opts.app!, h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
+          startArkdEventsConsumer(depsFromApp(opts.app!), h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
         },
         { context: stepCtx },
       );
@@ -833,83 +832,27 @@ export class EC2Compute implements Compute {
     return `http://localhost:${meta.arkdLocalPort}`;
   }
 
-  // ── resolveWorkdir ───────────────────────────────────────────────────────
+  // ── RemoteArkdCompute hooks ──────────────────────────────────────────────
   //
-  // Translate the conductor-side workdir path to where the cloned worktree
-  // lives on the remote host. Pure transform; no I/O. Layout:
-  //   `${REMOTE_HOME}/Projects/<sessionId>/<repoBasename>`
-  // The path is session-scoped so concurrent / sequential sessions on the
-  // same compute don't collide. We prefer `session.config.remoteRepo` (the
-  // clone-on-remote URL) over `session.repo` (conductor-local path). If
-  // neither is set we return null and the caller falls back to
-  // `session.workdir`.
-  //
+  // Worktree lives at `${remoteHome}/Projects/<sid>/<repo>` on the instance.
   // `remoteHome` is read off `handle.meta.ec2` for forward-compat with
   // custom AMIs that ship a different default user; today the EC2 provision
-  // path doesn't write the field, so the fallback `/home/ubuntu` (the
-  // `REMOTE_HOME` constant) matches the standard Ubuntu AMI.
+  // path doesn't write the field, so the fallback `REMOTE_HOME`
+  // (`/home/ubuntu`) matches the standard Ubuntu AMI.
 
-  resolveWorkdir(h: ComputeHandle, session: Session): string | null {
-    const cloneSource = (session.config as { remoteRepo?: string } | null | undefined)?.remoteRepo ?? session.repo;
-    if (!cloneSource) return null;
-    const repoBasename =
-      cloneSource
-        .split("/")
-        .pop()
-        ?.replace(/\.git$/, "") ?? "project";
+  protected workdirRoot(h: ComputeHandle, _session: Session): string {
     const remoteHome = (h.meta.ec2 as { remoteHome?: string } | undefined)?.remoteHome ?? REMOTE_HOME;
-    return `${remoteHome}/Projects/${session.id}/${repoBasename}`;
+    return `${remoteHome}/Projects`;
   }
 
-  // ── prepareWorkspace ─────────────────────────────────────────────────────
-  //
-  // Per-session workspace setup on the remote host: mkdir the parent and
-  // git clone the source into the leaf. Routes through arkd via the live
-  // SSM port-forward that `ensureReachable` set up; no out-of-band
-  // ops at this layer.
-  //
-  // Returns silently when either `source` or `remoteWorkdir` is null --
-  // the dispatcher computes both upstream from session config and the
-  // bare-worktree path is meaningful (no clone, agent runs against an
-  // empty workdir; misconfig surfaces at the agent stage rather than
-  // here).
-  //
-  // Ordering invariant: `ensureReachable` must have run on `h` before
-  // this call so `getArkdUrl(h)` resolves to the live local-forward
-  // port. `runTargetLifecycle` in the dispatcher enforces this.
-
-  /**
-   * Test-only: swap the helper that performs `mkdir -p` + `git clone`
-   * via arkd. Default is the production `cloneWorkspaceViaArkd` which
-   * constructs an `ArkdClient` against `getArkdUrl(handle)`.
-   */
-  setCloneHelperForTesting(fn: typeof cloneWorkspaceViaArkd): void {
-    this.cloneHelper = fn;
+  protected arkdPort(): number {
+    return ARKD_REMOTE_PORT;
   }
 
-  private cloneHelper: typeof cloneWorkspaceViaArkd = cloneWorkspaceViaArkd;
-
-  async prepareWorkspace(h: ComputeHandle, opts: PrepareWorkspaceOpts): Promise<void> {
-    if (!opts.source || !opts.remoteWorkdir) return;
-    const arkdUrl = this.getArkdUrl(h);
-    const arkdToken = process.env.ARK_ARKD_TOKEN ?? null;
-    // Resolve effective branch: explicit session.branch wins; otherwise
-    // a deterministic per-session default keeps EC2 sessions off main.
-    const branch = opts.branch ?? `ark-${opts.sessionId}`;
-    const identity = await resolveAgentIdentityForRemoteCompute(this.app, this.app.tenantId ?? "default");
-    await this.cloneHelper({
-      arkdUrl,
-      arkdToken,
-      source: opts.source,
-      remoteWorkdir: opts.remoteWorkdir,
-      branch,
-      authorName: identity.name,
-      authorEmail: identity.email,
-    });
-    // Persist resolved workdir + branch on the session row -- conductor's
-    // setupSessionWorktree short-circuits for remote computes, so this is
-    // the authoritative write site for hosted-mode EC2 sessions.
-    await this.app.sessions.update(opts.sessionId, { workdir: opts.remoteWorkdir, branch });
+  // The remote `ark` binary lives at `${REMOTE_HOME}/.ark/bin/ark`
+  // (cloud-init installs it on first boot).
+  protected channelBinaryPath(): string {
+    return `${REMOTE_HOME}/.ark/bin/ark`;
   }
 
   // ── flushPlacement ──────────────────────────────────────────────────────
@@ -957,6 +900,20 @@ export class EC2Compute implements Compute {
     deps,
   ) => new EC2PlacementCtx(deps);
 
+  protected placementCtxFor(h: ComputeHandle): PlacementCtx {
+    const meta = readMeta(h);
+    return this.placementCtxFactory({
+      instanceId: meta.instanceId,
+      region: meta.region,
+      awsProfile: meta.awsProfile,
+    });
+  }
+
+  // EC2 overrides the shared flushPlacement: it must THROW (not silently
+  // drop) when queued ops exist but the handle has no instanceId, and it
+  // emits trace logging the other remotes don't. The instanceId guard is
+  // the load-bearing difference -- a silent drop here previously shipped
+  // agents with no SSH key / kubeconfig and never reported dispatch_failed.
   async flushPlacement(h: ComputeHandle, opts: FlushPlacementOpts): Promise<void> {
     const deferred = opts.placement;
     if (!deferred.hasDeferred()) {
@@ -991,31 +948,6 @@ export class EC2Compute implements Compute {
 
   async restore(_s: Snapshot): Promise<ComputeHandle> {
     throw new NotSupportedError(this.kind, "restore");
-  }
-
-  // ── buildChannelConfig ──────────────────────────────────────────────────
-  //
-  // The remote `ark` binary lives at `${REMOTE_HOME}/.ark/bin/ark` (cloud-init
-  // installs it on first boot). The agent on the worker spawns this binary
-  // as the channel server; arkd inside the worker is at loopback:19300.
-
-  buildChannelConfig(
-    sessionId: string,
-    stage: string,
-    channelPort: number,
-    opts?: { conductorUrl?: string },
-  ): Record<string, unknown> {
-    return {
-      command: `${REMOTE_HOME}/.ark/bin/ark`,
-      args: ["channel"],
-      env: {
-        ARK_SESSION_ID: sessionId,
-        ARK_STAGE: stage,
-        ARK_CHANNEL_PORT: String(channelPort),
-        ARK_CONDUCTOR_URL: opts?.conductorUrl ?? DEFAULT_CONDUCTOR_URL,
-        ARK_ARKD_URL: `http://localhost:${ARKD_REMOTE_PORT}`,
-      },
-    };
   }
 
   // ── buildLaunchEnv ──────────────────────────────────────────────────────

@@ -231,7 +231,7 @@ describe("H7 -- hosted mode snapshot store is lazy", () => {
   it("accessing snapshotStore in hosted returns FsSnapshotStore (hosted gate deliberately removed)", async () => {
     // Commit 4c973cbc deleted the devAllowLocalHostedStorage flag and the
     // snapshot-store hosted gate: snapshotStore is now an unconditional
-    // FsSnapshotStore in every mode (no Firecracker/snapshot use cases yet,
+    // FsSnapshotStore in every mode (no snapshot-capable backend yet,
     // so the old hosted-throw safety net was intentionally dropped). This
     // asserts the new contract so the decision can't silently regress.
     const ctx = await forHostedTestAsync({

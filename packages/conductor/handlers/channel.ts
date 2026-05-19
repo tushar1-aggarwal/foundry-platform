@@ -13,6 +13,7 @@ import type { AppContext } from "../../core/app.js";
 import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
 import { handleReport } from "../../core/services/channel/report-pipeline.js";
+import { depsFromApp } from "../../core/services/deps.js";
 import { deliverToChannel } from "../../core/services/channel/deliver.js";
 import type { OutboundMessage } from "../../core/services/channel/channel-types.js";
 import { resolveTenantApp } from "./scope-helpers.js";
@@ -29,7 +30,7 @@ export function registerChannelHandlers(router: Router, app: AppContext): void {
     const scoped = resolveTenantApp(app, ctx);
     const session = await scoped.sessions.get(opts.sessionId);
     if (!session) throw new RpcError("unknown session", ErrorCodes.SESSION_NOT_FOUND);
-    await handleReport(scoped, opts.sessionId, opts.report);
+    await handleReport(depsFromApp(scoped), opts.sessionId, opts.report);
     return { ok: true };
   });
 

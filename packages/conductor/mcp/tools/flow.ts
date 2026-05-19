@@ -31,7 +31,7 @@ const flowShow: ToolDef = {
   inputSchema: z.object({ name: z.string() }),
   handler: async (input, { app }) => {
     const parsed = input as { name: string };
-    const flow = app.flows.get(parsed.name);
+    const flow = await app.flows.get(parsed.name);
     if (!flow) throw new Error(`Flow not found: ${parsed.name}`);
     return flow;
   },
@@ -44,8 +44,8 @@ const flowCreate: ToolDef = {
   handler: async (input, { app }) => {
     const parsed = input as { definition: { name: string } & Record<string, unknown> };
     const def = parsed.definition;
-    if (app.flows.get(def.name)) throw new Error(`Flow already exists: ${def.name}`);
-    app.flows.save(def.name, def as never, "global");
+    if (await app.flows.get(def.name)) throw new Error(`Flow already exists: ${def.name}`);
+    await app.flows.save(def.name, def as never, "global");
     return { name: def.name };
   },
 };
@@ -56,10 +56,10 @@ const flowUpdate: ToolDef = {
   inputSchema: z.object({ name: z.string(), patch: z.record(z.string(), z.unknown()) }),
   handler: async (input, { app }) => {
     const parsed = input as { name: string; patch: Record<string, unknown> };
-    const existing = app.flows.get(parsed.name);
+    const existing = await app.flows.get(parsed.name);
     if (!existing) throw new Error(`Flow not found: ${parsed.name}`);
     const merged = { ...existing, ...parsed.patch, name: parsed.name };
-    app.flows.save(parsed.name, merged as never, "global");
+    await app.flows.save(parsed.name, merged as never, "global");
     return { name: parsed.name };
   },
 };

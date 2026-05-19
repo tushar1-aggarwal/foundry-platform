@@ -4,6 +4,7 @@ import { join } from "path";
 
 setDefaultTimeout(15_000);
 import { fanOut, checkAutoJoin, joinFork } from "../services/fork-join.js";
+import { depsFromApp } from "../services/deps.js";
 import { extractSubtasks } from "../services/task-builder.js";
 import { withTestContext } from "./test-helpers.js";
 import { getApp } from "./test-helpers.js";
@@ -14,7 +15,7 @@ describe("extractSubtasks", async () => {
   it("returns default implementation + tests when no PLAN.md exists", async () => {
     const app = getApp();
     const session = await app.sessions.create({ summary: "Build auth system", flow: "bare" });
-    const subtasks = await extractSubtasks(app, session);
+    const subtasks = await extractSubtasks(depsFromApp(app), session);
 
     expect(subtasks).toHaveLength(2);
     expect(subtasks[0].name).toBe("implementation");
@@ -46,7 +47,7 @@ describe("extractSubtasks", async () => {
       ].join("\n"),
     );
 
-    const subtasks = await extractSubtasks(app, session);
+    const subtasks = await extractSubtasks(depsFromApp(app), session);
     expect(subtasks).toHaveLength(3);
     expect(subtasks[0].name).toBe("step-1");
     expect(subtasks[0].task).toContain("Set up database schema");
@@ -64,7 +65,7 @@ describe("extractSubtasks", async () => {
     mkdirSync(wtDir, { recursive: true });
     writeFileSync(join(wtDir, "PLAN.md"), "# Plan\n\n## Step 1: Fix the bug\nJust do it.\n");
 
-    const subtasks = await extractSubtasks(app, session);
+    const subtasks = await extractSubtasks(depsFromApp(app), session);
     expect(subtasks).toHaveLength(2);
     expect(subtasks[0].name).toBe("implementation");
   });
@@ -72,7 +73,7 @@ describe("extractSubtasks", async () => {
   it("uses 'the task' when session has no summary", async () => {
     const app = getApp();
     const session = await app.sessions.create({ flow: "bare" });
-    const subtasks = await extractSubtasks(app, session);
+    const subtasks = await extractSubtasks(depsFromApp(app), session);
 
     expect(subtasks[0].task).toContain("the task");
   });
@@ -88,7 +89,7 @@ describe("extractSubtasks", async () => {
       ["# Plan", "", "## 1. First thing", "Details.", "", "## 2. Second thing", "More details."].join("\n"),
     );
 
-    const subtasks = await extractSubtasks(app, session);
+    const subtasks = await extractSubtasks(depsFromApp(app), session);
     expect(subtasks).toHaveLength(2);
     expect(subtasks[0].task).toContain("First thing");
     expect(subtasks[1].task).toContain("Second thing");
@@ -100,11 +101,11 @@ describe("fan-out lifecycle integration", async () => {
     const app = getApp();
     const parent = await app.sessions.create({ summary: "Multi fan-out", flow: "bare" });
 
-    const r1 = await fanOut(app, parent.id, { tasks: [{ summary: "A" }] });
+    const r1 = await fanOut(depsFromApp(app), parent.id, { tasks: [{ summary: "A" }] });
     const fg1 = (await app.sessions.get(parent.id))!.fork_group;
 
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, status: "running", fork_group: null });
-    const r2 = await fanOut(app, parent.id, { tasks: [{ summary: "B" }] });
+    const r2 = await fanOut(depsFromApp(app), parent.id, { tasks: [{ summary: "B" }] });
     const fg2 = (await app.sessions.get(parent.id))!.fork_group;
 
     expect(r1.ok).toBe(true);
@@ -117,12 +118,12 @@ describe("fan-out lifecycle integration", async () => {
     const parent = await app.sessions.create({ summary: "Auto-advance", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "Only child" }],
     });
 
     await app.sessions.update(result.childIds![0], { status: "completed" });
-    const joined = await checkAutoJoin(app, result.childIds![0]);
+    const joined = await checkAutoJoin(depsFromApp(app), result.childIds![0]);
     expect(joined).toBe(true);
 
     const parentState = (await app.sessions.get(parent.id))!;
@@ -135,7 +136,7 @@ describe("fan-out lifecycle integration", async () => {
     const parent = await app.sessions.create({ summary: "Mixed results", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "Good" }, { summary: "Bad" }, { summary: "Also good" }],
     });
 
@@ -143,7 +144,7 @@ describe("fan-out lifecycle integration", async () => {
     await app.sessions.update(result.childIds![1], { status: "failed" });
     await app.sessions.update(result.childIds![2], { status: "completed" });
 
-    const joined = await checkAutoJoin(app, result.childIds![2]);
+    const joined = await checkAutoJoin(depsFromApp(app), result.childIds![2]);
     expect(joined).toBe(true);
 
     const events = await app.events.list(parent.id);
@@ -163,14 +164,14 @@ describe("fan-out lifecycle integration", async () => {
     const parent = await app.sessions.create({ summary: "Join test", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "A" }, { summary: "B" }],
     });
 
     await app.sessions.update(result.childIds![0], { status: "completed" });
     await app.sessions.update(result.childIds![1], { status: "completed" });
 
-    const joinResult = await joinFork(app, parent.id);
+    const joinResult = await joinFork(depsFromApp(app), parent.id);
     expect(joinResult.ok).toBe(true);
 
     const parentState = (await app.sessions.get(parent.id))!;
@@ -189,7 +190,7 @@ describe("fan-out lifecycle integration", async () => {
       repo: "org/repo",
     });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [{ summary: "Child 1" }, { summary: "Child 2" }],
     });
 
@@ -205,7 +206,7 @@ describe("fan-out lifecycle integration", async () => {
     const app = getApp();
     const parent = await app.sessions.create({ summary: "Mixed flows", flow: "bare" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [
         { summary: "Quick task", flow: "quick" },
         { summary: "Bare task", flow: "bare" },
@@ -224,7 +225,7 @@ describe("fan-out lifecycle integration", async () => {
     const app = getApp();
     const parent = await app.sessions.create({ summary: "Mixed agents", flow: "bare" });
 
-    const result = await fanOut(app, parent.id, {
+    const result = await fanOut(depsFromApp(app), parent.id, {
       tasks: [
         { summary: "Review this", agent: "reviewer" },
         { summary: "Implement that", agent: "implementer" },
@@ -242,14 +243,14 @@ describe("fan-out lifecycle integration", async () => {
   it("getChildren returns only direct children, not grandchildren", async () => {
     const app = getApp();
     const grandparent = await app.sessions.create({ summary: "Grandparent", flow: "bare" });
-    const parentResult = await fanOut(app, grandparent.id, {
+    const parentResult = await fanOut(depsFromApp(app), grandparent.id, {
       tasks: [{ summary: "Parent child" }],
     });
 
     const parentChildId = parentResult.childIds![0];
     await app.sessions.update(parentChildId, { session_id: `ark-s-${parentChildId}`, status: "running" });
 
-    await fanOut(app, parentChildId, {
+    await fanOut(depsFromApp(app), parentChildId, {
       tasks: [{ summary: "Grandchild" }],
     });
 

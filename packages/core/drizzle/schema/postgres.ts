@@ -407,8 +407,8 @@ export const memberships = pgTable(
 
 export const tenantPolicies = pgTable("tenant_policies", {
   tenantId: text("tenant_id").primaryKey(),
-  allowedProviders: text("allowed_providers").notNull().default("[]"),
-  defaultProvider: text("default_provider").notNull().default("k8s"),
+  allowedCompute: text("allowed_compute").notNull().default("[]"),
+  defaultCompute: text("default_compute").notNull().default('{"compute_kind":"k8s","isolation_kind":"direct"}'),
   maxConcurrentSessions: integer("max_concurrent_sessions").notNull().default(10),
   maxCostPerDayUsd: doublePrecision("max_cost_per_day_usd"),
   computePools: text("compute_pools").notNull().default("[]"),

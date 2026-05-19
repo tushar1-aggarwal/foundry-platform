@@ -67,7 +67,7 @@ export class ForEachChildSpawner {
     if (typeof flowRef === "string") {
       // Named flow -- look up from the store (file-backed or DB-backed).
       flowName = flowRef;
-      flowDef = this.deps.flows.get(flowName);
+      flowDef = await this.deps.flows.get(flowName);
       if (!flowDef) return { ok: false, message: `Flow '${flowName}' not found` };
     } else {
       // Inline flow object. Validate minimum shape.

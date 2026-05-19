@@ -3,15 +3,26 @@
  * Extracted from the old session-lifecycle.ts.
  */
 
-import type { LifecycleHooks, SessionLifecycleDeps, SessionOpResult } from "./types.js";
+import type { Session } from "../../../types/index.js";
+import type { SessionLifecycleDeps, SessionOpResult } from "./types.js";
 
 export class SessionForker {
   constructor(private readonly deps: SessionLifecycleDeps) {}
 
+  /** Start the Temporal session-workflow for a freshly created child row. */
+  private async startWorkflow(childId: string, flowName: string): Promise<void> {
+    const tenantId = this.deps.sessions.getTenant?.() ?? "default";
+    const { workflowId, runId } = await this.deps.startTemporalWorkflow(childId, flowName, tenantId);
+    await this.deps.sessions.update(childId, {
+      workflow_id: workflowId,
+      workflow_run_id: runId,
+    } as Partial<Session>);
+  }
+
   /**
    * Fork: shallow copy -- same compute, repo, flow, group. Fresh session, no resume.
    */
-  async fork(sessionId: string, newName?: string, hooks?: LifecycleHooks): Promise<SessionOpResult> {
+  async fork(sessionId: string, newName?: string): Promise<SessionOpResult> {
     const d = this.deps;
     const original = await d.sessions.get(sessionId);
     if (!original) return { ok: false, message: `Session ${sessionId} not found` };
@@ -24,6 +35,7 @@ export class SessionForker {
       flow: original.flow,
       compute_name: original.compute_name || undefined,
       workdir: original.workdir || undefined,
+      orchestrator: "temporal",
     });
 
     await d.sessions.update(fork.id, {
@@ -38,15 +50,15 @@ export class SessionForker {
       data: { forked_from: sessionId },
     });
 
-    hooks?.onCreated?.(fork.id);
-    return { ok: true, sessionId: fork.id };
+    await this.startWorkflow(fork.id, original.flow);
+    return { ok: true, message: "OK", sessionId: fork.id };
   }
 
   /**
    * Clone: deep copy -- same as fork PLUS claude_session_id for --resume.
    * The new session will resume the same Claude conversation.
    */
-  async clone(sessionId: string, newName?: string, hooks?: LifecycleHooks): Promise<SessionOpResult> {
+  async clone(sessionId: string, newName?: string): Promise<SessionOpResult> {
     const d = this.deps;
     const original = await d.sessions.get(sessionId);
     if (!original) return { ok: false, message: `Session ${sessionId} not found` };
@@ -59,6 +71,7 @@ export class SessionForker {
       flow: original.flow,
       compute_name: original.compute_name || undefined,
       workdir: original.workdir || undefined,
+      orchestrator: "temporal",
     });
 
     await d.sessions.update(clone.id, {
@@ -74,7 +87,7 @@ export class SessionForker {
       data: { cloned_from: sessionId, claude_session_id: original.claude_session_id },
     });
 
-    hooks?.onCreated?.(clone.id);
-    return { ok: true, sessionId: clone.id };
+    await this.startWorkflow(clone.id, original.flow);
+    return { ok: true, message: "OK", sessionId: clone.id };
   }
 }

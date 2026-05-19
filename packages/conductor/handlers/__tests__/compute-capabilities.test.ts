@@ -45,7 +45,6 @@ describe("compute/capabilities", () => {
     // The "local" compute kind declares singleton=true, canReboot=false,
     // canDelete=false, initialStatus="running", and two isolation modes.
     // The handler must read these straight from the provider registry.
-    expect(caps.provider).toBe("local");
     expect(caps.singleton).toBe(true);
     expect(caps.canReboot).toBe(false);
     expect(caps.canDelete).toBe(false);
@@ -58,13 +57,9 @@ describe("compute/capabilities", () => {
   });
 
   it("returns flags for a docker compute (capabilities inherit from LocalCompute)", async () => {
-    // Post-Task-5: capabilities live on Compute, not Isolation. A
-    // local+docker row inherits LocalCompute's flags (singleton=true,
-    // canDelete=false, initialStatus=running) -- the legacy distinction
-    // between local-direct and docker-isolation rows is gone. The wire
-    // format still ships a `provider` label derived from the pair so
-    // existing UI code keeps rendering, but capability semantics are
-    // now uniform per kind.
+    // Capabilities live on Compute, not Isolation. A local+docker row
+    // inherits LocalCompute's flags (singleton=true, canDelete=false,
+    // initialStatus=running); capability semantics are uniform per kind.
     await app.computeService.create({
       name: "cap-docker-1",
       compute: "local",
@@ -76,7 +71,6 @@ describe("compute/capabilities", () => {
     const res = await router.dispatch(createRequest(2, "compute/capabilities", { name: "cap-docker-1" }));
     const caps = ok(res).capabilities as Record<string, unknown>;
 
-    expect(caps.provider).toBe("docker");
     // Inherits LocalCompute's flags.
     expect(caps.canDelete).toBe(false);
     expect(caps.canReboot).toBe(false);

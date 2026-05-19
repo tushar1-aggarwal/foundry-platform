@@ -54,19 +54,7 @@ export interface AdvanceCb {
 
 // ── Public result shapes (stable; re-exported from the barrel) ──────────────
 
-export type SessionOpResult = { ok: true; sessionId: string } | { ok: false; message: string };
-
-/**
- * Lifecycle hooks invoked by start/fork/clone after the session row is
- * persisted. `onCreated` is the opt-in broadcast point -- callers that want
- * the default-dispatcher listener to auto-kick pass
- * `{ onCreated: (id) => sessionService.emitSessionCreated(id) }`. Callers
- * that dispatch explicitly (conductor, cli/exec, stage-advance, issue-poller)
- * or don't want dispatch at all (tests) omit it.
- */
-export interface LifecycleHooks {
-  onCreated?: (sessionId: string) => void;
-}
+export type { SessionOpResult } from "../../../types/index.js";
 
 export interface VerificationResult {
   ok: boolean;
@@ -124,14 +112,13 @@ export interface SessionLifecycleDeps {
     opts: { primaryRepoId: string | null },
   ) => Promise<string>;
   /**
-   * Optional Temporal workflow starter. When provided (hosted mode with
-   * `config.features.temporalOrchestration = true`), `start()` will call this
-   * after persisting the session row to launch the Temporal sessionWorkflow.
-   * Returns the workflow ID and the first execution run ID -- both are
-   * persisted on the session row so operators can correlate session rows
-   * with workflow histories in the Temporal UI.
+   * Temporal workflow starter. Temporal is the sole orchestrator, so this is
+   * always wired: `start()` / fork / clone call it after persisting the
+   * session row to launch the sessionWorkflow. Returns the workflow ID and
+   * first execution run ID -- both persisted on the row so operators can
+   * correlate session rows with workflow histories in the Temporal UI.
    */
-  startTemporalWorkflow?: (
+  startTemporalWorkflow: (
     sessionId: string,
     flowName: string,
     tenantId: string,

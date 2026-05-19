@@ -48,13 +48,8 @@ export async function startHostedServer(config: ArkConfig): Promise<{
   void app.container.cradle.tenantPolicyManager;
   void app.container.cradle.sessionScheduler;
 
-  // Start SSE bus (Redis if configured, in-memory otherwise)
-  let redisBus: import("./sse-redis.js").RedisSSEBus | null = null;
-  if (config.redisUrl) {
-    const { RedisSSEBus } = await import("./sse-redis.js");
-    redisBus = new RedisSSEBus(config.redisUrl);
-    await redisBus.connect();
-  }
+  // The SSE bus (Redis-backed when config.redisUrl is set, in-memory
+  // otherwise) is owned by the web server -- see createSSEBus() in web.ts.
 
   // Start web server
   const { startWebServer } = await import("./web.js");
@@ -64,63 +59,6 @@ export async function startHostedServer(config: ArkConfig): Promise<{
   const healthInterval = setInterval(() => {
     void registry.pruneStale(90_000); // 90s timeout
   }, 60_000);
-
-  // Dispatch poller: pick up any sessions that are `ready` but haven't been
-  // dispatched yet. This covers the gap where the per-scope sessionService
-  // listener chain doesn't reach the root dispatchService (each forTenant()
-  // creates a fresh child scope with its own SessionDispatchListeners, so
-  // registerDefaultDispatcher on the root app doesn't propagate). Runs every
-  // 10 seconds.
-  //
-  // `inFlight` guards against re-dispatching a session whose previous
-  // dispatch is still in async I/O (agent resolve / compute / launcher).
-  // The status row only flips to "running" in post-launch, which can be
-  // several seconds later -- without this set the next tick happily
-  // dispatches the same row again and we end up with N parallel agents.
-  const inFlight = new Set<string>();
-  const dispatchInterval = setInterval(() => {
-    void (async () => {
-      try {
-        // Root app.sessions has no tenant set -- use listAcrossTenants
-        // to see sessions from all tenants.
-        const ready = await app.sessions.listAcrossTenants({ status: "ready", limit: 20 });
-        for (const s of ready) {
-          if (inFlight.has(s.id)) continue;
-          // Skip Temporal-orchestrated sessions: the workflow drives every
-          // stage via dispatchStageActivity. Letting the bespoke dispatcher
-          // also pick them up here produces a dual-track race (see T5b: the
-          // poller's bespoke dispatch can race the workflow's non-retryable
-          // failure handling and complete the session "successfully" instead
-          // of recording the AuthError). The workflow is the single writer
-          // for these sessions.
-          if (s.orchestrator === "temporal") continue;
-          inFlight.add(s.id);
-          const tenantApp = s.tenant_id ? app.forTenant(s.tenant_id) : app;
-          // Warm agent/runtime caches for this tenant scope so resolveAgent
-          // (which is sync) doesn't see a Promise instead of an AgentDefinition.
-          await (tenantApp.agents as any).list?.().catch(() => {});
-          await (tenantApp.runtimes as any).list?.().catch(() => {});
-          void tenantApp.dispatchService
-            .dispatch(s.id)
-            .then((res: { ok: boolean; message?: string }) => {
-              if (!res.ok) {
-                logInfo("web", `dispatch poller: ${s.id} failed: ${res.message ?? "(no message)"}`);
-              }
-            })
-            .catch((err: Error) => {
-              logInfo("web", `dispatch poller: ${s.id} failed: ${err?.message ?? err}`);
-            })
-            .finally(() => {
-              inFlight.delete(s.id);
-            });
-        }
-      } catch (err: any) {
-        const cause = err?.cause ?? err?.original ?? null;
-        const detail = cause ? ` cause=${cause?.code ?? "?"}: ${cause?.message ?? cause}` : "";
-        logInfo("web", `dispatch poller error: ${err?.message ?? err}${detail}`);
-      }
-    })();
-  }, 10_000);
 
   // Start LLM router if configured
   if (config.router.enabled) {
@@ -136,11 +74,7 @@ export async function startHostedServer(config: ArkConfig): Promise<{
     app,
     stop: async () => {
       clearInterval(healthInterval);
-      clearInterval(dispatchInterval);
       webServer.stop();
-      if (redisBus) {
-        await redisBus.disconnect();
-      }
       await app.shutdown();
     },
   };

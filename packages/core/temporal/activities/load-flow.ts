@@ -88,13 +88,7 @@ function topoSort(stages: LoadedStage[]): number[] {
  */
 export async function loadFlowActivity(input: { flowName: string }): Promise<LoadedFlow> {
   const d = deps();
-  const raw = d.flows.get(input.flowName);
-
-  // Handle async stores (hosted DB) - await if Promise
-  const flowDef =
-    raw && typeof (raw as { then?: unknown }).then === "function"
-      ? await (raw as Promise<import("../../services/flow.js").FlowDefinition | null>)
-      : (raw as import("../../services/flow.js").FlowDefinition | null);
+  const flowDef = await d.flows.get(input.flowName);
 
   if (!flowDef) {
     throw new Error(`Flow not found: ${input.flowName}`);

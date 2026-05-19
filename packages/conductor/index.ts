@@ -86,19 +86,6 @@ export class ArkServer {
   }
 
   /**
-   * Bind an AppContext's lifecycle listeners to the transport. Call once
-   * after `AppContext.boot()` so `session_created` events kick the
-   * background dispatcher and broadcast `session/updated` to every
-   * subscribed connection. Unit tests that don't want real agents
-   * launched simply skip this wiring.
-   */
-  attachLifecycle(app: import("../core/app.js").AppContext): () => void {
-    return app.sessionService.registerDefaultDispatcher((session) => {
-      if (session) this.notify("session/updated", { session });
-    });
-  }
-
-  /**
    * Wire auth materialization. Call once after `AppContext.boot()` so the
    * router can resolve `TenantContext` from the caller's bearer token on
    * every request. Without this, the server falls back to local-admin.

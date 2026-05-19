@@ -11,7 +11,7 @@
  * the user explicitly provisioned.
  */
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import { effectiveLifecycle } from "../../types/compute.js";
 import { logDebug, logInfo } from "../observability/structured-log.js";
 
@@ -23,11 +23,11 @@ import { logDebug, logInfo } from "../observability/structured-log.js";
  * Returns true when the row was deleted, false otherwise.
  */
 export async function garbageCollectComputeIfTemplate(
-  app: AppContext,
+  deps: OrchestrationDeps,
   computeName: string | null | undefined,
 ): Promise<boolean> {
   if (!computeName) return false;
-  const compute = await app.computes.get(computeName);
+  const compute = await deps.computes.get(computeName);
   if (!compute) return false;
 
   // Unified-model extension: rows cloned from a template at dispatch time
@@ -50,7 +50,7 @@ export async function garbageCollectComputeIfTemplate(
   // from under it. Compute rows are tenant-scoped but GC runs from the root
   // (e.g. boot-time sweep, session termination hooks) and must count refs
   // across every tenant that might still pin the row.
-  const sessions = await app.sessions.listAcrossTenants({});
+  const sessions = await deps.sessions.listAcrossTenants({});
   const referencing = sessions.filter(
     (s) => s.compute_name === computeName && !["completed", "failed", "stopped"].includes(s.status),
   );
@@ -69,7 +69,7 @@ export async function garbageCollectComputeIfTemplate(
   // Compute impls (older local-only installs) are tolerated: the row
   // deletion still proceeds.
   try {
-    const computeImpl = app.getCompute(compute.compute_kind);
+    const computeImpl = deps.app!.getCompute(compute.compute_kind);
     if (computeImpl && computeImpl.attachExistingHandle) {
       const handle = computeImpl.attachExistingHandle({
         name: compute.name,
@@ -90,9 +90,9 @@ export async function garbageCollectComputeIfTemplate(
     // reapable even when the provider refuses user-initiated deletion,
     // so use the narrow bypass forceDeleteClone() for them.
     if (isClone) {
-      await app.computeService.forceDeleteClone(computeName);
+      await deps.app!.computeService.forceDeleteClone(computeName);
     } else {
-      await app.computeService.delete(computeName);
+      await deps.app!.computeService.delete(computeName);
     }
     const reason = isClone
       ? `cloned from '${compute.cloned_from}'`

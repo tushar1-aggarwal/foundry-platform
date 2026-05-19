@@ -15,10 +15,10 @@ import type { RuntimeDefinition } from "../../types/index.js";
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export interface RuntimeStore {
-  list(): RuntimeDefinition[];
-  get(name: string): RuntimeDefinition | null;
-  save(name: string, def: RuntimeDefinition, scope?: "global" | "project"): void;
-  delete(name: string, scope?: "global" | "project"): boolean;
+  list(): Promise<RuntimeDefinition[]>;
+  get(name: string): Promise<RuntimeDefinition | null>;
+  save(name: string, def: RuntimeDefinition, scope?: "global" | "project"): Promise<void>;
+  delete(name: string, scope?: "global" | "project"): Promise<boolean>;
 }
 
 /**
@@ -27,7 +27,11 @@ export interface RuntimeStore {
  * old names; this map redirects them to the new on-disk YAML files.
  */
 export const RUNTIME_NAME_ALIASES: Record<string, string> = {
-  claude: "claude-code",
+  // claude-agent is the sole runtime; legacy names all redirect to it so
+  // sessions/agents persisted before the runtime collapse still resolve.
+  claude: "claude-agent",
+  "claude-code": "claude-agent",
+  "claude-max": "claude-agent",
   "agent-sdk": "claude-agent",
 };
 
@@ -50,7 +54,7 @@ export class FileRuntimeStore implements RuntimeStore {
     this.projectDir = opts.projectDir;
   }
 
-  get(name: string): RuntimeDefinition | null {
+  async get(name: string): Promise<RuntimeDefinition | null> {
     // Normalise legacy names (claude, agent-sdk) to their post-rename equivalents
     // so old session rows + agent YAMLs continue to resolve. This is a single
     // Map lookup -- effectively free in the hot path.
@@ -71,7 +75,7 @@ export class FileRuntimeStore implements RuntimeStore {
     return null;
   }
 
-  list(): RuntimeDefinition[] {
+  async list(): Promise<RuntimeDefinition[]> {
     const result = new Map<string, RuntimeDefinition>();
 
     const dirs: [string, RuntimeDefinition["_source"]][] = [
@@ -91,14 +95,14 @@ export class FileRuntimeStore implements RuntimeStore {
     return [...result.values()];
   }
 
-  save(name: string, def: RuntimeDefinition, scope: "global" | "project" = "global"): void {
+  async save(name: string, def: RuntimeDefinition, scope: "global" | "project" = "global"): Promise<void> {
     const dir = scope === "project" && this.projectDir ? this.projectDir : this.userDir;
     mkdirSync(dir, { recursive: true });
     const { _source, _path, ...data } = def;
     writeFileSync(join(dir, `${name}.yaml`), YAML.stringify(data));
   }
 
-  delete(name: string, scope: "global" | "project" = "global"): boolean {
+  async delete(name: string, scope: "global" | "project" = "global"): Promise<boolean> {
     const dir = scope === "project" && this.projectDir ? this.projectDir : this.userDir;
     const path = join(dir, `${name}.yaml`);
     if (existsSync(path)) {

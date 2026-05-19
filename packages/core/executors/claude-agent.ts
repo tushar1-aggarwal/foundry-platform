@@ -113,7 +113,8 @@ export const claudeAgentExecutor: Executor = {
     });
 
     const { setupSessionWorktree } = await import("../services/worktree/index.js");
-    const effectiveWorkdir = await setupSessionWorktree(app, session, compute, log);
+    const { depsFromApp } = await import("../services/deps.js");
+    const effectiveWorkdir = await setupSessionWorktree(depsFromApp(app), session, compute, log);
 
     // Worker-side paths. We use `/tmp/ark-<sid>` UNIFORMLY -- local and
     // remote both. For local dispatch worker == conductor so /tmp lives on
@@ -260,7 +261,7 @@ export const claudeAgentExecutor: Executor = {
     // launcher write happens INSIDE launchOverride.
     const { resolveTargetAndHandle } = await import("../services/dispatch/target-resolver.js");
     const { runTargetLifecycle } = await import("../services/dispatch/target-lifecycle.js");
-    const { target: lifecycleTarget, handle: computeHandle } = await resolveTargetAndHandle(app, session);
+    const { target: lifecycleTarget, handle: computeHandle } = await resolveTargetAndHandle(depsFromApp(app), session);
     if (!lifecycleTarget || !computeHandle) {
       return { ok: false, handle: "", message: "no compute target resolved for claude-agent dispatch" };
     }
@@ -270,7 +271,7 @@ export const claudeAgentExecutor: Executor = {
     // helper. buildAuthedHttpsUrl returns the URL unchanged for non-https
     // or unknown hosts. Mirrors claude-code executor's clone-source path.
     const rawCloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo ?? null;
-    const cloneSource = rawCloneSource ? await buildAuthedHttpsUrl(app, session, rawCloneSource) : null;
+    const cloneSource = rawCloneSource ? await buildAuthedHttpsUrl(depsFromApp(app), session, rawCloneSource) : null;
 
     try {
       await runTargetLifecycle(

@@ -11,6 +11,7 @@ import * as actVerify from "./activities/run-verification.js";
 import * as actProjSession from "./activities/project-session.js";
 import * as actProjStage from "./activities/project-stage.js";
 import * as actLoadFlow from "./activities/load-flow.js";
+import * as actReject from "./activities/apply-review-reject.js";
 import * as activities from "./activities/index.js";
 
 async function main() {
@@ -38,6 +39,7 @@ async function main() {
   actProjSession.injectDeps(deps);
   actProjStage.injectDeps(deps);
   actLoadFlow.injectDeps(deps);
+  actReject.injectDeps(deps);
 
   const connection = await NativeConnection.connect({ address: config.temporal.serverUrl });
 

@@ -303,7 +303,8 @@ export function startStatusPoller(app: AppContext, sessionId: string, handle: st
               const arkdUrl = await resolveArkdUrl(app, session);
               if (arkdUrl) {
                 const { captureWorkerForensics } = await import("../services/session-forensic.js");
-                await captureWorkerForensics(app, session, arkdUrl);
+                const { depsFromApp } = await import("../services/deps.js");
+                await captureWorkerForensics(depsFromApp(app), session, arkdUrl);
               }
             }
           }
@@ -334,9 +335,9 @@ async function _handleStatus(
     const session = await app.sessions.get(sessionId);
     if (!session || session.status !== "running") return;
 
-    // Defensive guard: with explicit stopStatusPoller calls in stage-advance,
-    // this branch should never fire on a healthy stage handoff. Kept as a
-    // safety net for direct sessions.update() calls that bypass StageAdvanceService.
+    // Defensive guard: the lifecycle seam stops the poller explicitly on
+    // stage entry, so this branch should never fire on a healthy handoff.
+    // Kept as a safety net for direct sessions.update() that bypass it.
     if (session.session_id && session.session_id !== handle) return;
 
     // `not_found` means the handle is gone. That happens cleanly when the
@@ -368,7 +369,8 @@ async function _handleStatus(
     if (arkdUrl) {
       try {
         const { captureWorkerForensics } = await import("../services/session-forensic.js");
-        const { stdioTail } = await captureWorkerForensics(app, session, arkdUrl);
+        const { depsFromApp } = await import("../services/deps.js");
+        const { stdioTail } = await captureWorkerForensics(depsFromApp(app), session, arkdUrl);
         if (newStatus === "failed" && stdioTail) {
           error = `${error ?? "agent process exited"}\n--- worker stdio (tail) ---\n${stdioTail}`;
         }
@@ -377,14 +379,13 @@ async function _handleStatus(
       }
     }
 
-    // Under Temporal orchestration, skip the brief "completed" write on
-    // success: external observers polling session.status for a terminal
-    // state would race the workflow's next-stage dispatch and observe
-    // the inter-stage gap as a false success. Write "ready" directly --
-    // awaitStageCompletionActivity is taught to accept "ready" as a
-    // stage-done signal. Failures still write "failed" so the workflow
-    // can surface them.
-    const writeStatus = newStatus === "completed" && session.orchestrator === "temporal" ? "ready" : newStatus;
+    // Skip the brief "completed" write on success: external observers
+    // polling session.status for a terminal state would race the Temporal
+    // workflow's next-stage dispatch and observe the inter-stage gap as a
+    // false success. Write "ready" directly -- awaitStageCompletionActivity
+    // accepts "ready" as a stage-done signal. Failures still write "failed"
+    // so the workflow can surface them.
+    const writeStatus = newStatus === "completed" ? "ready" : newStatus;
     await app.sessions.update(sessionId, {
       status: writeStatus,
       error: error ?? null,
@@ -402,30 +403,12 @@ async function _handleStatus(
 
     logInfo("session", `status-poller: ${sessionId} -> ${newStatus}`);
 
-    // Advance flow for multi-stage pipelines (same as Claude hook path).
-    // Use mediateStageHandoff instead of raw advance() so auto-dispatch fires.
+    // Stage advancement is driven by the Temporal workflow: its
+    // awaitStageCompletionActivity sees the "ready" written above and
+    // dispatches the next stage via dispatchStageActivity with the
+    // workflow's retry envelope.
     if (newStatus === "completed") {
-      if (session.orchestrator === "temporal") {
-        // Under Temporal the workflow's awaitStageCompletionActivity
-        // sees the "ready" we wrote above and dispatches the next stage
-        // via dispatchStageActivity with the workflow's retry envelope.
-        // Running the bespoke handoff here would race that.
-        logDebug("status", `status_poller: ${sessionId} -> ready (Temporal workflow drives advancement)`);
-      } else {
-        // Bespoke path: clear error + flip back to "ready" so auto-gate
-        // doesn't reject, then run the handoff which auto-dispatches the
-        // next stage in-process.
-        await app.sessions.update(sessionId, { status: "ready", error: null });
-        try {
-          await app.sessionHooks.mediateStageHandoff(sessionId, {
-            autoDispatch: true,
-            source: "status_poller",
-          });
-        } catch (err: any) {
-          // advance may fail if flow is done
-          logWarn("status", `mediateStageHandoff failed for ${sessionId}: ${err?.message ?? err}`);
-        }
-      }
+      logDebug("status", `status_poller: ${sessionId} -> ready (Temporal workflow drives advancement)`);
     }
 
     // Send OS notification

@@ -85,32 +85,28 @@ const sessionStart: ToolDef = {
     // is written if the flow declares it requires a repo and the caller
     // didn't pass one. Same logic as the JSON-RPC session/start handler.
     if (parsed.flow && !parsed.repo) {
-      const flow = app.flows.get(parsed.flow);
+      const flow = await app.flows.get(parsed.flow);
       if (flow?.requires_repo) {
         throw new Error(`Flow '${parsed.flow}' requires a repo. Pass repo: <git-url-or-local-path>.`);
       }
     }
 
     // Mirror packages/conductor/handlers/session.ts session/start: delegate to
-    // sessionLifecycle.start with the onCreated callback so the default
-    // dispatcher listener kicks the background launcher synchronously.
-    const session = await app.sessionLifecycle.start(
-      {
-        compute_name: parsed.compute,
-        flow: parsed.flow,
-        agent: parsed.agent,
-        summary: parsed.summary,
-        repo: parsed.repo,
-        branch: parsed.branch,
-        // `prompt` and `parent` ride on the session config blob -- the JSON-RPC
-        // start handler accepts the same shape via SessionStartParams.
-        config: {
-          ...(parsed.prompt !== undefined ? { prompt: parsed.prompt } : {}),
-          ...(parsed.parent !== undefined ? { parent_id: parsed.parent } : {}),
-        },
+    // sessionCreator.start, which launches the session's Temporal workflow.
+    const session = await app.sessionCreator.start({
+      compute_name: parsed.compute,
+      flow: parsed.flow,
+      agent: parsed.agent,
+      summary: parsed.summary,
+      repo: parsed.repo,
+      branch: parsed.branch,
+      // `prompt` and `parent` ride on the session config blob -- the JSON-RPC
+      // start handler accepts the same shape via SessionStartParams.
+      config: {
+        ...(parsed.prompt !== undefined ? { prompt: parsed.prompt } : {}),
+        ...(parsed.parent !== undefined ? { parent_id: parsed.parent } : {}),
       },
-      { onCreated: (id) => app.sessionService.emitSessionCreated(id) },
-    );
+    });
     return { sessionId: session.id };
   },
 };
@@ -135,7 +131,7 @@ const sessionKill: ToolDef = {
   inputSchema: sessionKillInput,
   handler: async (input, { app }) => {
     const parsed = input as z.infer<typeof sessionKillInput>;
-    const result = await app.sessionLifecycle.kill(parsed.sessionId);
+    const result = await app.sessionTerminator.kill(parsed.sessionId);
     if (result.ok === false && result.message.includes("not found")) {
       throw new Error(`Session not found: ${parsed.sessionId}`);
     }

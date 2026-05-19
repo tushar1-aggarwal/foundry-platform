@@ -68,6 +68,10 @@ import * as m024 from "./024_workers_table.js";
 // infra/instance-lock.ts. Postgres got it via initPostgresSchema;
 // SQLite had no migration coverage.
 import * as m025 from "./025_instance_heartbeat.js";
+// Migration 026: collapse tenant_policies onto two-axis compute pairs --
+// allowed_compute / default_compute replace allowed_providers /
+// default_provider; compute_pools JSON `provider` becomes `compute`.
+import * as m026 from "./026_tenant_policies_two_axis.js";
 
 export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m001.VERSION, name: m001.NAME, up: m001.up },
@@ -99,4 +103,5 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
   { version: m023.VERSION, name: m023.NAME, up: m023.up },
   { version: m024.VERSION, name: m024.NAME, up: m024.up },
   { version: m025.VERSION, name: m025.NAME, up: m025.up },
+  { version: m026.VERSION, name: m026.NAME, up: m026.up },
 ];

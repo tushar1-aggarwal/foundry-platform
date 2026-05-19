@@ -17,8 +17,9 @@
  *   post-launch.ts     finalizeLaunch (persist run state + poller + telemetry)
  *   inline-substage.ts dispatchInlineSubStage (for_each mode:inline sub-stages)
  *
- * Resume: tear down any running tmux, clear transient status fields, call
- * dispatch again.
+ * Resume: delegates to the single authoritative SessionService.resume
+ * (full multi-executor handle kill + flow-state rewind + background
+ * dispatch). dispatch-core does NOT own a second resume cleanup path.
  *
  * Dispatch resolves a `ComputeTarget` (Compute × Isolation composition)
  * from `(compute_kind, isolation_kind)` plus a `ComputeHandle` carrying
@@ -123,7 +124,7 @@ export class DispatchService {
     if (guard.blocked) return { ok: false, message: guard.message! };
 
     // 6. Per-stage compute template override.
-    const stageDef = this.deps.getStage(session.flow, stage);
+    const stageDef = await this.deps.getStage(session.flow, stage);
     const stageCompute = await this.compute.resolveForStage(stageDef, sessionId, log);
     if (stageCompute) {
       await this.deps.sessions.update(sessionId, { compute_name: stageCompute });
@@ -139,20 +140,19 @@ export class DispatchService {
     if (stageDef?.for_each !== undefined) {
       const sessionVars = buildSessionVars(session as unknown as Record<string, unknown>);
       const result = await this.foreach.dispatchForEach(sessionId, stageDef, sessionVars);
-      if (result.ok) {
-        await this.deps.mediateStageHandoff(sessionId, { autoDispatch: true, source: "dispatch_for_each" });
-      } else {
+      if (!result.ok) {
         await this.deps.sessions.update(sessionId, {
           status: "failed",
           error: result.message.slice(0, 500),
         });
       }
+      // On success the Temporal workflow drives the post-for_each handoff.
       return result;
     }
 
     // 9. Agent stage. Must come last -- all shorter-circuit paths above
     // consumed the dispatch if they applied.
-    const action = this.deps.getStageAction(session.flow, stage);
+    const action = await this.deps.getStageAction(session.flow, stage);
     if (action.type !== "agent") {
       return { ok: false, message: `Stage '${stage}' is ${action.type}, not agent` };
     }
@@ -176,9 +176,9 @@ export class DispatchService {
     // applyStageModelAndResolveSlug after the hints run, matching the
     // documented precedence: stage > resolver > agent declared.
     const cfg = (session.config as { scoping_runtime_hint?: string; scoping_model_hint?: string } | null) ?? {};
-    applyScopingRuntimeHint(this.deps, agent, cfg.scoping_runtime_hint, log);
-    applyScopingModelHint(this.deps, agent, cfg.scoping_model_hint, projectRoot, log);
-    applyStageModelAndResolveSlug(this.deps, agent, stageDef, projectRoot, log);
+    await applyScopingRuntimeHint(this.deps, agent, cfg.scoping_runtime_hint, log);
+    await applyScopingModelHint(this.deps, agent, cfg.scoping_model_hint, projectRoot, log);
+    await applyStageModelAndResolveSlug(this.deps, agent, stageDef, projectRoot, log);
 
     const autonomy = stageDef?.autonomy ?? "full";
 
@@ -210,7 +210,8 @@ export class DispatchService {
     if (!executor) return { ok: false, message: `Executor '${runtimeType}' not registered` };
 
     // Build claude args (only for claude-code executor)
-    const claudeArgs = runtimeType === "claude-code" ? this.deps.buildClaudeArgs(agent, { autonomy, projectRoot }) : [];
+    const claudeArgs =
+      runtimeType === "claude-code" ? await this.deps.buildClaudeArgs(agent, { autonomy, projectRoot }) : [];
 
     // Assemble launch env: stage/runtime secrets + tenant claude auth.
     const launchEnv = await buildLaunchEnv(this.deps, this.secrets, session, stageDef, runtimeName, log);
@@ -256,27 +257,21 @@ export class DispatchService {
     });
   }
 
-  async resume(sessionId: string, opts?: { onLog?: (msg: string) => void }): Promise<DispatchResult> {
-    const session = await this.deps.sessions.get(sessionId);
-    if (!session) return { ok: false, message: `Session ${sessionId} not found` };
-    if (session.status === "running" && session.session_id) return { ok: false, message: "Already running" };
-
-    if (session.session_id) await this.deps.launcher.kill(session.session_id);
-
-    await this.deps.sessions.update(sessionId, {
-      status: "ready",
-      error: null,
-      breakpoint_reason: null,
-      attached_by: null,
-      session_id: null,
-    });
-    await this.deps.events.log(sessionId, "session_resumed", {
-      stage: session.stage,
-      actor: "user",
-      data: { from_status: session.status },
-    });
-
-    // Auto re-dispatch
-    return this.dispatch(sessionId, opts);
+  /**
+   * Resume has ONE authoritative implementation: `SessionService.resume`.
+   * It is the complete cleanup path -- kills the runtime handle across every
+   * registered executor (the handle is opaque; only the owning executor can
+   * clean it up), rewinds + deletes flow-state on a rewind, routes agent vs
+   * action stages, and kicks dispatch in the background. This thin shim only
+   * exists so legacy `dispatchService.resume(id)` callers keep working; it
+   * MUST NOT re-implement a partial subset (that was the split-brain bug).
+   */
+  async resume(sessionId: string, opts?: { rewindToStage?: string }): Promise<DispatchResult> {
+    const result = await this.deps.getApp().sessionService.resume(sessionId, opts);
+    if (!result.ok) return { ok: false, message: result.message };
+    // Dispatch is kicked in the background by the session_created listener
+    // (agent stages) or kickActionStage (action stages); the session is at
+    // status=ready on return and flips to running once the launcher lands.
+    return { ok: true, launched: false, reason: "background_dispatch", message: result.message };
   }
 }

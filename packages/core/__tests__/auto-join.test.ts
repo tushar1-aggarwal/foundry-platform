@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
 import { fanOut, checkAutoJoin } from "../services/fork-join.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 beforeAll(async () => {
@@ -16,14 +17,14 @@ describe("auto-join", async () => {
     const parent = await app.sessions.create({ summary: "Parent", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, { tasks: [{ summary: "A" }, { summary: "B" }] });
+    const result = await fanOut(depsFromApp(app), parent.id, { tasks: [{ summary: "A" }, { summary: "B" }] });
     expect(result.ok).toBe(true);
 
     for (const childId of result.childIds!) {
       await app.sessions.update(childId, { status: "completed" });
     }
 
-    const joinResult = await checkAutoJoin(app, result.childIds![0]);
+    const joinResult = await checkAutoJoin(depsFromApp(app), result.childIds![0]);
     expect(joinResult).toBe(true);
 
     const updated = await app.sessions.get(parent.id);
@@ -34,11 +35,11 @@ describe("auto-join", async () => {
     const parent = await app.sessions.create({ summary: "Parent2", flow: "bare" });
     await app.sessions.update(parent.id, { session_id: `ark-s-${parent.id}`, stage: "implement", status: "running" });
 
-    const result = await fanOut(app, parent.id, { tasks: [{ summary: "C" }, { summary: "D" }] });
+    const result = await fanOut(depsFromApp(app), parent.id, { tasks: [{ summary: "C" }, { summary: "D" }] });
 
     await app.sessions.update(result.childIds![0], { status: "completed" });
 
-    const joinResult = await checkAutoJoin(app, result.childIds![0]);
+    const joinResult = await checkAutoJoin(depsFromApp(app), result.childIds![0]);
     expect(joinResult).toBe(false);
 
     const updated = await app.sessions.get(parent.id);

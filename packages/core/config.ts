@@ -118,7 +118,8 @@ export interface ComputeTemplateConfig {
   /** Template name (key in config.yaml compute_templates map). */
   name: string;
   description?: string;
-  provider: string;
+  compute: import("../types/index.js").ComputeKindName;
+  isolation: import("../types/index.js").IsolationKindName;
   config: Record<string, unknown>;
 }
 
@@ -659,13 +660,15 @@ function parseComputeTemplates(raw: unknown): ComputeTemplateConfig[] | undefine
   for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!value || typeof value !== "object") continue;
     const entry = value as Record<string, unknown>;
-    const provider = entry.provider as string;
-    if (!provider) continue;
-    const { provider: _p, description: _d, ...config } = entry;
+    const compute = entry.compute as import("../types/index.js").ComputeKindName | undefined;
+    const isolation = entry.isolation as import("../types/index.js").IsolationKindName | undefined;
+    if (!compute || !isolation) continue;
+    const { compute: _c, isolation: _i, description: _d, ...config } = entry;
     templates.push({
       name,
       description: entry.description as string | undefined,
-      provider,
+      compute,
+      isolation,
       config,
     });
   }

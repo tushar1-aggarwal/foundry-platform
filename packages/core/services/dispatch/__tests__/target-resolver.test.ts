@@ -7,6 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { AppContext } from "../../../app.js";
 import { resolveTargetAndHandle } from "../target-resolver.js";
+import { depsFromApp } from "../../deps.js";
 
 let app: AppContext;
 
@@ -31,7 +32,7 @@ describe("resolveTargetAndHandle", () => {
       config: {},
     } as never);
     const s = await app.sessions.create({ summary: "phantom", compute_name: "phantom-kind" });
-    const r = await resolveTargetAndHandle(app, s);
+    const r = await resolveTargetAndHandle(depsFromApp(app), s);
     expect(r.target).toBeNull();
     expect(r.handle).toBeNull();
   });
@@ -57,7 +58,7 @@ describe("resolveTargetAndHandle", () => {
       },
     });
     const refetched = (await app.sessions.get(s.id))!;
-    const r = await resolveTargetAndHandle(app, refetched);
+    const r = await resolveTargetAndHandle(depsFromApp(app), refetched);
     expect(r.target).not.toBeNull();
     expect(r.handle).not.toBeNull();
     expect((r.handle!.meta as Record<string, unknown>).rehydrated).toBe(true);
@@ -74,7 +75,7 @@ describe("resolveTargetAndHandle", () => {
       config: {},
     } as never);
     const s = await app.sessions.create({ summary: "fresh", compute_name: "local-fresh" });
-    const r = await resolveTargetAndHandle(app, s);
+    const r = await resolveTargetAndHandle(depsFromApp(app), s);
     expect(r.target).not.toBeNull();
     expect(r.handle).not.toBeNull();
     expect(r.handle!.kind).toBe("local");
@@ -112,7 +113,7 @@ describe("resolveTargetAndHandle", () => {
       config: { ...((s.config as object | null) ?? {}), compute_handle: persisted },
     });
     const refetched = (await app.sessions.get(s.id))!;
-    const r = await resolveTargetAndHandle(app, refetched);
+    const r = await resolveTargetAndHandle(depsFromApp(app), refetched);
     expect(r.handle).not.toBeNull();
     expect(typeof r.handle!.spawnProcess).toBe("function");
     expect(typeof r.handle!.killProcess).toBe("function");
@@ -134,7 +135,7 @@ describe("resolveTargetAndHandle", () => {
       config: {},
     } as never);
     const s = await app.sessions.create({ summary: "persist", compute_name: "local-persist" });
-    await resolveTargetAndHandle(app, s);
+    await resolveTargetAndHandle(depsFromApp(app), s);
     const refetched = (await app.sessions.get(s.id))!;
     const persisted = (refetched.config as { compute_handle?: Record<string, unknown> }).compute_handle!;
     expect(Object.keys(persisted).sort()).toEqual(["kind", "meta", "name"]);

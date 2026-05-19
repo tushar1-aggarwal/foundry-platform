@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, existsSync, writeFileSync } from "fs";
 import { join } from "path";
 import { removeSessionWorktree } from "../services/worktree/index.js";
+import { depsFromApp } from "../services/deps.js";
 import { AppContext } from "../app.js";
 import { clearApp, getApp, setApp } from "./test-helpers.js";
 
@@ -33,7 +34,7 @@ describe("stop() worktree cleanup", async () => {
     writeFileSync(join(wtPath, "dummy.txt"), "test");
     expect(existsSync(wtPath)).toBe(true);
 
-    await app.sessionLifecycle.stop(session.id);
+    await app.sessionTerminator.stop(session.id);
 
     expect(existsSync(wtPath)).toBe(false);
   });
@@ -44,7 +45,7 @@ describe("stop() worktree cleanup", async () => {
 
     expect(existsSync(wtPath)).toBe(false);
 
-    const result = await app.sessionLifecycle.stop(session.id);
+    const result = await app.sessionTerminator.stop(session.id);
     expect(result.ok).toBe(true);
   });
 
@@ -55,7 +56,7 @@ describe("stop() worktree cleanup", async () => {
     // Create a worktree dir but session has no repo -- falls back to rmSync
     mkdirSync(wtPath, { recursive: true });
 
-    const result = await app.sessionLifecycle.stop(session.id);
+    const result = await app.sessionTerminator.stop(session.id);
     expect(result.ok).toBe(true);
     expect(existsSync(wtPath)).toBe(false);
   });
@@ -70,7 +71,7 @@ describe("removeSessionWorktree()", async () => {
     writeFileSync(join(wtPath, "file.txt"), "content");
     expect(existsSync(wtPath)).toBe(true);
 
-    await removeSessionWorktree(app, session);
+    await removeSessionWorktree(depsFromApp(app), session);
     expect(existsSync(wtPath)).toBe(false);
   });
 
@@ -80,7 +81,7 @@ describe("removeSessionWorktree()", async () => {
 
     expect(existsSync(wtPath)).toBe(false);
     // Should not throw
-    await removeSessionWorktree(app, session);
+    await removeSessionWorktree(depsFromApp(app), session);
     expect(existsSync(wtPath)).toBe(false);
   });
 
@@ -92,7 +93,7 @@ describe("removeSessionWorktree()", async () => {
     writeFileSync(join(wtPath, "src", "deep", "file.ts"), "export {}");
     expect(existsSync(wtPath)).toBe(true);
 
-    await removeSessionWorktree(app, session);
+    await removeSessionWorktree(depsFromApp(app), session);
     expect(existsSync(wtPath)).toBe(false);
   });
 });

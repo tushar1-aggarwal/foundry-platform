@@ -8,6 +8,11 @@ import { actorIdentity } from "../../core/auth/context.js";
 import { resolveTenantApp } from "./scope-helpers.js";
 import { eventBus } from "../../core/hooks.js";
 import { isRepoUrl } from "../../core/repo-url.js";
+import { getOutput as getSessionOutput } from "../../core/services/session-output.js";
+import { worktreeDiff, finishWorktree, createWorktreePR } from "../../core/services/worktree/index.js";
+import { depsFromApp } from "../../core/services/deps.js";
+import { joinFork, fanOut as fanOutChildren } from "../../core/services/fork-join.js";
+import { spawnSubagent } from "../../core/services/subagents.js";
 import type {
   SessionIdParams,
   SessionStartParams,
@@ -58,7 +63,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     // validated here.
     const flowName = typeof opts.flow === "string" ? opts.flow : null;
     if (flowName && !opts.repo) {
-      const flow = scoped.flows.get(flowName);
+      const flow = await scoped.flows.get(flowName);
       if (flow?.requires_repo) {
         throw new RpcError(
           `Flow '${flowName}' requires a repo. Pass repo: <git-url-or-local-path>.`,
@@ -99,7 +104,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     if (!opts.runtime) {
       const runtimeOverride = await app.scoping.resolve<string>(ctx, "runtime");
       if (runtimeOverride !== null) {
-        if (app.runtimes.get(runtimeOverride) === null) {
+        if ((await app.runtimes.get(runtimeOverride)) === null) {
           throw new RpcError(
             `Runtime override '${runtimeOverride}' is not a registered runtime ` +
               `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
@@ -135,7 +140,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     {
       const modelOverride = await app.scoping.resolve<string>(ctx, "model");
       if (modelOverride !== null) {
-        if (app.models.get(modelOverride) === null) {
+        if ((await app.models.get(modelOverride)) === null) {
           throw new RpcError(
             `Model override '${modelOverride}' is not a registered model id or alias ` +
               `(tenant=${ctx.tenantId}). Update or remove the matching scoping_overrides row.`,
@@ -220,15 +225,9 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
           }
         : normalizedOpts;
 
-    // Atomic create + dispatch: splitting these across two RPCs used to force
-    // every caller (CLI, web, tests) to remember the second call or live with
-    // a session stuck at status=ready until the conductor's 60s poll tick.
-    //
-    // `start()` emits `session_created` before returning; the default
-    // dispatcher listener (registered above) kicks the background launcher.
-    const session = await scoped.sessionLifecycle.start(startOpts, {
-      onCreated: (id) => scoped.sessionService.emitSessionCreated(id),
-    });
+    // `start()` persists the session row and launches its Temporal
+    // sessionWorkflow, which drives every stage via dispatchStageActivity.
+    const session = await scoped.sessionCreator.start(startOpts);
     notify("session/created", { session });
     return { session };
   });
@@ -280,7 +279,10 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       stage: sessForLog?.stage ?? undefined,
       data: { force: force ?? false },
     });
-    const result = await scoped.sessionService.advance(sessionId, force ?? false);
+    // Temporal owns gates/routing; a manual advance just signals the
+    // current stage done (the `force` flag is moot -- there is no
+    // conductor-side gate to bypass any more).
+    const result = await scoped.sessionProgression.stageDone(sessionId);
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -289,11 +291,12 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/complete", async (params, notify, ctx) => {
     const { sessionId } = extract<SessionIdParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
+    // sessionService.complete already writes the Temporal stage-done
+    // contract (status:"ready" + cleared session_id); the workflow's
+    // awaitStageCompletionActivity picks that up and advances. No separate
+    // advance call is needed under Temporal.
     const result = await scoped.sessionService.complete(sessionId);
     if (!result.ok) throw new RpcError(result.message ?? "Complete failed", SESSION_NOT_FOUND);
-    // Advance the flow after completing the stage -- without this, sessions
-    // get stuck at "ready" instead of progressing to the next stage or "completed".
-    await scoped.sessionService.advance(sessionId, true);
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -319,7 +322,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/fork", async (params, notify, ctx) => {
     const { sessionId, name, group_name } = extract<SessionForkParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.fork(sessionId, name);
+    const result = await scoped.sessionForker.fork(sessionId, name);
     if (!result.ok) {
       throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
@@ -334,7 +337,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/clone", async (params, notify, ctx) => {
     const { sessionId, name } = extract<SessionCloneParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.clone(sessionId, name);
+    const result = await scoped.sessionForker.clone(sessionId, name);
     if (!result.ok) {
       throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
@@ -428,7 +431,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/output", async (params, _notify, ctx) => {
     const { sessionId, lines } = extract<SessionOutputParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const output = await scoped.sessionService.getOutput(sessionId, { lines });
+    const output = await getSessionOutput(depsFromApp(scoped), sessionId, { lines });
     return { output };
   });
 
@@ -447,7 +450,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     // Forensic files live under the daemon's tracks dir (not per-tenant on
     // disk); in hosted mode the tee is skipped so this falls back to the
     // durable blob snapshot. Access control is via the tenant-scoped lookup.
-    const read = await readSessionForensic(scoped, session, "stdio.log", { tail });
+    const read = await readSessionForensic(depsFromApp(scoped), session, "stdio.log", { tail });
     if (read.tooLarge) {
       throw new RpcError(
         `stdio.log is ${read.size} bytes, over the 2MB cap -- pass tail=<N> to read the tail`,
@@ -463,7 +466,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const session = await scoped.sessions.get(sessionId);
     if (!session) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
     const { readSessionForensic, parseJsonl } = await import("../../core/services/session-forensic.js");
-    const read = await readSessionForensic(scoped, session, "transcript.jsonl");
+    const read = await readSessionForensic(depsFromApp(scoped), session, "transcript.jsonl");
     if (read.tooLarge) {
       throw new RpcError(`transcript.jsonl is ${read.size} bytes, over the 2MB cap`, ErrorCodes.INVALID_PARAMS);
     }
@@ -481,7 +484,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/handoff", async (params, notify, ctx) => {
     const { sessionId, agent, instructions } = extract<SessionHandoffParams>(params, ["sessionId", "agent"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.handoff(sessionId, agent, instructions);
+    const result = await scoped.sessionProgression.handoff(sessionId, agent, instructions);
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -490,14 +493,14 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/join", async (params, _notify, ctx) => {
     const { sessionId, force } = extract<SessionJoinParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.join(sessionId, force ?? false);
+    const result = await joinFork(depsFromApp(scoped), sessionId, force ?? false);
     return result;
   });
 
   router.handle("session/spawn", async (params, notify, ctx) => {
     const { sessionId, task, agent, group_name } = extract<SessionSpawnParams>(params, ["sessionId", "task"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.spawn(sessionId, {
+    const result = await spawnSubagent(depsFromApp(scoped), sessionId, {
       task,
       agent,
       group_name,
@@ -505,7 +508,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     if (result.sessionId) {
       const session = await scoped.sessions.get(result.sessionId);
       if (session) notify("session/created", { session });
-      // spawn() emits session_created internally; the default listener handles dispatch.
+      // spawnSubagent starts the subagent's Temporal workflow, which drives dispatch.
     }
     return result;
   });
@@ -516,7 +519,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       tasks: Array<{ summary: string; agent?: string; flow?: string }>;
     }>(params, ["sessionId", "tasks"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.fanOut(sessionId, { tasks });
+    const result = await fanOutChildren(depsFromApp(scoped), sessionId, { tasks });
     if (!result.ok) throw new RpcError(result.message ?? "Fan-out failed", SESSION_NOT_FOUND);
     for (const childId of result.childIds ?? []) {
       const session = await scoped.sessions.get(childId);
@@ -540,7 +543,9 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
 
     if (lastSnapshotId && !rewindToStage) {
       const { resumeFromSnapshot } = await import("../../core/services/session-snapshot.js");
-      const snapResult = await resumeFromSnapshot(scoped, sessionId, { snapshotId: lastSnapshotId as string });
+      const snapResult = await resumeFromSnapshot(depsFromApp(scoped), sessionId, {
+        snapshotId: lastSnapshotId as string,
+      });
       if (snapResult.ok) {
         const updated = await scoped.sessions.get(sessionId);
         if (updated) notify("session/updated", { session: updated });
@@ -566,7 +571,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const session = await scoped.sessions.get(sessionId);
     if (!session) throw new RpcError(`Session ${sessionId} not found`, SESSION_NOT_FOUND);
     const { getStages } = await import("../../core/services/flow.js");
-    const stages = getStages(scoped, session.flow).map((s) => ({
+    const stages = (await getStages(scoped, session.flow)).map((s) => ({
       name: s.name,
       type: s.action ? "action" : s.agent ? "agent" : (s.type ?? "agent"),
       agent: s.agent ?? null,
@@ -583,7 +588,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     // support snapshot we transparently fall back to a state-only pause so
     // local sessions keep working the way they did before snapshotting.
     const { pauseWithSnapshot } = await import("../../core/services/session-snapshot.js");
-    const snapResult = await pauseWithSnapshot(scoped, sessionId, { reason });
+    const snapResult = await pauseWithSnapshot(depsFromApp(scoped), sessionId, { reason });
     const session = await scoped.sessions.get(sessionId);
 
     if (snapResult.ok) {
@@ -634,7 +639,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     }
 
     // Non-claude-agent sessions: fall back to the tmux C-c interrupt.
-    const result = await scoped.sessionLifecycle.interrupt(sessionId);
+    const result = await scoped.sessionSuspender.interrupt(sessionId);
     return result;
   });
 
@@ -644,7 +649,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     const { sessionId } = extract<{ sessionId: string }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
 
-    const result = await scoped.sessionLifecycle.kill(sessionId);
+    const result = await scoped.sessionTerminator.kill(sessionId);
     if (result.ok === false && result.message.includes("not found")) {
       throw new RpcError(result.message, SESSION_NOT_FOUND);
     }
@@ -658,7 +663,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/archive", async (params, notify, ctx) => {
     const { sessionId } = extract<SessionIdParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.archive(sessionId);
+    const result = await scoped.sessionSuspender.archive(sessionId);
     if (result.ok) notify("session/updated", { session: await scoped.sessions.get(sessionId) });
     return result;
   });
@@ -666,7 +671,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("session/restore", async (params, notify, ctx) => {
     const { sessionId } = extract<SessionIdParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.restore(sessionId);
+    const result = await scoped.sessionSuspender.restore(sessionId);
     if (result.ok) notify("session/updated", { session: await scoped.sessions.get(sessionId) });
     return result;
   });
@@ -689,7 +694,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("worktree/diff", async (params, _notify, ctx) => {
     const { sessionId, base } = extract<{ sessionId: string; base?: string }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    return scoped.sessionService.worktreeDiff(sessionId, { base });
+    return worktreeDiff(depsFromApp(scoped), sessionId, { base });
   });
 
   router.handle("worktree/create-pr", async (params, notify, ctx) => {
@@ -701,7 +706,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
       draft?: boolean;
     }>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.createWorktreePR(sessionId, { title, body, base, draft });
+    const result = await createWorktreePR(depsFromApp(scoped), sessionId, { title, body, base, draft });
     const session = await scoped.sessions.get(sessionId);
     if (session) notify("session/updated", { session });
     return result;
@@ -710,7 +715,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("worktree/finish", async (params, _notify, ctx) => {
     const { sessionId, noMerge, createPR } = extract<WorktreeFinishParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    const result = await scoped.sessionService.finishWorktree(sessionId, {
+    const result = await finishWorktree(depsFromApp(scoped), sessionId, {
       noMerge: noMerge ?? false,
       createPR: createPR ?? false,
     });
@@ -749,7 +754,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
   router.handle("verify/run", async (params, _notify, ctx) => {
     const { sessionId } = extract<SessionIdParams>(params, ["sessionId"]);
     const scoped = resolveTenantApp(app, ctx);
-    return scoped.sessionLifecycle.runVerification(sessionId);
+    return scoped.sessionReviewer.runVerification(sessionId);
   });
 
   // ── Export ─────────────────────────────────────────────────────────────
@@ -951,7 +956,7 @@ export function registerSessionHandlers(router: Router, app: AppContext): void {
     // below then simply has nothing to tail, which is correct -- there is no
     // local file to follow when the worker pod owns the only live copy.
     const { readSessionForensic } = await import("../../core/services/session-forensic.js");
-    const initial = await readSessionForensic(scoped, session, fileName);
+    const initial = await readSessionForensic(depsFromApp(scoped), session, fileName);
 
     // Track the byte offset after the initial read so we only push new bytes.
     let offset = initial.exists ? initial.size : 0;

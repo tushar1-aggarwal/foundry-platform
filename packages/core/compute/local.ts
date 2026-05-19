@@ -34,7 +34,6 @@ export class LocalCompute implements Compute {
   readonly kind: ComputeKind = "local";
   readonly capabilities: ComputeCapabilities = {
     snapshot: false,
-    pool: false,
     networkIsolation: false,
     provisionLatency: "instant",
     // The host running ark itself: only one row per tenant, can't be deleted,
@@ -170,7 +169,8 @@ export class LocalCompute implements Compute {
     // startArkdEventsConsumer is a no-op for an already-attached compute.
     const arkdUrl = this.getArkdUrl(h);
     const { startArkdEventsConsumer } = await import("../services/channel/arkd-events-consumer.js");
-    startArkdEventsConsumer(this.app, h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
+    const { depsFromApp } = await import("../services/deps.js");
+    startArkdEventsConsumer(depsFromApp(this.app), h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
   }
 
   // ── flushPlacement ────────────────────────────────────────────────────────

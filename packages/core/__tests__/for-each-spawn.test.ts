@@ -348,7 +348,7 @@ describe("for_each + mode:spawn -- inline flow object in spawn.flow", () => {
     for (const child of children) {
       expect(child.flow).toMatch(/^inline-/);
       // The inline flow should be findable in the store
-      const def = app.flows.get(child.flow);
+      const def = await app.flows.get(child.flow);
       expect(def).not.toBeNull();
       expect(def!.stages[0].name).toBe("code");
     }

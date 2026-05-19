@@ -13,18 +13,6 @@
 #     platforms: [darwin-arm64, ...]    Platforms we vendor for
 #     notes: optional free-text
 
-goose:
-  repo: block/goose
-  version: v1.32.0
-  env: GOOSE_VERSION
-  platforms: [darwin-arm64, darwin-x64, linux-arm64, linux-x64]
-  notes: "Block / Linux Foundation AAIF. Rust binary, pre-built per platform."
-codex:
-  repo: openai/codex
-  version: rust-v0.125.0
-  env: CODEX_VERSION
-  platforms: [darwin-arm64, darwin-x64, linux-arm64, linux-x64]
-  notes: "OpenAI Codex CLI. Rust binary; tags follow 'rust-vX.Y.Z' pattern."
 tmux:
   repo: tmux/tmux
   version: "3.6a"

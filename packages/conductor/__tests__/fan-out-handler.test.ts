@@ -1,15 +1,34 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../core/app.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../core/temporal/test-harness.js";
 import { registerSessionHandlers } from "../handlers/session.js";
 import { Router } from "../router.js";
 import { createRequest, type JsonRpcResponse, type JsonRpcError } from "../../protocol/types.js";
 
 let app: AppContext;
+let detach: (() => void) | undefined;
 beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+  );
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 afterAll(async () => {
+  detach?.();
   await app?.shutdown();
 });
 
@@ -20,18 +39,21 @@ beforeEach(() => {
   registerSessionHandlers(router, app);
 });
 
+// session/start now starts a Temporal workflow. Drive the parent's workflow
+// to a terminal state BEFORE fanning out so the projectSessionActivity
+// terminal write can't race the fanOut "waiting" write -- fanOut updates the
+// row unconditionally and no workflow is running once the parent is terminal.
+async function startSettledParent(summary: string): Promise<string> {
+  const startRes = await router.dispatch(createRequest(1, "session/start", { summary, repo: ".", flow: "x-auto" }));
+  const id = ((startRes as JsonRpcResponse).result as Record<string, unknown>).session as Record<string, unknown>;
+  const parentId = id.id as string;
+  await waitForSessionStatus(app, parentId, ["completed", "failed"]);
+  return parentId;
+}
+
 describe("session/fan-out handler", async () => {
   it("creates child sessions with parent_id set and parent goes to waiting", async () => {
-    // Create parent session
-    const startRes = await router.dispatch(
-      createRequest(1, "session/start", {
-        summary: "parent session",
-        repo: ".",
-        flow: "bare",
-      }),
-    );
-    const startResult = (startRes as JsonRpcResponse).result as Record<string, unknown>;
-    const parentId = (startResult.session as Record<string, unknown>).id as string;
+    const parentId = await startSettledParent("parent session");
     expect(parentId).toMatch(/^s-/);
 
     // Fan out into two child sessions
@@ -64,18 +86,10 @@ describe("session/fan-out handler", async () => {
       expect(child).toBeDefined();
       expect(child?.parent_id).toBe(parentId);
     }
-  });
+  }, 45_000);
 
   it("children summaries match tasks provided", async () => {
-    const startRes = await router.dispatch(
-      createRequest(1, "session/start", {
-        summary: "parent for summaries test",
-        repo: ".",
-        flow: "bare",
-      }),
-    );
-    const startResult = (startRes as JsonRpcResponse).result as Record<string, unknown>;
-    const parentId = (startResult.session as Record<string, unknown>).id as string;
+    const parentId = await startSettledParent("parent for summaries test");
 
     const fanOutRes = await router.dispatch(
       createRequest(2, "session/fan-out", {
@@ -91,7 +105,7 @@ describe("session/fan-out handler", async () => {
     const summaries = await Promise.all(childIds.map(async (id) => (await app.sessions.get(id))?.summary));
     expect(summaries).toContain("first task");
     expect(summaries).toContain("second task");
-  });
+  }, 45_000);
 
   it("returns error for unknown parent session", async () => {
     const fanOutRes = await router.dispatch(
@@ -107,15 +121,7 @@ describe("session/fan-out handler", async () => {
   });
 
   it("returns error when no tasks provided", async () => {
-    const startRes = await router.dispatch(
-      createRequest(1, "session/start", {
-        summary: "parent empty tasks",
-        repo: ".",
-        flow: "bare",
-      }),
-    );
-    const startResult = (startRes as JsonRpcResponse).result as Record<string, unknown>;
-    const parentId = (startResult.session as Record<string, unknown>).id as string;
+    const parentId = await startSettledParent("parent empty tasks");
 
     const fanOutRes = await router.dispatch(
       createRequest(4, "session/fan-out", {
@@ -127,5 +133,5 @@ describe("session/fan-out handler", async () => {
     const err = (fanOutRes as JsonRpcError).error;
     expect(err).toBeDefined();
     expect(err.message).toBeTruthy();
-  });
+  }, 45_000);
 });

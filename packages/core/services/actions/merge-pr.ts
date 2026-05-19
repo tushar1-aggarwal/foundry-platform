@@ -1,5 +1,6 @@
 import type { ActionHandler } from "./types.js";
 import { finishWorktree } from "../worktree/index.js";
+import { depsFromApp } from "../deps.js";
 
 /**
  * `merge_pr` (alias: `merge`) -- force-merge the session's worktree PR. Differs
@@ -9,7 +10,7 @@ export const mergePrAction: ActionHandler = {
   name: "merge_pr",
   aliases: ["merge"],
   async execute(app, session, action, _opts) {
-    const result = await finishWorktree(app, session.id, { force: true });
+    const result = await finishWorktree(depsFromApp(app), session.id, { force: true });
     if (result.ok) {
       await app.events.log(session.id, "action_executed", {
         stage: session.stage ?? undefined,

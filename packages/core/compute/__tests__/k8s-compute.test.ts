@@ -12,8 +12,7 @@
  *
  * The test target is the mapping "ProvisionOpts -> sequence of SDK calls +
  * handle.meta.k8s shape", plus the capability flags and the NotSupportedError
- * surface for snapshot / restore. The `k8s-kata-compute.test.ts` companion
- * file covers KataCompute's additional runtimeClassName annotation.
+ * surface for snapshot / restore.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
@@ -156,7 +155,6 @@ describe("K8sCompute", async () => {
     expect(c.kind).toBe("k8s");
     expect(c.capabilities).toEqual({
       snapshot: false,
-      pool: true,
       networkIsolation: false,
       provisionLatency: "seconds",
       singleton: false,

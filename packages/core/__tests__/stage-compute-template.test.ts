@@ -17,6 +17,7 @@ import { join } from "path";
 import YAML from "yaml";
 import { AppContext } from "../app.js";
 import { getStage, getStages } from "../services/flow.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 
@@ -51,7 +52,7 @@ beforeEach(async () => {
 // ── StageDefinition.compute_template field ──────────────────────────────────
 
 describe("StageDefinition compute_template field", () => {
-  it("loads compute_template from flow YAML", () => {
+  it("loads compute_template from flow YAML", async () => {
     writeUserFlow("tmpl-flow", {
       name: "tmpl-flow",
       stages: [
@@ -60,24 +61,24 @@ describe("StageDefinition compute_template field", () => {
       ],
     });
 
-    const stages = getStages(app, "tmpl-flow");
+    const stages = await getStages(depsFromApp(app), "tmpl-flow");
     expect(stages).toHaveLength(2);
     expect(stages[0].compute_template).toBe("fast-docker");
     expect(stages[1].compute_template).toBe("heavy-ec2");
   });
 
-  it("compute_template is undefined when not specified", () => {
+  it("compute_template is undefined when not specified", async () => {
     writeUserFlow("no-tmpl-flow", {
       name: "no-tmpl-flow",
       stages: [{ name: "work", agent: "worker", gate: "auto" }],
     });
 
-    const stage = getStage(app, "no-tmpl-flow", "work");
+    const stage = await getStage(depsFromApp(app), "no-tmpl-flow", "work");
     expect(stage).not.toBeNull();
     expect(stage!.compute_template).toBeUndefined();
   });
 
-  it("only some stages can have compute_template", () => {
+  it("only some stages can have compute_template", async () => {
     writeUserFlow("mixed-flow", {
       name: "mixed-flow",
       stages: [
@@ -87,7 +88,7 @@ describe("StageDefinition compute_template field", () => {
       ],
     });
 
-    const stages = getStages(app, "mixed-flow");
+    const stages = await getStages(depsFromApp(app), "mixed-flow");
     expect(stages[0].compute_template).toBeUndefined();
     expect(stages[1].compute_template).toBe("gpu-large");
     expect(stages[2].compute_template).toBeUndefined();
@@ -130,24 +131,20 @@ describe("resolveComputeForStage", async () => {
     const logs: string[] = [];
 
     const result = await app.dispatchService.resolveComputeForStage(stageDef, session.id, (m) => logs.push(m));
-    // Upstream adc10203 clones templates with a session-suffixed name so the
-    // GC can tear them down per-session. The resolved name is the clone, not
-    // the source template.
-    expect(result).toMatch(/^fast-docker-/);
+    // A template resolves to its own name -- no per-session clone row.
+    // The provision path materializes an ephemeral pod from the spec.
+    expect(result).toBe("fast-docker");
 
-    // Verify the clone was created with the template's provider
-    const clone = await app.computes.get(result!);
-    expect(clone).not.toBeNull();
-    expect(providerOf(clone!)).toBe("docker");
+    // The resolved row is the template itself, untouched.
+    const tmpl = await app.computes.get(result!);
+    expect(tmpl).not.toBeNull();
+    expect(tmpl!.is_template).toBe(true);
+    expect(providerOf(tmpl!)).toBe("docker");
 
-    // Verify event was logged
+    // No clone row, no clone event.
+    expect(await app.computes.get(`fast-docker-${session.id.slice(0, 8)}`)).toBeNull();
     const events = await app.events.list(session.id);
-    const provisionEvent = events.find((e) => e.type === "compute_cloned_from_template");
-    expect(provisionEvent).toBeDefined();
-    expect(provisionEvent!.data?.template).toBe("fast-docker");
-
-    // Clean up the clone
-    await app.computes.delete(result!);
+    expect(events.find((e) => e.type === "compute_cloned_from_template")).toBeUndefined();
   });
 
   it("resolves template from config when not in DB", async () => {
@@ -161,12 +158,13 @@ describe("resolveComputeForStage", async () => {
     const stageDef = { name: "build", gate: "auto" as const, compute_template: "config-tmpl" };
 
     const result = await app.dispatchService.resolveComputeForStage(stageDef, session.id);
-    // Same session-suffixed clone semantics as above (upstream adc10203).
-    expect(result).toMatch(/^config-tmpl-/);
+    // Config-only templates are seeded into a template row; resolution
+    // returns the template name (materialized at provision, not cloned).
+    expect(result).toBe("config-tmpl");
 
-    // Verify compute was created from config template
     const compute = await app.computes.get(result!);
     expect(compute).not.toBeNull();
+    expect(compute!.is_template).toBe(true);
     expect(providerOf(compute!)).toBe("docker");
 
     // Restore config
@@ -178,7 +176,7 @@ describe("resolveComputeForStage", async () => {
 // ── Integration: flow YAML with compute_template ────────────────────────────
 
 describe("flow with per-stage compute templates", () => {
-  it("different stages can specify different compute templates", () => {
+  it("different stages can specify different compute templates", async () => {
     writeUserFlow("multi-compute-flow", {
       name: "multi-compute-flow",
       description: "Flow with per-stage compute",
@@ -204,14 +202,14 @@ describe("flow with per-stage compute templates", () => {
       ],
     });
 
-    const flow = app.flows.get("multi-compute-flow");
+    const flow = await app.flows.get("multi-compute-flow");
     expect(flow).not.toBeNull();
     expect(flow!.stages[0].compute_template).toBe("lightweight");
     expect(flow!.stages[1].compute_template).toBe("heavy-gpu");
     expect(flow!.stages[2].compute_template).toBeUndefined();
   });
 
-  it("compute_template coexists with other stage fields", () => {
+  it("compute_template coexists with other stage fields", async () => {
     writeUserFlow("full-stage-flow", {
       name: "full-stage-flow",
       stages: [
@@ -228,7 +226,7 @@ describe("flow with per-stage compute templates", () => {
       ],
     });
 
-    const stage = getStage(app, "full-stage-flow", "impl");
+    const stage = await getStage(depsFromApp(app), "full-stage-flow", "impl");
     expect(stage).not.toBeNull();
     expect(stage!.compute_template).toBe("sandbox");
     expect(stage!.model).toBe("opus");

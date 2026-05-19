@@ -45,7 +45,7 @@ export interface RecordUsageCb {
     usage: { input_tokens: number; output_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number },
     provider: string,
     source: string,
-  ): void;
+  ): Promise<void>;
 }
 export interface GetOutputCb {
   (sessionId: string, opts?: { lines?: number }): Promise<string>;
@@ -128,23 +128,6 @@ export interface ReportResult {
   shouldRetry?: boolean;
   /** Max retries from the on_failure directive (e.g. retry(3) -> 3) */
   retryMaxRetries?: number;
-}
-
-export interface StageHandoffResult {
-  /** Whether the handoff completed successfully */
-  ok: boolean;
-  /** Human-readable outcome message */
-  message: string;
-  /** The stage we advanced from (null if handoff was skipped) */
-  fromStage?: string | null;
-  /** The stage we advanced to (null if flow completed) */
-  toStage?: string | null;
-  /** Whether dispatch was triggered for the next stage */
-  dispatched?: boolean;
-  /** Whether the handoff was blocked by verification */
-  blockedByVerification?: boolean;
-  /** Whether the flow completed (no more stages) */
-  flowCompleted?: boolean;
 }
 
 // ── Small shared helpers ────────────────────────────────────────────────────

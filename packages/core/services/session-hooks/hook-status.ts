@@ -39,7 +39,7 @@ export class HookStatusApplier {
     const hookStage = (typeof payload.stage === "string" && payload.stage) || session.stage || undefined;
 
     // Check if this session uses manual gate (interactive - user controls lifecycle)
-    const stageDef = session.stage ? getStage(session.flow, session.stage) : null;
+    const stageDef = session.stage ? await getStage(session.flow, session.stage) : null;
     const isManualGate = stageDef?.gate === "manual";
 
     const isAutoGate = stageDef && stageDef.gate !== "manual";
@@ -253,7 +253,7 @@ export class HookStatusApplier {
 
       // Check on_failure directive for automatic retry on failure
       if (newStatus === "failed" && session.stage && session.flow) {
-        const failStageDef = getStage(session.flow, session.stage);
+        const failStageDef = await getStage(session.flow, session.stage);
         const retryDirective = parseOnFailure(failStageDef?.on_failure);
         if (retryDirective) {
           result.shouldRetry = true;
@@ -300,7 +300,7 @@ export class HookStatusApplier {
           const total =
             usage.input_tokens + usage.output_tokens + (usage.cache_read_tokens ?? 0) + (usage.cache_write_tokens ?? 0);
           if (total > 0) {
-            recordSessionUsage(session, usage, "anthropic", "transcript");
+            await recordSessionUsage(session, usage, "anthropic", "transcript");
           }
         }
       } catch (e: any) {
@@ -329,7 +329,7 @@ export class HookStatusApplier {
       };
       const total = usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_write_tokens;
       if (total > 0) {
-        recordSessionUsage(session, usage, "anthropic", "agent-sdk-hook");
+        await recordSessionUsage(session, usage, "anthropic", "agent-sdk-hook");
       }
     }
 

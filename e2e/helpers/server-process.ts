@@ -22,6 +22,7 @@ import { startWebServer } from "../../packages/core/hosted/web.js";
 import type { Executor, LaunchOpts, LaunchResult, ExecutorStatus } from "../../packages/core/executor.js";
 import { handleReport } from "../../packages/core/services/channel/report-pipeline.js";
 import { getStageAction } from "../../packages/core/services/flow.js";
+import { depsFromApp } from "../../packages/core/services/deps.js";
 
 /**
  * Best-effort kill of any process holding the given TCP ports. Used to
@@ -218,7 +219,7 @@ function buildFakeClaudeExecutor(app: AppContext, arkDir: string, failStage?: st
           // 2. Failure injection.
           const failEnv = process.env.ARK_FAKE_CLAUDE_FAIL_STAGE ?? (opts.env as any)?.ARK_FAKE_CLAUDE_FAIL_STAGE;
           if (failEnv && failEnv === stage) {
-            await handleReport(app, sessionId, {
+            await handleReport(depsFromApp(app), sessionId, {
               type: "error",
               sessionId,
               stage,
@@ -250,7 +251,7 @@ function buildFakeClaudeExecutor(app: AppContext, arkDir: string, failStage?: st
           }
 
           // 4. Success CompletionReport.
-          await handleReport(app, sessionId, {
+          await handleReport(depsFromApp(app), sessionId, {
             type: "completed",
             sessionId,
             stage,
@@ -370,7 +371,7 @@ export async function startLocalServer(opts: LocalSpawnOptions): Promise<LocalSe
       try {
         const s = await app.sessions.get(sessionId);
         if (s?.status === "ready" && s?.flow && s?.stage) {
-          const action = getStageAction(app, s.flow, s.stage);
+          const action = getStageAction(depsFromApp(app), s.flow, s.stage);
           if (action.type === "action") {
             void app.dispatchService.dispatch(sessionId).catch(() => {});
           }

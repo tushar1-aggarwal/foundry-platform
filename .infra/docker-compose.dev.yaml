@@ -1,13 +1,22 @@
-# Local Postgres + Redis + Temporal worker + LocalStack for Ark control-plane mode dev.
+# Local Postgres + Redis + LocalStack + Temporal worker for Ark control-plane
+# mode dev.
 #
 # Brings up:
 #   - ark-postgres        : Postgres 16 on :15433, db `ark`, user/pass `ark`/`ark`.
 #                           (Non-default host port so it can't clash with a host-side
 #                           Postgres or an RDS SSH tunnel that already grabbed :5432.)
 #   - ark-redis           : Redis 7 on :6379, no auth.
-#   - ark-localstack      : LocalStack on :4566 with SSM + KMS. Seeds /ark/kek/dev on
-#                           first boot. Point Ark at it with ARK_KEK_SSM_ENDPOINT and
-#                           ARK_SECRETS_AWS_ENDPOINT both set to http://localhost:4566.
+#   - ark-localstack      : LocalStack on :4566 with S3 + SSM + KMS.
+#                           - S3 (bucket `ark-local`): hosted-mode boot rejects
+#                             LocalDiskBlobStore as pod-ephemeral; LocalStack is
+#                             the laptop stand-in for real S3 so the same code
+#                             path runs locally.
+#                           - SSM + KMS: SsmKekBackend and AwsSecretsProvider can
+#                             run end-to-end without a real AWS account. The seed
+#                             script in ./localstack-init/ populates /ark/kek/dev
+#                             on first boot. Point Ark at it with
+#                             ARK_KEK_SSM_ENDPOINT and ARK_SECRETS_AWS_ENDPOINT
+#                             both set to http://localhost:4566.
 #   - temporal-worker     : Ark Temporal worker (image ark-temporal-worker:dev).
 #                           Connects to the ark-temporal compose project's server
 #                           via host.docker.internal:7233 and to the ark server on
@@ -16,9 +25,11 @@
 # The Temporal server itself lives in docker-compose.temporal.yaml (separate project)
 # so the two stacks can be brought up independently.
 #
-# Usage:
-#   make dev-stack         # bring up + wait for health
-#   make dev-stack-down    # stop + remove volumes
+# Usage (Makefile orchestrates both compose projects + the host server):
+#   make dev-control-plane        # full laptop stack: temporal + pg/redis + worker + ark server
+#   make dev-control-plane-down   # stop everything + remove volumes
+#   make dev-docker               # this file's pg + redis only (no worker)
+#   make dev-temporal             # the Temporal cluster (docker-compose.temporal.yaml)
 #
 # Wire Ark to this stack by sourcing `.env.control-plane` (or copying it
 # to `.env`) before `bun packages/cli/index.ts server start --hosted`.
@@ -59,10 +70,10 @@ services:
       timeout: 5s
       retries: 30
 
-  # LocalStack -- SSM Parameter Store + KMS so the SsmKekBackend and
-  # AwsSecretsProvider can run end-to-end without a real AWS account.
-  # The seed script in ./localstack-init/ populates /ark/kek/dev on first
-  # boot. To use, set:
+  # LocalStack -- S3 (hosted-mode blob store stand-in) + SSM + KMS (so the
+  # SsmKekBackend and AwsSecretsProvider can run end-to-end without a real
+  # AWS account). The seed script in ./localstack-init/ populates
+  # /ark/kek/dev on first boot. To use the SSM KEK backend, set:
   #   ARK_KEK_BACKEND=ssm
   #   ARK_KEK_SSM_PARAMETER=/ark/kek/dev
   #   ARK_KEK_SSM_ENDPOINT=http://localhost:4566
@@ -77,18 +88,27 @@ services:
     ports:
       - "4566:4566"
     environment:
-      SERVICES: ssm,kms
+      # s3 powers the hosted-mode BlobStore stand-in; ssm + kms power the
+      # SsmKekBackend / AwsSecretsProvider so the secrets stack can run
+      # end-to-end against LocalStack instead of real AWS.
+      SERVICES: s3,ssm,kms
       DEFAULT_REGION: ap-south-1
       DEBUG: "0"
+      # Persistence on so the seeded /ark/kek/dev parameter survives
+      # container restarts during dev loops.
       PERSISTENCE: "1"
+      ARK_S3_BUCKET: ark-local
     volumes:
+      # ready.d runs once per container start, after services report READY.
+      # Idempotent S3 bucket + SSM KEK seeding lives in this directory.
       - ./localstack-init:/etc/localstack/init/ready.d:ro
       - ark-localstack-data:/var/lib/localstack
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:4566/_localstack/health"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 30
+      start_period: 5s
 
   temporal-worker:
     build:
@@ -98,6 +118,8 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
+        condition: service_healthy
+      localstack:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -112,7 +134,15 @@ services:
       ARK_TEMPORAL_ORCHESTRATION: "true"
       ARK_PROFILE: control-plane
       ARK_LOG_LEVEL: info
-      ARK_BLOB_BACKEND: local
+      # Hosted mode (control-plane profile) requires s3-backed blobs; LocalStack
+      # is the laptop stand-in. Endpoint is the in-network DNS name, not
+      # host.docker.internal -- localstack is a sibling service in this project.
+      ARK_BLOB_BACKEND: s3
+      ARK_S3_BUCKET: ark-local
+      ARK_S3_REGION: us-east-1
+      ARK_S3_ENDPOINT: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
       ARK_SECRETS_BACKEND: file
       ARK_AUTH_REQUIRE_TOKEN: "false"
       ARK_DEFAULT_TENANT: default

@@ -13,21 +13,22 @@ import type { AppContext } from "../app.js";
 import type { Session } from "../../types/index.js";
 import type { StageDefinition, StageAction } from "./flow.js";
 import * as flow from "./flow.js";
+import { depsFromApp } from "./deps.js";
 
 export interface GetStageCb {
-  (flowName: string, stageName: string): StageDefinition | null;
+  (flowName: string, stageName: string): Promise<StageDefinition | null>;
 }
 
 export interface GetStageActionCb {
-  (flowName: string, stageName: string): StageAction;
+  (flowName: string, stageName: string): Promise<StageAction>;
 }
 
 export interface ResolveNextStageCb {
-  (flowName: string, stage: string, outcome?: string): string | null;
+  (flowName: string, stage: string, outcome?: string): Promise<string | null>;
 }
 
 export interface EvaluateGateCb {
-  (flowName: string, stage: string, session: Session): { canProceed: boolean; reason: string };
+  (flowName: string, stage: string, session: Session): Promise<{ canProceed: boolean; reason: string }>;
 }
 
 /**
@@ -41,10 +42,11 @@ export function buildFlowCallbacks(app: AppContext): {
   resolveNextStage: ResolveNextStageCb;
   evaluateGate: EvaluateGateCb;
 } {
+  const deps = depsFromApp(app);
   return {
-    getStage: (flowName, stageName) => flow.getStage(app, flowName, stageName),
-    getStageAction: (flowName, stageName) => flow.getStageAction(app, flowName, stageName),
-    resolveNextStage: (flowName, stage, outcome) => flow.resolveNextStage(app, flowName, stage, outcome),
-    evaluateGate: (flowName, stage, session) => flow.evaluateGate(app, flowName, stage, session),
+    getStage: (flowName, stageName) => flow.getStage(deps, flowName, stageName),
+    getStageAction: (flowName, stageName) => flow.getStageAction(deps, flowName, stageName),
+    resolveNextStage: (flowName, stage, outcome) => flow.resolveNextStage(deps, flowName, stage, outcome),
+    evaluateGate: (flowName, stage, session) => flow.evaluateGate(deps, flowName, stage, session),
   };
 }

@@ -91,8 +91,8 @@ export async function dispatchForEachSpawn(
   // Mark the parent as running while iterations are in flight. Without this
   // the parent stays at status="ready" -- which the UI normalises to
   // "pending" / initial state -- making it look like the parent hasn't
-  // started even when its child is actively working. The post-loop
-  // mediateStageHandoff transitions to "completed" (or "failed").
+  // started even when its child is actively working. The Temporal workflow
+  // transitions it to "completed" (or "failed") after the loop.
   if (session.status !== "running") {
     // Synthetic handle: the foreach parent has no agent of its own to probe,
     // but the session_id must be non-null to satisfy the running invariant.

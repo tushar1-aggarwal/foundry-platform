@@ -1,6 +1,7 @@
 /**
  * Tenant compute policies -- control what compute resources each tenant
- * can use, including allowed providers, concurrency limits, and cost caps.
+ * can use, expressed as (compute_kind, isolation_kind) axis pairs, plus
+ * concurrency limits and cost caps.
  *
  * The control plane is the single authority that decides what compute a
  * tenant can use and provisions it. TenantPolicyManager persists policies
@@ -8,14 +9,15 @@
  */
 
 import type { DatabaseAdapter } from "../database/index.js";
+import type { ComputeAxes } from "../../types/index.js";
 import { logDebug } from "../observability/structured-log.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export interface TenantComputePolicy {
   tenant_id: string;
-  allowed_providers: string[]; // ["k8s", "k8s-kata", "ec2"]
-  default_provider: string; // "k8s"
+  allowed_compute: ComputeAxes[]; // empty = all allowed
+  default_compute: ComputeAxes; // { compute_kind: "k8s", isolation_kind: "direct" }
   max_concurrent_sessions: number; // 20
   max_cost_per_day_usd: number | null; // budget limit
   compute_pools: ComputePoolRef[]; // pools assigned to this tenant
@@ -31,16 +33,16 @@ export interface TenantComputePolicy {
 
 export interface ComputePoolRef {
   pool_name: string;
-  provider: string;
+  compute: ComputeAxes;
   min: number;
   max: number;
-  config: Record<string, unknown>; // provider-specific (size, image, region, etc.)
+  config: Record<string, unknown>; // compute-specific (size, image, region, etc.)
 }
 
 /** Default policy for tenants without an explicit policy record. */
 const DEFAULT_POLICY: Omit<TenantComputePolicy, "tenant_id"> = {
-  allowed_providers: [], // empty = all allowed
-  default_provider: "k8s",
+  allowed_compute: [], // empty = all allowed
+  default_compute: { compute_kind: "k8s", isolation_kind: "direct" },
   max_concurrent_sessions: 10,
   max_cost_per_day_usd: null,
   compute_pools: [],
@@ -98,9 +100,9 @@ export class TenantPolicyManager {
       await this.db
         .prepare(
           `INSERT INTO tenant_policies
-             (tenant_id, allowed_providers, default_provider, max_concurrent_sessions, compute_pools,
+             (tenant_id, allowed_compute, default_compute, max_concurrent_sessions, compute_pools,
               compute_config_yaml, created_at, updated_at)
-           VALUES (?, '[]', 'k8s', 10, '[]', ?, ?, ?)`,
+           VALUES (?, '[]', '{"compute_kind":"k8s","isolation_kind":"direct"}', 10, '[]', ?, ?, ?)`,
         )
         .run(tenantId, yaml, now, now);
     }
@@ -133,7 +135,8 @@ export class TenantPolicyManager {
   /** Set (create or update) a tenant policy. */
   async setPolicy(policy: TenantComputePolicy): Promise<void> {
     const now = new Date().toISOString();
-    const providers = JSON.stringify(policy.allowed_providers);
+    const allowedCompute = JSON.stringify(policy.allowed_compute);
+    const defaultCompute = JSON.stringify(policy.default_compute);
     const pools = JSON.stringify(policy.compute_pools);
     const k8sContexts = JSON.stringify(policy.allowed_k8s_contexts ?? []);
     const routerEnabled = policy.router_enabled == null ? null : policy.router_enabled ? 1 : 0;
@@ -151,7 +154,7 @@ export class TenantPolicyManager {
         .prepare(
           `
         UPDATE tenant_policies
-        SET allowed_providers = ?, default_provider = ?,
+        SET allowed_compute = ?, default_compute = ?,
             max_concurrent_sessions = ?, max_cost_per_day_usd = ?,
             compute_pools = ?,
             router_enabled = ?, router_required = ?, router_policy = ?,
@@ -162,8 +165,8 @@ export class TenantPolicyManager {
       `,
         )
         .run(
-          providers,
-          policy.default_provider,
+          allowedCompute,
+          defaultCompute,
           policy.max_concurrent_sessions,
           policy.max_cost_per_day_usd ?? null,
           pools,
@@ -182,7 +185,7 @@ export class TenantPolicyManager {
         .prepare(
           `
         INSERT INTO tenant_policies
-          (tenant_id, allowed_providers, default_provider,
+          (tenant_id, allowed_compute, default_compute,
            max_concurrent_sessions, max_cost_per_day_usd, compute_pools,
            router_enabled, router_required, router_policy,
            auto_index, auto_index_required, tensorzero_enabled,
@@ -193,8 +196,8 @@ export class TenantPolicyManager {
         )
         .run(
           policy.tenant_id,
-          providers,
-          policy.default_provider,
+          allowedCompute,
+          defaultCompute,
           policy.max_concurrent_sessions,
           policy.max_cost_per_day_usd ?? null,
           pools,
@@ -226,13 +229,15 @@ export class TenantPolicyManager {
   // ── Validation helpers ──────────────────────────────────────────────────
 
   /**
-   * Check if a provider is allowed for a tenant.
-   * An empty allowed_providers list means all providers are allowed.
+   * Check if a (compute_kind, isolation_kind) pair is allowed for a tenant.
+   * An empty allowed_compute list means all pairs are allowed.
    */
-  async isProviderAllowed(tenantId: string, provider: string): Promise<boolean> {
+  async isComputeAllowed(tenantId: string, axes: ComputeAxes): Promise<boolean> {
     const policy = await this.getEffectivePolicy(tenantId);
-    if (policy.allowed_providers.length === 0) return true;
-    return policy.allowed_providers.includes(provider);
+    if (policy.allowed_compute.length === 0) return true;
+    return policy.allowed_compute.some(
+      (a) => a.compute_kind === axes.compute_kind && a.isolation_kind === axes.isolation_kind,
+    );
   }
 
   /**
@@ -310,11 +315,17 @@ export class TenantPolicyManager {
   // ── Internal ────────────────────────────────────────────────────────────
 
   private _hydrateRow(row: TenantPolicyRow): TenantComputePolicy {
-    let allowedProviders: string[] = [];
+    let allowedCompute: ComputeAxes[] = [];
+    let defaultCompute: ComputeAxes = { compute_kind: "k8s", isolation_kind: "direct" };
     let computePools: ComputePoolRef[] = [];
     let k8sContexts: string[] = [];
     try {
-      allowedProviders = JSON.parse(row.allowed_providers);
+      allowedCompute = JSON.parse(row.allowed_compute);
+    } catch {
+      logDebug("general", "default");
+    }
+    try {
+      defaultCompute = JSON.parse(row.default_compute);
     } catch {
       logDebug("general", "default");
     }
@@ -331,8 +342,8 @@ export class TenantPolicyManager {
 
     return {
       tenant_id: row.tenant_id,
-      allowed_providers: allowedProviders,
-      default_provider: row.default_provider,
+      allowed_compute: allowedCompute,
+      default_compute: defaultCompute,
       max_concurrent_sessions: row.max_concurrent_sessions,
       max_cost_per_day_usd: row.max_cost_per_day_usd ?? null,
       compute_pools: computePools,
@@ -349,8 +360,8 @@ export class TenantPolicyManager {
 
 interface TenantPolicyRow {
   tenant_id: string;
-  allowed_providers: string;
-  default_provider: string;
+  allowed_compute: string;
+  default_compute: string;
   max_concurrent_sessions: number;
   max_cost_per_day_usd: number | null;
   compute_pools: string;

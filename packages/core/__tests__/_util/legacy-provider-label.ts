@@ -21,8 +21,6 @@ export function legacyProviderLabel(c: Pick<Compute, "compute_kind" | "isolation
     if (ik === "docker") return "ec2-docker";
     if (ik === "devcontainer") return "ec2-devcontainer";
   }
-  if (ck === "firecracker") return "firecracker";
   if (ck === "k8s") return "k8s";
-  if (ck === "k8s-kata") return "k8s-kata";
   return ck;
 }

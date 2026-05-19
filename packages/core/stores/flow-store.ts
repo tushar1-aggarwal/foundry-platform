@@ -21,10 +21,10 @@ export interface FlowSummary {
 }
 
 export interface FlowStore {
-  list(): FlowSummary[];
-  get(name: string): FlowDefinition | null;
-  save(name: string, flow: FlowDefinition, scope?: "global" | "project"): void;
-  delete(name: string, scope?: "global" | "project"): boolean;
+  list(): Promise<FlowSummary[]>;
+  get(name: string): Promise<FlowDefinition | null>;
+  save(name: string, flow: FlowDefinition, scope?: "global" | "project"): Promise<void>;
+  delete(name: string, scope?: "global" | "project"): Promise<boolean>;
   /**
    * Register an ephemeral in-memory flow definition by name. Only implemented
    * by EphemeralFlowStore -- the file-backed store ignores this call (optional
@@ -65,7 +65,7 @@ export class FileFlowStore implements FlowStore {
     this.projectDir = opts.projectDir;
   }
 
-  get(name: string): FlowDefinition | null {
+  async get(name: string): Promise<FlowDefinition | null> {
     // Resolution order: project > user > builtin
     const dirs = this.projectDir ? [this.projectDir, this.userDir, this.builtinDir] : [this.userDir, this.builtinDir];
 
@@ -76,7 +76,7 @@ export class FileFlowStore implements FlowStore {
     return null;
   }
 
-  list(): FlowSummary[] {
+  async list(): Promise<FlowSummary[]> {
     const result = new Map<string, FlowSummary>();
 
     const dirs: [string, string][] = [
@@ -102,14 +102,14 @@ export class FileFlowStore implements FlowStore {
     return [...result.values()];
   }
 
-  save(name: string, flow: FlowDefinition, scope: "global" | "project" = "global"): void {
+  async save(name: string, flow: FlowDefinition, scope: "global" | "project" = "global"): Promise<void> {
     const dir = scope === "project" && this.projectDir ? this.projectDir : this.userDir;
     mkdirSync(dir, { recursive: true });
     const { ...data } = flow;
     writeFileSync(join(dir, `${name}.yaml`), YAML.stringify(data));
   }
 
-  delete(name: string, scope: "global" | "project" = "global"): boolean {
+  async delete(name: string, scope: "global" | "project" = "global"): Promise<boolean> {
     const dir = scope === "project" && this.projectDir ? this.projectDir : this.userDir;
     const path = join(dir, `${name}.yaml`);
     if (existsSync(path)) {

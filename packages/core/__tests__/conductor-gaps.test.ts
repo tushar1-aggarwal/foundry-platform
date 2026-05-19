@@ -9,6 +9,7 @@ import { join } from "path";
 import { withTestContext } from "./test-helpers.js";
 import { worktreeDiff, createWorktreePR, mergeWorktreePR } from "../services/worktree/index.js";
 import { executeAction } from "../services/actions/index.js";
+import { depsFromApp } from "../services/deps.js";
 import { getStageDefinition } from "../services/flow.js";
 import { loadRepoConfig } from "../repo-config.js";
 import { getApp } from "./test-helpers.js";
@@ -19,7 +20,7 @@ withTestContext();
 
 describe("interrupt(getApp())", async () => {
   it("returns error for non-existent session", async () => {
-    const result = await getApp().sessionLifecycle.interrupt("s-nonexistent");
+    const result = await getApp().sessionSuspender.interrupt("s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -28,7 +29,7 @@ describe("interrupt(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "interrupt-not-running" });
     await getApp().sessions.update(session.id, { status: "pending" });
 
-    const result = await getApp().sessionLifecycle.interrupt(session.id);
+    const result = await getApp().sessionSuspender.interrupt(session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not running");
   });
@@ -42,8 +43,8 @@ describe("interrupt(getApp())", async () => {
     // through a raw-DB-manipulation route.
   });
 
-  it("is exposed on the SessionLifecycle service", () => {
-    expect(typeof getApp().sessionLifecycle.interrupt).toBe("function");
+  it("is exposed on the SessionSuspender service", () => {
+    expect(typeof getApp().sessionSuspender.interrupt).toBe("function");
   });
 });
 
@@ -51,7 +52,7 @@ describe("interrupt(getApp())", async () => {
 
 describe("worktreeDiff(getApp())", async () => {
   it("returns error for non-existent session", async () => {
-    const result = await worktreeDiff(getApp(), "s-nonexistent");
+    const result = await worktreeDiff(depsFromApp(getApp()), "s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -60,7 +61,7 @@ describe("worktreeDiff(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "diff-no-workdir" });
     // No workdir or repo set
 
-    const result = await worktreeDiff(getApp(), session.id);
+    const result = await worktreeDiff(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("No workdir or repo");
   });
@@ -72,7 +73,7 @@ describe("worktreeDiff(getApp())", async () => {
       repo: "/tmp/nonexistent-repo",
     });
 
-    const result = await worktreeDiff(getApp(), session.id);
+    const result = await worktreeDiff(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("Cannot determine branch");
   });
@@ -82,13 +83,13 @@ describe("worktreeDiff(getApp())", async () => {
 
 describe("worktreeDiff re-review flagging", async () => {
   it("returns empty modifiedSinceReview for non-existent session", async () => {
-    const result = await worktreeDiff(getApp(), "s-nonexistent");
+    const result = await worktreeDiff(depsFromApp(getApp()), "s-nonexistent");
     expect(result.modifiedSinceReview).toEqual([]);
   });
 
   it("returns modifiedSinceReview in the result shape", async () => {
     const session = await getApp().sessions.create({ summary: "re-review-test" });
-    const result = await worktreeDiff(getApp(), session.id);
+    const result = await worktreeDiff(depsFromApp(getApp()), session.id);
     expect(Array.isArray(result.modifiedSinceReview)).toBe(true);
   });
 });
@@ -97,7 +98,7 @@ describe("worktreeDiff re-review flagging", async () => {
 
 describe("createWorktreePR(getApp())", async () => {
   it("returns error for non-existent session", async () => {
-    const result = await createWorktreePR(getApp(), "s-nonexistent");
+    const result = await createWorktreePR(depsFromApp(getApp()), "s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -106,7 +107,7 @@ describe("createWorktreePR(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "pr-no-repo" });
     // No repo set
 
-    const result = await createWorktreePR(getApp(), session.id);
+    const result = await createWorktreePR(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no repo");
   });
@@ -115,7 +116,7 @@ describe("createWorktreePR(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "pr-no-branch" });
     await getApp().sessions.update(session.id, { repo: "/tmp/nonexistent-repo" });
 
-    const result = await createWorktreePR(getApp(), session.id);
+    const result = await createWorktreePR(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("Cannot determine worktree branch");
   });
@@ -129,14 +130,14 @@ describe("createWorktreePR(getApp())", async () => {
 
 describe("mergeWorktreePR(getApp())", async () => {
   it("returns error for non-existent session", async () => {
-    const result = await mergeWorktreePR(getApp(), "s-nonexistent");
+    const result = await mergeWorktreePR(depsFromApp(getApp()), "s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
 
   it("returns error when session has no PR URL", async () => {
     const session = await getApp().sessions.create({ summary: "merge-no-pr" });
-    const result = await mergeWorktreePR(getApp(), session.id);
+    const result = await mergeWorktreePR(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no PR URL");
   });
@@ -144,7 +145,7 @@ describe("mergeWorktreePR(getApp())", async () => {
   it("returns error when session has no repo", async () => {
     const session = await getApp().sessions.create({ summary: "merge-no-repo" });
     await getApp().sessions.update(session.id, { pr_url: "https://github.com/org/repo/pull/1" });
-    const result = await mergeWorktreePR(getApp(), session.id);
+    const result = await mergeWorktreePR(depsFromApp(getApp()), session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no repo");
   });
@@ -163,13 +164,13 @@ describe("executeAction auto_merge", async () => {
   it("returns error when session has no PR URL", async () => {
     const session = await getApp().sessions.create({ summary: "auto-merge-no-pr", flow: "autonomous-sdlc" });
     await getApp().sessions.update(session.id, { stage: "merge" });
-    const result = await executeAction(getApp(), session.id, "auto_merge");
+    const result = await executeAction(depsFromApp(getApp()), session.id, "auto_merge");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no PR URL");
   });
 
   it("returns error for non-existent session", async () => {
-    const result = await executeAction(getApp(), "s-nonexistent", "auto_merge");
+    const result = await executeAction(depsFromApp(getApp()), "s-nonexistent", "auto_merge");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -180,7 +181,7 @@ describe("executeAction auto_merge", async () => {
       stage: "merge",
       pr_url: "https://github.com/org/repo/pull/1",
     });
-    const result = await executeAction(getApp(), session.id, "auto_merge");
+    const result = await executeAction(depsFromApp(getApp()), session.id, "auto_merge");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("no repo");
   });
@@ -193,7 +194,7 @@ describe("executeAction auto_merge", async () => {
       status: "running",
       pr_url: "https://github.com/org/repo/pull/1",
     });
-    const result = await executeAction(getApp(), session.id, "auto_merge");
+    const result = await executeAction(depsFromApp(getApp()), session.id, "auto_merge");
     expect(result.ok).toBe(false);
     // Session should NOT have been advanced or set to waiting
     const updated = (await getApp().sessions.get(session.id))!;
@@ -303,7 +304,7 @@ describe("runVerification(getApp())", async () => {
   it("returns ok when no todos and no verify scripts", async () => {
     const session = await getApp().sessions.create({ summary: "verify-clean" });
 
-    const result = await getApp().sessionLifecycle.runVerification(session.id);
+    const result = await getApp().sessionReviewer.runVerification(session.id);
     expect(result.ok).toBe(true);
     expect(result.todosResolved).toBe(true);
     expect(result.pendingTodos).toHaveLength(0);
@@ -315,7 +316,7 @@ describe("runVerification(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "verify-todos" });
     await getApp().todos.add(session.id, "Must do this");
 
-    const result = await getApp().sessionLifecycle.runVerification(session.id);
+    const result = await getApp().sessionReviewer.runVerification(session.id);
     expect(result.ok).toBe(false);
     expect(result.todosResolved).toBe(false);
     expect(result.pendingTodos).toHaveLength(1);
@@ -326,7 +327,7 @@ describe("runVerification(getApp())", async () => {
     await getApp().todos.add(session.id, "Fix the bug");
     await getApp().todos.add(session.id, "Add tests");
 
-    const result = await getApp().sessionLifecycle.runVerification(session.id);
+    const result = await getApp().sessionReviewer.runVerification(session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("Fix the bug");
     expect(result.message).toContain("Add tests");
@@ -334,7 +335,7 @@ describe("runVerification(getApp())", async () => {
   });
 
   it("returns error for non-existent session", async () => {
-    const result = await getApp().sessionLifecycle.runVerification("s-nonexistent");
+    const result = await getApp().sessionReviewer.runVerification("s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -344,7 +345,7 @@ describe("runVerification(getApp())", async () => {
     const t1 = await getApp().todos.add(session.id, "Already done");
     await getApp().todos.toggle(t1.id);
 
-    const result = await getApp().sessionLifecycle.runVerification(session.id);
+    const result = await getApp().sessionReviewer.runVerification(session.id);
     expect(result.ok).toBe(true);
     expect(result.todosResolved).toBe(true);
     expect(result.pendingTodos).toHaveLength(0);
@@ -370,7 +371,7 @@ describe("runVerification(getApp())", async () => {
     await getApp().sessions.update(session.id, { stage: "only" });
 
     const calls: Array<{ script: string; cwd: string | undefined }> = [];
-    const result = await getApp().sessionLifecycle.runVerification(session.id, {
+    const result = await getApp().sessionReviewer.runVerification(session.id, {
       runScript: async (script, opts) => {
         calls.push({ script, cwd: opts.cwd });
         if (script === "good") return { stdout: "ok\n", stderr: "" };
@@ -407,7 +408,7 @@ describe("runVerification(getApp())", async () => {
     });
     await getApp().sessions.update(session.id, { stage: "only" });
 
-    const result = await getApp().sessionLifecycle.runVerification(session.id, {
+    const result = await getApp().sessionReviewer.runVerification(session.id, {
       runScript: async () => ({ stdout: "", stderr: "" }),
     });
     expect(result.ok).toBe(true);
@@ -424,8 +425,8 @@ describe("StageDefinition verify field", () => {
     expect(typeof getStageDefinition).toBe("function");
   });
 
-  it("returns null for nonexistent flow/stage", () => {
-    const stage = getStageDefinition(getApp(), "nonexistent-flow", "nonexistent-stage");
+  it("returns null for nonexistent flow/stage", async () => {
+    const stage = await getStageDefinition(depsFromApp(getApp()), "nonexistent-flow", "nonexistent-stage");
     expect(stage).toBeNull();
   });
 
@@ -480,7 +481,7 @@ describe("archive(getApp()) and restore(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "archive-test" });
     await getApp().sessions.update(session.id, { status: "completed" });
 
-    const result = await getApp().sessionLifecycle.archive(session.id);
+    const result = await getApp().sessionSuspender.archive(session.id);
     expect(result.ok).toBe(true);
     expect(result.message).toBe("Session archived");
 
@@ -489,7 +490,7 @@ describe("archive(getApp()) and restore(getApp())", async () => {
   });
 
   it("archive returns error for non-existent session", async () => {
-    const result = await getApp().sessionLifecycle.archive("s-nonexistent");
+    const result = await getApp().sessionSuspender.archive("s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -497,9 +498,9 @@ describe("archive(getApp()) and restore(getApp())", async () => {
   it("restore sets status to stopped", async () => {
     const session = await getApp().sessions.create({ summary: "restore-test" });
     await getApp().sessions.update(session.id, { status: "completed" });
-    await getApp().sessionLifecycle.archive(session.id);
+    await getApp().sessionSuspender.archive(session.id);
 
-    const result = await getApp().sessionLifecycle.restore(session.id);
+    const result = await getApp().sessionSuspender.restore(session.id);
     expect(result.ok).toBe(true);
     expect(result.message).toBe("Session restored");
 
@@ -511,7 +512,7 @@ describe("archive(getApp()) and restore(getApp())", async () => {
     const session = await getApp().sessions.create({ summary: "restore-not-archived" });
     await getApp().sessions.update(session.id, { status: "completed" });
 
-    const result = await getApp().sessionLifecycle.restore(session.id);
+    const result = await getApp().sessionSuspender.restore(session.id);
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not archived");
   });
@@ -519,7 +520,7 @@ describe("archive(getApp()) and restore(getApp())", async () => {
   it("archived sessions excluded from default list", async () => {
     const session = await getApp().sessions.create({ summary: "archive-list-test" });
     await getApp().sessions.update(session.id, { status: "completed" });
-    await getApp().sessionLifecycle.archive(session.id);
+    await getApp().sessionSuspender.archive(session.id);
 
     // Default list should not include archived
     const defaultList = await getApp().sessions.list();
@@ -531,43 +532,6 @@ describe("archive(getApp()) and restore(getApp())", async () => {
     const foundArchived = archivedList.find((s: any) => s.id === session.id);
     expect(foundArchived).toBeDefined();
     expect(foundArchived!.status).toBe("archived");
-  });
-});
-
-// ── cli-agent executor ──────────────────────────────────────────────────────
-
-import { cliAgentExecutor } from "../executors/cli-agent.js";
-
-describe("cli-agent executor", async () => {
-  it("is exported and registered", () => {
-    expect(typeof cliAgentExecutor).toBe("object");
-    expect(cliAgentExecutor.name).toBe("cli-agent");
-  });
-
-  it("launch fails without command", async () => {
-    const result = await cliAgentExecutor.launch({
-      sessionId: "s-test",
-      workdir: "/tmp",
-      task: "test",
-      agent: {
-        name: "test",
-        model: "test",
-        max_turns: 1,
-        system_prompt: "",
-        tools: [],
-        skills: [],
-        mcp_servers: [],
-        permission_mode: "bypassPermissions",
-        env: {},
-      },
-    });
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("no command");
-  });
-
-  it("status returns not_found for unknown handle", async () => {
-    const status = await cliAgentExecutor.status("nonexistent-handle");
-    expect(status.state).toBe("not_found"); // tmux session doesn't exist = not_found
   });
 });
 

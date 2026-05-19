@@ -107,7 +107,7 @@ describe("admin/scoping/set happy paths", () => {
   });
 
   it("sets a tenant-level model override using an alias", async () => {
-    const aliasModel = app.models.list().find((m) => Array.isArray(m.aliases) && m.aliases.length > 0);
+    const aliasModel = (await app.models.list()).find((m) => Array.isArray(m.aliases) && m.aliases.length > 0);
     if (!aliasModel || !aliasModel.aliases) throw new Error("test setup: need at least one model alias");
     const alias = aliasModel.aliases[0];
     const ctx = adminCtx("default");
@@ -196,7 +196,7 @@ describe("admin/scoping/set validator rejections", () => {
 
   it("rejects unknown model id / alias and lists the catalog as a hint", async () => {
     const ctx = adminCtx("default");
-    const someModel = app.models.list()[0];
+    const someModel = (await app.models.list())[0];
     const res = (await dispatchAs(
       "admin/scoping/set",
       { scope_kind: "tenant", scope_id: "default", key: "model", value: "ghost-model-xyz" },

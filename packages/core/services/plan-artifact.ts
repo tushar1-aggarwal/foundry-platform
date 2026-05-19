@@ -8,14 +8,14 @@
  * The implementer stage used to `readFileSync` it off the worktree, which
  * breaks on hosted deployments where the implement stage may land on a
  * different replica than the planner. After this capture the implement
- * stage reads via `app.blobStore.get(session.config.plan_md_locator)`
+ * stage reads via `deps.blobStore.get(session.config.plan_md_locator)`
  * with filesystem fallback only for the same-replica local path.
  */
 
 import { existsSync, readFileSync, statSync } from "fs";
 import { join } from "path";
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import type { Session } from "../../types/index.js";
 import { logDebug, logWarn } from "../observability/structured-log.js";
 
@@ -30,9 +30,9 @@ const MAX_PLAN_BYTES = 1 * 1024 * 1024; // 1 MiB -- plans are text; reject patho
  * unchanged since the last capture (matched by size+mtime), or the session
  * has no worktreesDir layout.
  */
-export async function capturePlanMdIfPresent(app: AppContext, session: Session): Promise<void> {
+export async function capturePlanMdIfPresent(deps: OrchestrationDeps, session: Session): Promise<void> {
   try {
-    const wtDir = join(app.config.dirs.worktrees, session.id);
+    const wtDir = join(deps.config.dirs.worktrees, session.id);
     const planPath = join(wtDir, "PLAN.md");
     if (!existsSync(planPath)) return;
 
@@ -51,13 +51,13 @@ export async function capturePlanMdIfPresent(app: AppContext, session: Session):
     if (priorFingerprint === fingerprint && (session.config as any)?.plan_md_locator) return;
 
     const bytes = readFileSync(planPath);
-    const meta = await app.blobStore.put(
+    const meta = await deps.blobStore.put(
       { tenantId: session.tenant_id, namespace: "plan-md", id: session.id, filename: "PLAN.md" },
       bytes,
       { contentType: "text/markdown; charset=utf-8" },
     );
 
-    app.sessions.mergeConfig(session.id, {
+    deps.sessions.mergeConfig(session.id, {
       plan_md_locator: meta.locator,
       plan_md_fingerprint: fingerprint,
     });
@@ -75,18 +75,18 @@ export async function capturePlanMdIfPresent(app: AppContext, session: Session):
  * otherwise fall through to a direct worktree read. Returns null if neither
  * source yields bytes so callers can skip the "no PLAN.md" branch cleanly.
  */
-export async function readPlanMd(app: AppContext, session: Session): Promise<string | null> {
+export async function readPlanMd(deps: OrchestrationDeps, session: Session): Promise<string | null> {
   const locator = (session.config as any)?.plan_md_locator as string | undefined;
   if (locator) {
     try {
-      const { bytes } = await app.blobStore.get(locator, session.tenant_id);
+      const { bytes } = await deps.blobStore.get(locator, session.tenant_id);
       return bytes.toString("utf-8");
     } catch (e: any) {
       logWarn("session", `plan-md blob read failed for ${session.id}: ${e?.message ?? e}`);
     }
   }
 
-  const wtDir = join(app.config.dirs.worktrees, session.id);
+  const wtDir = join(deps.config.dirs.worktrees, session.id);
   const planPath = join(wtDir, "PLAN.md");
   if (existsSync(planPath)) {
     try {

@@ -189,7 +189,7 @@ describe("inline flow -- spawn.flow as object", () => {
     expect(spawnedChildId).not.toBeNull();
 
     const syntheticName = `inline-${spawnedChildId}`;
-    const def = app.flows.get(syntheticName);
+    const def = await app.flows.get(syntheticName);
     expect(def).not.toBeNull();
     expect(def!.name).toBe(syntheticName);
     expect(def!.stages[0].name).toBe("do-work");
@@ -285,7 +285,7 @@ describe("inline flow -- spawn.flow as object", () => {
     // Each flow name must match the child's id
     for (const child of children) {
       expect(child.flow).toBe(`inline-${child.id}`);
-      const def = app.flows.get(child.flow);
+      const def = await app.flows.get(child.flow);
       expect(def).not.toBeNull();
       expect(def!.name).toBe(child.flow);
     }
@@ -322,7 +322,7 @@ describe("inline flow -- daemon restart rehydration", () => {
     def.name = freshName;
     app.flows.registerInline?.(freshName, def);
 
-    const fetched = app.flows.get(freshName);
+    const fetched = await app.flows.get(freshName);
     expect(fetched).not.toBeNull();
     expect(fetched!.stages[0].name).toBe("do-work");
   });

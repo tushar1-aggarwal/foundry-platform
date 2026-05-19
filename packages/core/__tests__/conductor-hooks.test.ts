@@ -316,25 +316,9 @@ describe("Conductor /hooks/status endpoint", async () => {
     expect(updated?.error).toBe("agent crashed");
   });
 
-  it("SessionEnd advances auto-gate session to next stage", async () => {
-    // Use default flow with implement stage (gate: auto) -- advance moves to verify
-    const session = await getApp().sessions.create({ summary: "hook test", flow: "default" });
-    await getApp().sessions.update(session.id, {
-      status: "running",
-      stage: "implement",
-      session_id: `ark-s-${session.id}`,
-    });
-
-    const resp = await postHook(session.id, { hook_event_name: "SessionEnd" });
-    expect(resp.status).toBe(200);
-    const body = (await resp.json()) as Record<string, unknown>;
-    expect(body.mapped).toBe("ready");
-
-    const updated = await getApp().sessions.get(session.id);
-    // advance() should have moved to the next stage (verify) and auto-dispatched
-    expect(updated?.stage).toBe("verify");
-    expect(updated?.status).toBe("running");
-  });
+  // DELETED "SessionEnd advances auto-gate session to next stage": asserted the
+  // bespoke hook-driven advance() (implement -> verify) which prod removed --
+  // stage advancement is now driven solely by the Temporal session-workflow.
 
   it("Stop hook does not index transcript when claude session ID does not match", async () => {
     const session = await getApp().sessions.create({ summary: "hook test" });
@@ -435,21 +419,9 @@ describe("Conductor /hooks/status endpoint", async () => {
     expect(updated?.status).toBe("failed");
   });
 
-  it("SessionEnd advances auto-gate sessions via advance()", async () => {
-    const session = await getApp().sessions.create({ summary: "auto test", flow: "default" });
-    await getApp().sessions.update(session.id, {
-      status: "running",
-      stage: "implement",
-      session_id: `ark-s-${session.id}`,
-    });
-
-    await postHook(session.id, { hook_event_name: "SessionEnd" });
-
-    const updated = await getApp().sessions.get(session.id);
-    // advance() moves to verify stage (next after implement in default flow) and auto-dispatches
-    expect(updated?.stage).toBe("verify");
-    expect(updated?.status).toBe("running");
-  });
+  // DELETED "SessionEnd advances auto-gate sessions via advance()": same removed
+  // bespoke hook-driven advance() contract -- the Temporal session-workflow
+  // owns stage advancement now, not the hook-status path.
 
   it("UserPromptSubmit clears breakpoint_reason when resuming from waiting", async () => {
     const session = await getApp().sessions.create({ summary: "breakpoint clear test" });

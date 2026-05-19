@@ -21,6 +21,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { AppContext } from "../app.js";
 import { setupSessionWorktree } from "../services/worktree/setup.js";
+import { depsFromApp } from "../services/deps.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
@@ -64,7 +65,7 @@ describe("setupSessionWorktree short-circuit for remote compute", () => {
       config: { remoteRepo: "https://bitbucket.org/paytmteam/foundry-test-repo.git" },
     });
     const compute = await app.computes.get("k8s-resolve-test");
-    const result = await setupSessionWorktree(app, session, compute);
+    const result = await setupSessionWorktree(depsFromApp(app), session, compute);
     expect(result).toBe(`/workspace/${session.id}/foundry-test-repo`);
 
     // And critically: still NOT persisted to the row -- the compute side
@@ -93,7 +94,7 @@ describe("setupSessionWorktree short-circuit for remote compute", () => {
     const compute = await app.computes.get("k8s-test");
     expect(compute).toBeTruthy();
 
-    await setupSessionWorktree(app, session, compute);
+    await setupSessionWorktree(depsFromApp(app), session, compute);
 
     const after = await app.sessions.get(session.id);
     // The session row's workdir must NOT have been mutated to a conductor-side
@@ -118,7 +119,7 @@ describe("setupSessionWorktree short-circuit for remote compute", () => {
       repo: repoDir,
     });
 
-    await setupSessionWorktree(app, session);
+    await setupSessionWorktree(depsFromApp(app), session);
 
     const after = await app.sessions.get(session.id);
     const expectedWtDir = join(app.config.dirs.worktrees, session.id);

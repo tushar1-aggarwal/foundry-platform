@@ -14,10 +14,10 @@ import type { SkillDefinition } from "../agent/skill.js";
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export interface SkillStore {
-  list(projectRoot?: string): SkillDefinition[];
-  get(name: string, projectRoot?: string): SkillDefinition | null;
-  save(name: string, skill: SkillDefinition, scope?: "global" | "project", projectRoot?: string): void;
-  delete(name: string, scope?: "global" | "project", projectRoot?: string): boolean;
+  list(projectRoot?: string): Promise<SkillDefinition[]>;
+  get(name: string, projectRoot?: string): Promise<SkillDefinition | null>;
+  save(name: string, skill: SkillDefinition, scope?: "global" | "project", projectRoot?: string): Promise<void>;
+  delete(name: string, scope?: "global" | "project", projectRoot?: string): Promise<boolean>;
 }
 
 // ── File-backed implementation ──────────────────────────────────────────────
@@ -57,7 +57,7 @@ export class FileSkillStore implements SkillStore {
     this.projectDir = opts.projectDir;
   }
 
-  list(projectRoot?: string): SkillDefinition[] {
+  async list(projectRoot?: string): Promise<SkillDefinition[]> {
     const builtin = loadFromDir(this.builtinDir, "builtin");
     const global = loadFromDir(this.userDir, "global");
     const projDir = projectRoot ? join(projectRoot, ".ark", "skills") : this.projectDir;
@@ -71,18 +71,23 @@ export class FileSkillStore implements SkillStore {
     return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  get(name: string, projectRoot?: string): SkillDefinition | null {
-    return this.list(projectRoot).find((s) => s.name === name) ?? null;
+  async get(name: string, projectRoot?: string): Promise<SkillDefinition | null> {
+    return (await this.list(projectRoot)).find((s) => s.name === name) ?? null;
   }
 
-  save(name: string, skill: SkillDefinition, scope: "global" | "project" = "global", projectRoot?: string): void {
+  async save(
+    name: string,
+    skill: SkillDefinition,
+    scope: "global" | "project" = "global",
+    projectRoot?: string,
+  ): Promise<void> {
     const dir = scope === "project" && projectRoot ? join(projectRoot, ".ark", "skills") : this.userDir;
     mkdirSync(dir, { recursive: true });
     const { _source, ...data } = skill;
     writeFileSync(join(dir, `${name}.yaml`), stringifyYaml(data));
   }
 
-  delete(name: string, scope: "global" | "project" = "global", projectRoot?: string): boolean {
+  async delete(name: string, scope: "global" | "project" = "global", projectRoot?: string): Promise<boolean> {
     const dir = scope === "project" && projectRoot ? join(projectRoot, ".ark", "skills") : this.userDir;
     for (const ext of [".yaml", ".yml"]) {
       const path = join(dir, `${name}${ext}`);

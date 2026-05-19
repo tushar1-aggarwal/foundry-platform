@@ -34,7 +34,7 @@ describe("flow_create + flow_update", () => {
         stages: [{ name: "work", agent: "worker" }],
       },
     });
-    const fetched = h.app.flows.get("mcp-test-flow");
+    const fetched = await h.app.flows.get("mcp-test-flow");
     expect(fetched).toBeTruthy();
     expect(fetched?.description).toBe("Created via MCP");
 
@@ -42,7 +42,7 @@ describe("flow_create + flow_update", () => {
       name: "mcp-test-flow",
       patch: { description: "Updated via MCP" },
     });
-    const updated = h.app.flows.get("mcp-test-flow");
+    const updated = await h.app.flows.get("mcp-test-flow");
     expect(updated?.description).toBe("Updated via MCP");
   });
 });

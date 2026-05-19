@@ -144,18 +144,10 @@ describe("autonomous flow via conductor", async () => {
     });
   }
 
-  it("SessionEnd on single-stage autonomous flow completes the session", async () => {
-    const app = getApp();
-    const session = await app.sessions.create({ summary: "auto complete test", flow: "autonomous" });
-    await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running", stage: "work" });
-
-    const resp = await postHook(session.id, { hook_event_name: "SessionEnd" });
-    expect(resp.status).toBe(200);
-
-    const updated = await app.sessions.get(session.id);
-    // advance() on single-stage flow completes the session
-    expect(updated?.status).toBe("completed");
-  });
+  // DELETED "SessionEnd on single-stage autonomous flow completes the session":
+  // asserted the bespoke hook-driven advance()/complete contract. The hook now
+  // only maps SessionEnd -> "ready"; the Temporal session-workflow owns
+  // advancement/completion (covered by the harness e2e-session-lifecycle tests).
 
   it("SessionEnd on manual-gate bare flow keeps session running", async () => {
     const app = getApp();

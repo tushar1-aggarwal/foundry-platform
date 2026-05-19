@@ -2,7 +2,7 @@
 
 # Ark
 
-Autonomous agent ecosystem. Orchestrates AI coding agents through DAG-based SDLC flows with 11 compute providers, knowledge graph, LLM router, and multi-tenant control plane. Supports Claude Code, Codex, Gemini CLI, and Goose runtimes. Bun + tmux only.
+Autonomous agent ecosystem. Orchestrates AI coding agents through Temporal-driven SDLC flows with 11 compute providers, knowledge graph, LLM router, and multi-tenant control plane. Runs the Claude Agent SDK runtime (`claude-agent`) only. Bun + tmux only.
 
 ## Commands
 
@@ -51,7 +51,7 @@ Use `AppContext.forTestAsync()` for test isolation (fresh arkDir + ephemeral por
 ```
 packages/{cli,core,compute,arkd,router,conductor,protocol,web,types,workspace}
 agents/       -- Agent YAML definitions
-runtimes/     -- Runtime definitions (claude, codex, gemini, goose)
+runtimes/     -- Runtime definitions (claude-agent; stub-runner for e2e)
 flows/        -- Flow definitions (autonomous-sdlc, quick, fan-out, etc.)
 skills/       -- Builtin skills
 ```

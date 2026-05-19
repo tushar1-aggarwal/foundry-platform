@@ -30,6 +30,7 @@ function canonical(p: string): string {
 }
 import { AppContext } from "../app.js";
 import { setupSessionWorktree } from "../services/worktree/index.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 let originalCwd: string;
@@ -67,7 +68,7 @@ describe("setupSessionWorktree -- worktree isolation", async () => {
       repo: ".",
     });
 
-    const effectiveWorkdir = await setupSessionWorktree(app, session, null);
+    const effectiveWorkdir = await setupSessionWorktree(depsFromApp(app), session, null);
 
     // The worktree must NOT be the live checkout.
     expect(effectiveWorkdir).not.toBe(repoDir);
@@ -87,7 +88,7 @@ describe("setupSessionWorktree -- worktree isolation", async () => {
       repo: ".",
     });
 
-    const effectiveWorkdir = await setupSessionWorktree(app, session, null);
+    const effectiveWorkdir = await setupSessionWorktree(depsFromApp(app), session, null);
 
     const updated = await app.sessions.get(session.id);
     expect(updated).not.toBeNull();
@@ -107,7 +108,7 @@ describe("setupSessionWorktree -- worktree isolation", async () => {
       workdir: repoDir,
     });
 
-    const effectiveWorkdir = await setupSessionWorktree(app, session, null);
+    const effectiveWorkdir = await setupSessionWorktree(depsFromApp(app), session, null);
 
     expect(effectiveWorkdir).not.toBe(repoDir);
     const expectedWtDir = join(app.config.dirs.worktrees, session.id);
@@ -121,7 +122,7 @@ describe("setupSessionWorktree -- worktree isolation", async () => {
       config: { worktree: false },
     });
 
-    const effectiveWorkdir = await setupSessionWorktree(app, session, null);
+    const effectiveWorkdir = await setupSessionWorktree(depsFromApp(app), session, null);
 
     // When worktree is explicitly disabled, we fall back to the resolved repo
     // source (the live checkout). No worktree directory is created.
@@ -141,7 +142,7 @@ describe("setupSessionWorktree -- worktree isolation", async () => {
       workdir: nonGitDir,
     });
 
-    const effectiveWorkdir = await setupSessionWorktree(app, session, null);
+    const effectiveWorkdir = await setupSessionWorktree(depsFromApp(app), session, null);
 
     const wtDir = join(app.config.dirs.worktrees, session.id);
     expect(existsSync(wtDir)).toBe(false);
@@ -166,7 +167,7 @@ describe("setupSessionWorktree -- worktree isolation", async () => {
     expect(existsSync(sessionDir)).toBe(true);
     expect(existsSync(join(sessionDir, ".git"))).toBe(false);
 
-    const effectiveWorkdir = await setupSessionWorktree(app, session, null);
+    const effectiveWorkdir = await setupSessionWorktree(depsFromApp(app), session, null);
 
     // 1. Returned path must be a real git worktree (.git present).
     expect(existsSync(join(effectiveWorkdir, ".git"))).toBe(true);

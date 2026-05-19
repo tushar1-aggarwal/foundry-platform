@@ -12,8 +12,8 @@ import { effectiveLifecycle, type ComputeKindName, type IsolationKindName } from
 
 // Surface both compute + isolation axes. Static defaults render while the
 // server reply is in flight; the queries below overwrite with the live list.
-const DEFAULT_COMPUTE_KINDS = ["local", "firecracker", "ec2", "k8s", "k8s-kata"] as const;
-const DEFAULT_ISOLATION_KINDS = ["direct", "docker", "compose", "devcontainer"] as const;
+const DEFAULT_COMPUTE_KINDS = ["local", "ec2", "k8s"] as const;
+const DEFAULT_ISOLATION_KINDS = ["direct", "docker", "compose", "devcontainer", "worktree"] as const;
 
 // Zod schema -- single source of truth for form validation. The submit
 // payload type is `NewComputeFormValues`, derived from the schema so caller
@@ -203,7 +203,7 @@ export function NewComputeForm({
                   value: t.name,
                   label: t.name,
                   description: t.description,
-                  badge: t.provider,
+                  badge: `${t.compute ?? "-"}/${t.isolation ?? "-"}`,
                 })),
               ]}
             />

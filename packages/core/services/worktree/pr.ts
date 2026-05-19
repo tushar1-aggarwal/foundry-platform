@@ -26,7 +26,7 @@ import { basename, join } from "path";
 import { promisify } from "util";
 import { execFile } from "child_process";
 
-import type { AppContext } from "../../app.js";
+import type { OrchestrationDeps } from "../deps.js";
 import type { Session } from "../../../types/index.js";
 import { ArkdClient } from "../../../arkd/client/index.js";
 import { resolveComputeTarget } from "../../compute-resolver.js";
@@ -99,10 +99,10 @@ interface GitResult {
  * `execFileAsync` path.
  */
 export async function resolveRemoteRouting(
-  app: AppContext,
+  deps: OrchestrationDeps,
   session: Session,
 ): Promise<{ remote: false } | { remote: true; client: ArkdClient; remoteWorkdir: string }> {
-  const { target, compute } = await resolveComputeTarget(app, session);
+  const { target, compute } = await resolveComputeTarget(deps.app!, session);
   if (!target || !compute) return { remote: false };
   if (target.compute.capabilities.supportsWorktree) return { remote: false };
 
@@ -141,7 +141,7 @@ export async function resolveRemoteRouting(
   // for EC2, etc.) and call ensureReachable themselves.
   try {
     if (target.compute.ensureReachable) {
-      await target.compute.ensureReachable(handle, { app, sessionId: session.id });
+      await target.compute.ensureReachable(handle, { app: deps.app!, sessionId: session.id });
     }
   } catch (err: any) {
     logWarn(
@@ -194,9 +194,14 @@ function resolveRemoteWorkdir(compute: ComputeImpl, handle: ComputeHandle, sessi
  * propagate). For symmetry between paths we re-throw on a non-zero exit
  * code from the remote dispatcher.
  */
-export async function runGit(app: AppContext, session: Session, args: string[], opts?: GitOpts): Promise<GitResult> {
+export async function runGit(
+  deps: OrchestrationDeps,
+  session: Session,
+  args: string[],
+  opts?: GitOpts,
+): Promise<GitResult> {
   const timeout = opts?.timeout ?? 30_000;
-  const routing = await resolveRemoteRouting(app, session);
+  const routing = await resolveRemoteRouting(deps, session);
   if (routing.remote) {
     const res = await routing.client.run({
       command: "git",
@@ -317,9 +322,9 @@ export function isGithubPrUrl(url: string | null | undefined): boolean {
  * Returns null on any error (not a git repo, no origin, network failure on
  * remote, etc.).
  */
-async function readOriginUrl(app: AppContext, session: Session, localCwd?: string): Promise<string | null> {
+async function readOriginUrl(deps: OrchestrationDeps, session: Session, localCwd?: string): Promise<string | null> {
   try {
-    const { stdout } = await runGit(app, session, ["remote", "get-url", "origin"], { timeout: 15_000, localCwd });
+    const { stdout } = await runGit(deps, session, ["remote", "get-url", "origin"], { timeout: 15_000, localCwd });
     return stdout.trim() || null;
   } catch {
     return null;
@@ -343,7 +348,7 @@ async function readOriginUrl(app: AppContext, session: Session, localCwd?: strin
  * to silent failure here).
  */
 export async function createWorktreePR(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   opts?: {
     title?: string;
@@ -352,33 +357,33 @@ export async function createWorktreePR(
     draft?: boolean;
   },
 ): Promise<{ ok: boolean; message: string; pr_url?: string }> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session) return { ok: false, message: `Session ${sessionId} not found` };
 
   const repo = effectiveRepo(session);
   if (!repo) return { ok: false, message: "Session has no repo" };
 
   // Determine which side the agent worked on.
-  const routing = await resolveRemoteRouting(app, session);
+  const routing = await resolveRemoteRouting(deps, session);
 
   // Determine branch. For remote sessions we trust session.branch (set at
   // dispatch); if missing, ask remote git via runGit. For local, fall back
   // to the worktree dir as before -- bail to "Cannot determine branch" if
   // wtDir does not exist (avoid having `rev-parse` resolve to whatever the
   // dispatcher's cwd happens to be).
-  const wtDir = join(app.config.dirs.worktrees, sessionId);
+  const wtDir = join(deps.config.dirs.worktrees, sessionId);
   let branch = session.branch;
   if (!branch) {
     if (routing.remote) {
       try {
-        const { stdout } = await runGit(app, session, ["rev-parse", "--abbrev-ref", "HEAD"], { timeout: 15_000 });
+        const { stdout } = await runGit(deps, session, ["rev-parse", "--abbrev-ref", "HEAD"], { timeout: 15_000 });
         branch = stdout.trim() || null;
       } catch {
         logDebug("session", "could not resolve branch via runGit (remote) -- branch stays undefined");
       }
     } else if (existsSync(wtDir)) {
       try {
-        const { stdout } = await runGit(app, session, ["rev-parse", "--abbrev-ref", "HEAD"], {
+        const { stdout } = await runGit(deps, session, ["rev-parse", "--abbrev-ref", "HEAD"], {
           timeout: 15_000,
           localCwd: wtDir,
         });
@@ -400,7 +405,7 @@ export async function createWorktreePR(
   // as a best-effort -- it's a no-op if the path doesn't exist.
   const repoConfig = session.workdir ? loadRepoConfig(session.workdir) : {};
   if (repoConfig.auto_rebase !== false) {
-    const rebaseResult = await rebaseOntoBase(app, sessionId, { base });
+    const rebaseResult = await rebaseOntoBase(deps, sessionId, { base });
     if (!rebaseResult.ok) {
       // Rebase failed (conflict) -- still proceed with PR creation without rebase.
       // The PR will show merge conflicts on the host, which is preferable to
@@ -433,16 +438,16 @@ export async function createWorktreePR(
     // Raw tokens are also resolved here for log-redaction (`replaceAll`
     // below) and for the REST API path that creates the GitHub PR.
     let originalOriginUrl: string | null = null;
-    const githubToken = await resolveGithubToken(app, session);
-    const bitbucketToken = await resolveBitbucketToken(app, session);
+    const githubToken = await resolveGithubToken(deps, session);
+    const bitbucketToken = await resolveBitbucketToken(deps, session);
     if (routing.remote) {
-      const probe = await readOriginUrl(app, session);
+      const probe = await readOriginUrl(deps, session);
       if (probe) {
-        const authedUrl = await buildAuthedHttpsUrl(app, session, probe);
+        const authedUrl = await buildAuthedHttpsUrl(deps, session, probe);
         if (authedUrl !== probe) {
           originalOriginUrl = probe;
           try {
-            await runGit(app, session, ["remote", "set-url", "origin", authedUrl], { timeout: 15_000 });
+            await runGit(deps, session, ["remote", "set-url", "origin", authedUrl], { timeout: 15_000 });
           } catch (err: any) {
             logWarn("session", `createWorktreePR: failed to set authed origin url: ${err?.message ?? err}`);
           }
@@ -490,7 +495,7 @@ export async function createWorktreePR(
     let pushStdout = "";
     let pushStderr = "";
     try {
-      const r = await runGit(app, session, pushArgs, {
+      const r = await runGit(deps, session, pushArgs, {
         timeout: 60_000,
         localCwd: routing.remote ? undefined : localPushDir,
       });
@@ -526,12 +531,12 @@ export async function createWorktreePR(
         const renamedBranch = `${originalBranch}${sessionSuffix}`;
         try {
           // Rename the local branch so HEAD now points at the unique name.
-          await runGit(app, session, ["branch", "-m", originalBranch, renamedBranch], {
+          await runGit(deps, session, ["branch", "-m", originalBranch, renamedBranch], {
             timeout: 15_000,
             localCwd: routing.remote ? undefined : localPushDir,
           });
           const retryArgs = ["push", "--no-verify", "-u", "origin", renamedBranch];
-          const r = await runGit(app, session, retryArgs, {
+          const r = await runGit(deps, session, retryArgs, {
             timeout: 60_000,
             localCwd: routing.remote ? undefined : localPushDir,
           });
@@ -539,10 +544,10 @@ export async function createWorktreePR(
           pushStderr = r.stderr;
           // Persist the rename so the PR-create step + every downstream
           // observer (status poller, web UI, retry path) sees the right ref.
-          await app.sessions.update(sessionId, { branch: renamedBranch });
+          await deps.sessions.update(sessionId, { branch: renamedBranch });
           (session as { branch: string | null }).branch = renamedBranch;
           branch = renamedBranch;
-          await app.events.log(sessionId, "branch_renamed_on_conflict", {
+          await deps.events.log(sessionId, "branch_renamed_on_conflict", {
             actor: "system",
             data: { from: originalBranch, to: renamedBranch, reason: "non-fast-forward push rejected" },
           });
@@ -568,7 +573,7 @@ export async function createWorktreePR(
       // here doesn't fail the action.
       if (originalOriginUrl) {
         try {
-          await runGit(app, session, ["remote", "set-url", "origin", originalOriginUrl], { timeout: 15_000 });
+          await runGit(deps, session, ["remote", "set-url", "origin", originalOriginUrl], { timeout: 15_000 });
         } catch (err: any) {
           logWarn("session", `createWorktreePR: failed to restore origin url: ${err?.message ?? err}`);
         }
@@ -577,7 +582,7 @@ export async function createWorktreePR(
 
     // 2. Decide host. For remote we read origin from the remote workdir;
     //    for local we read it from the local worktree.
-    const originUrl = await readOriginUrl(app, session, routing.remote ? undefined : localPushDir);
+    const originUrl = await readOriginUrl(deps, session, routing.remote ? undefined : localPushDir);
     const host = detectGitHost(originUrl);
 
     let prUrl: string | undefined;
@@ -587,7 +592,7 @@ export async function createWorktreePR(
       // because it talks to api.github.com over HTTPS instead of shelling
       // `gh` on the worker. Auth is `GITHUB_TOKEN`; the worker doesn't
       // need `gh` installed and we don't depend on stdout parsing.
-      const githubToken = await resolveGithubToken(app, session);
+      const githubToken = await resolveGithubToken(deps, session);
       const ownerRepo = parseGithubOwnerRepoFromUrl(originUrl);
       if (githubToken && ownerRepo) {
         const restDeps: GithubDeps = { token: githubToken };
@@ -643,8 +648,8 @@ export async function createWorktreePR(
       // path below produces, which leaves no PR until a human clicks
       // through the Bitbucket UI). Auth is HTTP Basic with username:token.
       const [bbToken, bbUser] = await Promise.all([
-        resolveBitbucketToken(app, session),
-        resolveBitbucketUsername(app, session),
+        resolveBitbucketToken(deps, session),
+        resolveBitbucketUsername(deps, session),
       ]);
       const wsRepo = parseBitbucketWorkspaceRepoFromUrl(originUrl);
       if (bbToken && bbUser && wsRepo) {
@@ -699,9 +704,9 @@ export async function createWorktreePR(
     //    a "branch pushed" success -- the operator can find the PR manually
     //    and downstream merge logic will surface a clear "no PR URL" error.
     if (prUrl) {
-      await app.sessions.update(sessionId, { pr_url: prUrl });
+      await deps.sessions.update(sessionId, { pr_url: prUrl });
     }
-    await app.events.log(sessionId, "pr_created", {
+    await deps.events.log(sessionId, "pr_created", {
       stage: session.stage ?? undefined,
       actor: "user",
       data: { pr_url: prUrl ?? null, branch, base, draft: opts?.draft ?? false, host, remote: routing.remote },
@@ -754,14 +759,14 @@ export async function createWorktreePR(
  * `failed` rather than crashing.
  */
 export async function mergeWorktreePR(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   opts?: {
     method?: "merge" | "squash" | "rebase";
     deleteAfter?: boolean;
   },
 ): Promise<{ ok: boolean; message: string }> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session) return { ok: false, message: `Session ${sessionId} not found` };
 
   const prUrl = session.pr_url;
@@ -808,14 +813,14 @@ export async function mergeWorktreePR(
   // authenticated on the worker, surfaces typed errors instead of stdout
   // soup. Falls back to the legacy `gh pr merge` only when no
   // GITHUB_TOKEN is available.
-  const githubToken = await resolveGithubToken(app, session);
+  const githubToken = await resolveGithubToken(deps, session);
   if (githubToken) {
     const result = await mergePullRequest(
       { pr_url: prUrl, method, delete_branch: deleteAfter },
       { token: githubToken },
     );
     if (result.ok) {
-      await app.events.log(sessionId, "pr_merged", {
+      await deps.events.log(sessionId, "pr_merged", {
         stage: session.stage ?? undefined,
         actor: "system",
         data: {
@@ -840,11 +845,11 @@ export async function mergeWorktreePR(
     // `gh pr merge <url>` derives the repo from the URL -- the cwd
     // doesn't need to be a git checkout. Prefer the local worktree if
     // it exists; otherwise fall back to the conductor's arkDir.
-    const wtDir = join(app.config.dirs.worktrees, sessionId);
-    const cwd = existsSync(wtDir) ? wtDir : app.config.dirs.ark;
+    const wtDir = join(deps.config.dirs.worktrees, sessionId);
+    const cwd = existsSync(wtDir) ? wtDir : deps.config.dirs.ark;
     await execFileAsync("gh", ghArgs, { encoding: "utf-8", timeout: 30_000, cwd });
 
-    await app.events.log(sessionId, "pr_merged", {
+    await deps.events.log(sessionId, "pr_merged", {
       stage: session.stage ?? undefined,
       actor: "system",
       data: { pr_url: prUrl, method, delete_branch: deleteAfter },

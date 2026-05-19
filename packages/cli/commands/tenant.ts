@@ -10,8 +10,23 @@
 
 import type { Command } from "commander";
 import chalk from "chalk";
+import type { ComputeAxes, ComputeKindName, IsolationKindName } from "../../types/index.js";
 import { getArkClient } from "../app-client.js";
 import { runAction } from "./_shared.js";
+
+/** Parse a "compute_kind/isolation_kind" CLI token into a ComputeAxes. */
+function parseAxes(token: string): ComputeAxes {
+  const [ck, ik] = token.split("/").map((s) => s.trim());
+  if (!ck || !ik) {
+    throw new Error(`Invalid compute pair "${token}" -- expected "compute_kind/isolation_kind" (e.g. k8s/direct)`);
+  }
+  return { compute_kind: ck as ComputeKindName, isolation_kind: ik as IsolationKindName };
+}
+
+/** Render a compute pair as "compute_kind/isolation_kind". */
+function fmtAxes(a: { compute_kind: string; isolation_kind: string }): string {
+  return `${a.compute_kind}/${a.isolation_kind}`;
+}
 
 export function registerTenantCommands(program: Command) {
   const tenant = program.command("tenant").description("Manage tenant settings");
@@ -139,34 +154,37 @@ export function registerTenantCommands(program: Command) {
     .command("set")
     .description("Set compute policy for a tenant")
     .argument("<tenant-id>", "Tenant ID")
-    .option("--providers <list>", "Comma-separated allowed providers (e.g. k8s,ec2)")
-    .option("--default-provider <provider>", "Default provider", "k8s")
+    .option(
+      "--allow <ck/ik>",
+      'Allowed compute pair "compute_kind/isolation_kind" (repeatable, e.g. k8s/direct)',
+      (v: string, acc: string[]) => [...acc, v],
+      [] as string[],
+    )
+    .option("--default <ck/ik>", 'Default compute pair "compute_kind/isolation_kind"', "k8s/direct")
     .option("--max-sessions <n>", "Maximum concurrent sessions", "10")
     .option("--max-cost <usd>", "Maximum daily cost in USD")
     .action(async (tenantId, opts) => {
       await runAction("tenant policy set", async () => {
         const ark = await getArkClient();
-        const allowedProviders = opts.providers
-          ? opts.providers
-              .split(",")
-              .map((s: string) => s.trim())
-              .filter(Boolean)
-          : [];
+        const allowedCompute = (opts.allow as string[]).map(parseAxes);
+        const defaultCompute = parseAxes(opts.default);
 
         await ark.tenantPolicySet({
           tenant_id: tenantId,
-          allowed_providers: allowedProviders,
-          default_provider: opts.defaultProvider,
+          allowed_compute: allowedCompute,
+          default_compute: defaultCompute,
           max_concurrent_sessions: parseInt(opts.maxSessions, 10),
           max_cost_per_day_usd: opts.maxCost ? parseFloat(opts.maxCost) : null,
         });
 
         console.log(chalk.green(`Policy set for tenant '${tenantId}'`));
-        console.log(`  Allowed providers: ${allowedProviders.length > 0 ? allowedProviders.join(", ") : "(all)"}`);
-        console.log(`  Default provider:  ${opts.defaultProvider}`);
-        console.log(`  Max sessions:      ${opts.maxSessions}`);
+        console.log(
+          `  Allowed compute: ${allowedCompute.length > 0 ? allowedCompute.map(fmtAxes).join(", ") : "(all)"}`,
+        );
+        console.log(`  Default compute: ${fmtAxes(defaultCompute)}`);
+        console.log(`  Max sessions:    ${opts.maxSessions}`);
         if (opts.maxCost) {
-          console.log(`  Max daily cost:    $${opts.maxCost}`);
+          console.log(`  Max daily cost:  $${opts.maxCost}`);
         }
       });
     });
@@ -182,25 +200,27 @@ export function registerTenantCommands(program: Command) {
 
         if (!p) {
           console.log(chalk.dim(`No explicit policy for tenant '${tenantId}'. Default policy applies.`));
-          console.log(chalk.dim("  Allowed providers: (all)"));
-          console.log(chalk.dim("  Default provider:  k8s"));
-          console.log(chalk.dim("  Max sessions:      10"));
+          console.log(chalk.dim("  Allowed compute: (all)"));
+          console.log(chalk.dim("  Default compute: k8s/direct"));
+          console.log(chalk.dim("  Max sessions:    10"));
           return;
         }
 
         console.log(chalk.bold(`Policy for tenant '${tenantId}'`));
         console.log(
-          `  Allowed providers: ${p.allowed_providers.length > 0 ? p.allowed_providers.join(", ") : "(all)"}`,
+          `  Allowed compute: ${p.allowed_compute.length > 0 ? p.allowed_compute.map(fmtAxes).join(", ") : "(all)"}`,
         );
-        console.log(`  Default provider:  ${p.default_provider}`);
-        console.log(`  Max sessions:      ${p.max_concurrent_sessions}`);
+        console.log(`  Default compute: ${fmtAxes(p.default_compute)}`);
+        console.log(`  Max sessions:    ${p.max_concurrent_sessions}`);
         if (p.max_cost_per_day_usd !== null) {
-          console.log(`  Max daily cost:    $${p.max_cost_per_day_usd}`);
+          console.log(`  Max daily cost:  $${p.max_cost_per_day_usd}`);
         }
         if (p.compute_pools.length > 0) {
           console.log(`  Compute pools:`);
           for (const pool of p.compute_pools) {
-            console.log(`    - ${pool.pool_name} (${pool.provider}) min=${pool.min} max=${pool.max}`);
+            console.log(
+              `    - ${pool.pool_name} (${pool.compute.compute_kind}/${pool.compute.isolation_kind}) min=${pool.min} max=${pool.max}`,
+            );
           }
         }
       });
@@ -220,13 +240,13 @@ export function registerTenantCommands(program: Command) {
         }
 
         console.log(
-          `  ${"TENANT".padEnd(20)} ${"PROVIDERS".padEnd(25)} ${"DEFAULT".padEnd(10)} ${"MAX SESS".padEnd(10)} COST/DAY`,
+          `  ${"TENANT".padEnd(20)} ${"ALLOWED".padEnd(28)} ${"DEFAULT".padEnd(14)} ${"MAX SESS".padEnd(10)} COST/DAY`,
         );
         for (const p of policies) {
-          const providers = p.allowed_providers.length > 0 ? p.allowed_providers.join(",") : "(all)";
+          const allowed = p.allowed_compute.length > 0 ? p.allowed_compute.map(fmtAxes).join(",") : "(all)";
           const cost = p.max_cost_per_day_usd !== null ? `$${p.max_cost_per_day_usd}` : "-";
           console.log(
-            `  ${p.tenant_id.padEnd(20)} ${providers.padEnd(25)} ${p.default_provider.padEnd(10)} ${String(p.max_concurrent_sessions).padEnd(10)} ${cost}`,
+            `  ${p.tenant_id.padEnd(20)} ${allowed.padEnd(28)} ${fmtAxes(p.default_compute).padEnd(14)} ${String(p.max_concurrent_sessions).padEnd(10)} ${cost}`,
           );
         }
       });

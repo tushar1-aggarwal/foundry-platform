@@ -63,14 +63,14 @@ describe("FsSnapshotStore", async () => {
     const payload = new TextEncoder().encode("hello snapshot");
     const before = Date.now() - 1;
     const ref = await store.save(
-      { computeKind: "firecracker", sessionId: "s-abc", metadata: { memFilePath: "/tmp/m", custom: 42 } },
+      { computeKind: "k8s", sessionId: "s-abc", metadata: { snapPath: "/tmp/m", custom: 42 } },
       streamOf(payload),
     );
     expect(ref.id).toBeTruthy();
     expect(ref.sessionId).toBe("s-abc");
-    expect(ref.computeKind).toBe("firecracker");
+    expect(ref.computeKind).toBe("k8s");
     expect(ref.sizeBytes).toBe(payload.byteLength);
-    expect(ref.metadata).toEqual({ memFilePath: "/tmp/m", custom: 42 });
+    expect(ref.metadata).toEqual({ snapPath: "/tmp/m", custom: 42 });
     expect(new Date(ref.createdAt).getTime()).toBeGreaterThanOrEqual(before);
   });
 
@@ -85,7 +85,7 @@ describe("FsSnapshotStore", async () => {
 
   it("persists ref.json on disk as structured JSON", async () => {
     const saved = await store.save(
-      { computeKind: "firecracker", sessionId: "s-1", metadata: { a: 1 } },
+      { computeKind: "k8s", sessionId: "s-1", metadata: { a: 1 } },
       streamOf(new Uint8Array([1, 2, 3])),
     );
     const raw = await readFile(join(root, saved.id, "ref.json"), "utf-8");
@@ -113,14 +113,8 @@ describe("FsSnapshotStore", async () => {
   });
 
   it("list() filters by sessionId and computeKind", async () => {
-    const a = await store.save(
-      { computeKind: "firecracker", sessionId: "s-1", metadata: {} },
-      streamOf(new Uint8Array([1])),
-    );
-    const b = await store.save(
-      { computeKind: "firecracker", sessionId: "s-2", metadata: {} },
-      streamOf(new Uint8Array([2])),
-    );
+    const a = await store.save({ computeKind: "k8s", sessionId: "s-1", metadata: {} }, streamOf(new Uint8Array([1])));
+    const b = await store.save({ computeKind: "k8s", sessionId: "s-2", metadata: {} }, streamOf(new Uint8Array([2])));
     const c = await store.save({ computeKind: "ec2", sessionId: "s-1", metadata: {} }, streamOf(new Uint8Array([3])));
 
     const all = await store.list();
@@ -129,7 +123,7 @@ describe("FsSnapshotStore", async () => {
     const bySession = await store.list({ sessionId: "s-1" });
     expect(bySession.map((r) => r.id).sort()).toEqual([a.id, c.id].sort());
 
-    const byKind = await store.list({ computeKind: "firecracker" });
+    const byKind = await store.list({ computeKind: "k8s" });
     expect(byKind.map((r) => r.id).sort()).toEqual([a.id, b.id].sort());
 
     const both = await store.list({ sessionId: "s-1", computeKind: "ec2" });
@@ -155,7 +149,7 @@ describe("FsSnapshotStore", async () => {
     const saves = await Promise.all(
       Array.from({ length: 8 }, (_, i) =>
         store.save(
-          { computeKind: "firecracker", sessionId: `s-${i}`, metadata: { i } },
+          { computeKind: "k8s", sessionId: `s-${i}`, metadata: { i } },
           streamOf(new TextEncoder().encode(`payload-${i}`)),
         ),
       ),

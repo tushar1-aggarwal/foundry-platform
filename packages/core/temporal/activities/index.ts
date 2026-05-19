@@ -7,3 +7,4 @@ export { runVerificationActivity } from "./run-verification.js";
 export { projectSessionActivity } from "./project-session.js";
 export { projectStageActivity } from "./project-stage.js";
 export { loadFlowActivity, injectDeps as injectLoadFlowDeps } from "./load-flow.js";
+export { applyReviewRejectActivity } from "./apply-review-reject.js";

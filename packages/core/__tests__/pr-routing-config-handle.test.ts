@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
 import { resolveRemoteRouting } from "../services/worktree/pr.js";
+import { depsFromApp } from "../services/deps.js";
 
 let app: AppContext;
 
@@ -65,7 +66,7 @@ describe("resolveRemoteRouting: persistedHandle fallback", () => {
     await app.sessions.update(session.id, { compute_name: "docs-k8s-template" });
 
     const fresh = await app.sessions.get(session.id);
-    const routing = await resolveRemoteRouting(app, fresh as any);
+    const routing = await resolveRemoteRouting(depsFromApp(app), fresh as any);
     // The 60s+ runtime is the K8s ensureReachable port-forward timeout
     // against the fake pod -- not a real assertion target. The function
     // catches that error and returns remote=true via the persistedHandle.
@@ -84,7 +85,7 @@ describe("resolveRemoteRouting: persistedHandle fallback", () => {
     await app.sessions.update(session.id, { compute_name: "docs-k8s-template" });
 
     const fresh = await app.sessions.get(session.id);
-    const routing = await resolveRemoteRouting(app, fresh as any);
+    const routing = await resolveRemoteRouting(depsFromApp(app), fresh as any);
     expect(routing.remote).toBe(false);
   }, 120_000);
 });

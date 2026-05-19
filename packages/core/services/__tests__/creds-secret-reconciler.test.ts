@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { AppContext } from "../../app.js";
+import { depsFromApp } from "../deps.js";
 import { setApp, clearApp } from "../../__tests__/test-helpers.js";
 import { reconcileOrphanedCredsSecrets, type ClusterTarget } from "../creds-secret-reconciler.js";
 import type { K8sSecretsApi } from "../dispatch-claude-auth.js";
@@ -105,7 +106,7 @@ describe("reconcileOrphanedCredsSecrets", () => {
       secretItem({ name: "ark-creds-active", sessionId: activeId, withOwnerRef: false }),
     ];
 
-    const result = await reconcileOrphanedCredsSecrets(app, { clusterTargets: async () => targets });
+    const result = await reconcileOrphanedCredsSecrets(depsFromApp(app), { clusterTargets: async () => targets });
 
     expect(result.deleted).toBe(2);
     expect(result.kept).toBe(1);
@@ -120,10 +121,10 @@ describe("reconcileOrphanedCredsSecrets", () => {
     const terminalId = await makeTerminalSession();
     stub.items = [secretItem({ name: "ark-creds-t2", sessionId: terminalId, withOwnerRef: false })];
 
-    const r1 = await reconcileOrphanedCredsSecrets(app, { clusterTargets: async () => targets });
+    const r1 = await reconcileOrphanedCredsSecrets(depsFromApp(app), { clusterTargets: async () => targets });
     expect(r1.deleted).toBe(1);
 
-    const r2 = await reconcileOrphanedCredsSecrets(app, { clusterTargets: async () => targets });
+    const r2 = await reconcileOrphanedCredsSecrets(depsFromApp(app), { clusterTargets: async () => targets });
     expect(r2.deleted).toBe(0);
     expect(r2.kept).toBe(0);
     expect(r2.errors).toEqual([]);
@@ -131,7 +132,7 @@ describe("reconcileOrphanedCredsSecrets", () => {
 
   it("swallows list errors per cluster and surfaces them in result.errors", async () => {
     stub.listFails = true;
-    const result = await reconcileOrphanedCredsSecrets(app, { clusterTargets: async () => targets });
+    const result = await reconcileOrphanedCredsSecrets(depsFromApp(app), { clusterTargets: async () => targets });
     expect(result.deleted).toBe(0);
     expect(result.kept).toBe(0);
     expect(result.errors).toHaveLength(1);
@@ -139,12 +140,12 @@ describe("reconcileOrphanedCredsSecrets", () => {
   });
 
   it("returns empty when no clusters are configured", async () => {
-    const result = await reconcileOrphanedCredsSecrets(app, { clusterTargets: async () => [] });
+    const result = await reconcileOrphanedCredsSecrets(depsFromApp(app), { clusterTargets: async () => [] });
     expect(result).toEqual({ deleted: 0, kept: 0, errors: [] });
   });
 
   it("swallows errors from the cluster enumerator itself", async () => {
-    const result = await reconcileOrphanedCredsSecrets(app, {
+    const result = await reconcileOrphanedCredsSecrets(depsFromApp(app), {
       clusterTargets: async () => {
         throw new Error("cluster config blew up");
       },

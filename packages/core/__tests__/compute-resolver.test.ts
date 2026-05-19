@@ -167,7 +167,7 @@ describe("resolveComputeTarget cross-tenant isolation (round-3 P0-1)", async () 
   it("session-output.getOutput goes through the session's tenant scope", async () => {
     // session-output previously routed through the `_providerResolver`
     // module singleton (bound to the root AppContext at boot), so
-    // getOutput(app, sessionId) for a non-default-tenant session resolved
+    // getOutput(depsFromApp(app), sessionId) for a non-default-tenant session resolved
     // the compute against the root's repo instead of the tenant's. The fix
     // deletes the singleton and makes getOutput call
     // `app.forTenant(session.tenant_id).resolveComputeTarget(session)`.
@@ -175,6 +175,7 @@ describe("resolveComputeTarget cross-tenant isolation (round-3 P0-1)", async () 
     await app.boot();
 
     const { getOutput } = await import("../services/session-output.js");
+    const { depsFromApp } = await import("../services/deps.js");
 
     const tenantB = app.forTenant("tenant-b");
     await tenantB.computeService.create({ name: "gpu-worker", compute: "local", isolation: "docker" });
@@ -187,7 +188,7 @@ describe("resolveComputeTarget cross-tenant isolation (round-3 P0-1)", async () 
     // reverted to the old raw-SQL / module-singleton path, this call would
     // either throw or surface the wrong compute; today it completes
     // cleanly and returns the empty recording fallback.
-    const out = await getOutput(app, sess.id);
+    const out = await getOutput(depsFromApp(app), sess.id);
     expect(typeof out).toBe("string");
   });
 });

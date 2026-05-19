@@ -5,20 +5,36 @@
  * each other's data, and that the default tenant works for backward compat.
  */
 
-import { describe, it, expect, beforeEach, afterAll } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../app.js";
+import { attachTemporalTestHarness, drainTemporalTestHarness } from "../temporal/test-harness.js";
 
 let app: AppContext;
+let detach: (() => void) | undefined;
 
 beforeEach(async () => {
   if (app) {
     await app.shutdown();
   }
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+  );
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 
 afterAll(async () => {
+  detach?.();
   if (app) {
     await app.shutdown();
   }
@@ -340,29 +356,36 @@ describe("tenant scoping", async () => {
       // fresh scoped instance per child container. Identity-equal would mean
       // the singleton leaked through the root scope.
       expect(tenantApp.dispatchService).not.toBe(app.dispatchService);
-      expect(tenantApp.sessionLifecycle).not.toBe(app.sessionLifecycle);
+      expect(tenantApp.sessionCreator).not.toBe(app.sessionCreator);
+      expect(tenantApp.sessionTerminator).not.toBe(app.sessionTerminator);
+      expect(tenantApp.sessionSuspender).not.toBe(app.sessionSuspender);
+      expect(tenantApp.sessionForker).not.toBe(app.sessionForker);
+      expect(tenantApp.sessionReviewer).not.toBe(app.sessionReviewer);
       expect(tenantApp.sessionService).not.toBe(app.sessionService);
       expect(tenantApp.sessionHooks).not.toBe(app.sessionHooks);
-      expect(tenantApp.stageAdvance).not.toBe(app.stageAdvance);
+      expect(tenantApp.sessionProgression).not.toBe(app.sessionProgression);
       expect(tenantApp.computeService).not.toBe(app.computeService);
 
       // Two different tenant scopes also get different service instances.
       expect(tenantApp.dispatchService).not.toBe(otherTenantApp.dispatchService);
-      expect(tenantApp.sessionLifecycle).not.toBe(otherTenantApp.sessionLifecycle);
+      expect(tenantApp.sessionCreator).not.toBe(otherTenantApp.sessionCreator);
 
       // Within a single tenant scope, repeated accessor reads return the same
       // instance (SCOPED -- one instance per child container).
       expect(tenantApp.dispatchService).toBe(tenantApp.dispatchService);
-      expect(tenantApp.sessionLifecycle).toBe(tenantApp.sessionLifecycle);
+      expect(tenantApp.sessionCreator).toBe(tenantApp.sessionCreator);
     });
 
-    it("sessionLifecycle.start() on a tenant scope writes with tenant_id", async () => {
+    it("sessionCreator.start() on a tenant scope writes with tenant_id", async () => {
       const tenantApp = app.forTenant("acme");
-      const session = await tenantApp.sessionLifecycle.start({ summary: "tenant acme start" } as any);
+      const session = await tenantApp.sessionCreator.start({ summary: "tenant acme start", flow: "x-auto" } as any);
 
       // The row must be tagged with `acme` -- not `default`. Before the fix,
       // sessionLifecycle was the root singleton, so its `sessions` dep was
       // the default-tenant repo and the INSERT wrote `tenant_id='default'`.
+      // `start()` writes the row and hands off to the (fire-and-forget)
+      // Temporal workflow synchronously; the tenant tag is observable
+      // immediately, which is the contract this test pins.
       expect(session.tenant_id).toBe("acme");
 
       // Cross-check via the tenant-scoped sessions repo: it can read the row.
@@ -375,7 +398,7 @@ describe("tenant scoping", async () => {
       // landing in a tenant-agnostic row.
       const fromDefault = await app.sessions.get(session.id);
       expect(fromDefault).toBeNull();
-    });
+    }, 45_000);
 
     it("sessionHooks closes over the tenant-scoped events repo", () => {
       // Structural check: the hook-status applier reaches for deps.events.log

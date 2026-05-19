@@ -105,7 +105,7 @@ describe("status-poller with exit-code sentinel", async () => {
     const spy = spyOn(tmux, "sessionExistsAsync").mockResolvedValue(true);
 
     try {
-      startStatusPoller(app, session.id, handle, "claude-code");
+      startStatusPoller(app, session.id, handle, "claude-agent");
 
       await waitFor(async () => {
         const s = await app.sessions.get(session.id);
@@ -141,7 +141,7 @@ describe("status-poller with exit-code sentinel", async () => {
     const spy = spyOn(tmux, "sessionExistsAsync").mockResolvedValue(true);
 
     try {
-      startStatusPoller(app, session.id, handle, "claude-code");
+      startStatusPoller(app, session.id, handle, "claude-agent");
       await Bun.sleep(150);
       const s = await app.sessions.get(session.id);
       expect(s?.status).toBe("running");
@@ -166,7 +166,7 @@ describe("status-poller with exit-code sentinel", async () => {
     const spy = spyOn(tmux, "sessionExistsAsync").mockResolvedValue(true);
 
     try {
-      startStatusPoller(app, session.id, handle, "claude-code");
+      startStatusPoller(app, session.id, handle, "claude-agent");
       await Bun.sleep(150);
       const s = await app.sessions.get(session.id);
       expect(s?.status).toBe("running");

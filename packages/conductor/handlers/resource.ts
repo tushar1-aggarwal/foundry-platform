@@ -182,14 +182,8 @@ export function registerResourceHandlers(router: Router, app: AppContext): void 
     let echoName: string | undefined;
 
     if (typeof params.flow === "string") {
-      // Named flow: resolve through the FlowStore. `get` may return a
-      // Promise on the hosted DB store -- await-normalize.
-      const result = app.flows.get(params.flow);
-      flowDef = (
-        result && typeof (result as { then?: unknown }).then === "function"
-          ? await (result as Promise<FlowDefinition | null>)
-          : (result as FlowDefinition | null)
-      ) as FlowDefinition | null;
+      // Named flow: resolve through the FlowStore.
+      flowDef = await app.flows.get(params.flow);
       echoName = params.flow;
     } else {
       // Inline object. Cast through unknown because the protocol type and
@@ -239,18 +233,18 @@ export function registerResourceHandlers(router: Router, app: AppContext): void 
       tags: rest.tags ?? [],
     };
     const resolvedScope = resolveScope(scope, null, projectRoot);
-    app.skills.save(skill.name, skill, resolvedScope, projectArg(resolvedScope, projectRoot));
+    await app.skills.save(skill.name, skill, resolvedScope, projectArg(resolvedScope, projectRoot));
     return { ok: true, name: skill.name, scope: resolvedScope };
   });
 
   router.handle("skill/delete", async (p) => {
     const { name, scope } = extract<{ name: string; scope?: Scope }>(p, ["name"]);
     const projectRoot = resolveProjectRoot();
-    const existing = app.skills.get(name, projectRoot);
+    const existing = await app.skills.get(name, projectRoot);
     if (!existing) throw new RpcError(`Skill '${name}' not found`, ErrorCodes.NOT_FOUND);
     guardBuiltin(existing, "Skill", name, "delete");
     const resolvedScope = resolveScope(scope, existing, projectRoot);
-    const ok = app.skills.delete(name, resolvedScope, projectArg(resolvedScope, projectRoot));
+    const ok = await app.skills.delete(name, resolvedScope, projectArg(resolvedScope, projectRoot));
     return { ok };
   });
   router.handle("runtime/list", async () => ({ runtimes: await app.runtimes.list() }));
@@ -265,7 +259,7 @@ export function registerResourceHandlers(router: Router, app: AppContext): void 
   // dispatch uses (no duplicated runtime.models list).
   router.handle("model/list", async () => {
     const projectRoot = resolveProjectRoot();
-    return { models: app.models.list(projectRoot) };
+    return { models: await app.models.list(projectRoot) };
   });
   router.handle("group/list", async () => ({ groups: await app.sessions.getGroups() }));
   router.handle("group/create", async (p) => {

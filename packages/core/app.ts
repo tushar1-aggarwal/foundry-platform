@@ -11,9 +11,9 @@
  * and is registered in packages/core/di/runtime.ts.
  */
 
-import { mkdirSync, rmSync, existsSync, mkdtempSync } from "fs";
+import { rmSync, existsSync, mkdtempSync } from "fs";
 import type { DatabaseAdapter } from "./database/index.js";
-import { buildSqliteDrizzle, buildPostgresDrizzle, type DrizzleClient } from "./drizzle/index.js";
+import { type DrizzleClient } from "./drizzle/index.js";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -23,12 +23,9 @@ import { buildContainer } from "./di/index.js";
 import { loadConfig, loadAppConfig, type ArkConfig } from "./config.js";
 import { eventBus } from "./hooks.js";
 import type { Compute as NewCompute, Isolation as NewIsolation, ComputeKind, IsolationKind } from "./compute/types.js";
-import type { ComputePool } from "./compute/warm-pool/types.js";
 import type { SnapshotStore } from "./compute/snapshot-store.js";
 import type { Compute, Session } from "../types/index.js";
 import { track } from "./observability/telemetry.js";
-import { setLogArkDir } from "./observability/structured-log.js";
-import { setProfilesArkDir } from "./services/profile.js";
 import type {
   SessionRepository,
   ComputeRepository,
@@ -44,13 +41,18 @@ import type {
   SkillVersionRepository,
 } from "./repositories/index.js";
 import type { ScopingResolver } from "./scoping/index.js";
-import { ComputeTemplateRepository as ComputeTemplateRepositoryCtor } from "./repositories/index.js";
 import type { SessionService, ComputeService } from "./services/index.js";
 import type { SessionHooks } from "./services/session-hooks/index.js";
-import type { SessionLifecycle } from "./services/session/index.js";
+import type {
+  SessionCreator,
+  SessionTerminator,
+  SessionSuspender,
+  SessionForker,
+  SessionReviewer,
+} from "./services/session/index.js";
 import type { SessionAttachService } from "./services/session/attach.js";
 import type { DispatchService } from "./services/dispatch/index.js";
-import type { StageAdvanceService } from "./services/stage-advance/index.js";
+import type { SessionProgression } from "./services/session-progression.js";
 import type { FlowStore, SkillStore, AgentStore, RuntimeStore, ModelStore } from "./stores/index.js";
 import type { WorkspaceStore } from "./workspace/store.js";
 import { ComputeRegistries } from "./compute-registries.js";
@@ -77,6 +79,15 @@ import type { BlobStore } from "./storage/blob-store.js";
 import type { AppMode } from "./modes/app-mode.js";
 import { buildAppMode } from "./modes/app-mode.js";
 import { SecureBuffer, type LoadedKek } from "../secrets/index.js";
+import {
+  initFilesystem,
+  openDatabase,
+  initSchema,
+  seedComputeTemplates,
+  reconcileForEachSessions,
+  rehydrateInlineFlows,
+  rehydrateRunningSessions,
+} from "./app-boot.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -139,10 +150,11 @@ export class AppContext {
     // filesystem, DB open, schema migration, and compute-template seeding.
     // ApiKeyManager + the other auth managers are registered as singleton
     // factories in `di/persistence.ts` and resolved lazily on first access.
-    this._initFilesystem();
-    const db = await this._openDatabase();
-    await this._initSchema(db);
-    await this._seedComputeTemplates(db);
+    initFilesystem(this);
+    const { db, drizzle } = await openDatabase(this);
+    this._drizzle = drizzle;
+    await initSchema(this, db);
+    await seedComputeTemplates(this, db);
 
     // Load the master KEK before the container is built so a misconfigured
     // deployment fails at boot rather than at first secret read.
@@ -207,7 +219,7 @@ export class AppContext {
     // read. Eagerly resolving it here was a defensive sanity check that
     // turned out to guard an unreachable door -- it forced every hosted
     // deployment to either implement S3SnapshotStore (still TODO) or carry
-    // the ARK_DEV_ALLOW_LOCAL_HOSTED_STORAGE bypass.
+    // a dev-only bypass that has since been removed (commit 4c973cbc).
     //
     // The factory's throw at di/runtime.ts is preserved: any future caller
     // that actually invokes app.snapshotStore on a snapshot-capable compute
@@ -218,6 +230,22 @@ export class AppContext {
     }
 
     await this._container.cradle.lifecycle.start();
+
+    // Cross-process event transport. Emitters run on the temporal-worker;
+    // SSE / live-tree subscribers run on the control-plane. Both processes
+    // pass through boot(), so attaching here once per process is what makes
+    // eventBus actually cross pods in a multi-replica deploy. redisUrl unset
+    // (local/dev) leaves the pure in-process path untouched.
+    if (this.config.redisUrl) {
+      try {
+        await eventBus.attachRedis(this.config.redisUrl);
+        const { logInfo } = await import("./observability/structured-log.js");
+        logInfo("web", "eventBus: Redis cross-process transport attached");
+      } catch (err: any) {
+        const { logError } = await import("./observability/structured-log.js");
+        logError("web", `eventBus: Redis attach failed -- live UI will not cross pods: ${err?.message ?? err}`);
+      }
+    }
 
     // Test profile: register the noop executor for every real runtime name.
     // Without this, any test that triggers dispatch (directly or via the
@@ -234,19 +262,19 @@ export class AppContext {
     // is written to session.config.inline_flow AND registered in the ephemeral
     // overlay on app.flows. After a daemon restart the overlay is empty, so we
     // scan all active sessions and re-register any inline_flow definitions here.
-    void this._rehydrateInlineFlows();
+    void rehydrateInlineFlows(this);
 
     // Boot-time reconciliation of for_each sessions that were mid-loop when the
     // daemon last stopped. Re-dispatches any running session whose config has a
     // for_each_checkpoint so the loop resumes from where it left off.
-    void this._reconcileForEachSessions();
+    void reconcileForEachSessions(this);
 
     // Rehydrate status pollers + arkd events consumers for sessions that were
     // already mid-flight when the previous daemon process exited. Without
     // this, `bun --watch` reloads and operator restarts orphan running
     // sessions -- the worker keeps going but the conductor goes blind.
     // See #424 for the failure mode.
-    void this._rehydrateRunningSessions();
+    void rehydrateRunningSessions(this);
 
     // Hosted-mode only: on a fresh DB the `resource_definitions` table is empty,
     // so `agent/list` + friends return []. Seed the builtin YAMLs shipped with
@@ -268,7 +296,8 @@ export class AppContext {
     void (async () => {
       try {
         const { reconcileOrphanedCredsSecrets } = await import("./services/creds-secret-reconciler.js");
-        await reconcileOrphanedCredsSecrets(this);
+        const { depsFromApp } = await import("./services/deps.js");
+        await reconcileOrphanedCredsSecrets(depsFromApp(this));
       } catch (e: any) {
         const { logWarn } = await import("./observability/structured-log.js");
         logWarn("session", `creds-reconciler: boot invocation failed: ${e?.message ?? e}`);
@@ -283,6 +312,8 @@ export class AppContext {
     if (this.phase === "stopped" || this.phase === "shutting_down") return;
     const wasBooted = this.phase === "ready";
     this.phase = "shutting_down";
+
+    await eventBus.detachRedis().catch(() => {});
 
     if (wasBooted) {
       // Zero-fill the master KEK before the rest of the container tears
@@ -312,301 +343,6 @@ export class AppContext {
     }
 
     this.phase = "stopped";
-  }
-
-  // ── Boot helpers (pre-container bootstrap only) ──────────────────────
-
-  /**
-   * Boot-time reconciliation of for_each sessions that were mid-loop when
-   * the daemon last stopped.
-   *
-   * Scans all sessions with status=running that have a for_each_checkpoint in
-   * their config. For each such session, re-dispatches it so the ForEachDispatcher
-   * sees the checkpoint and resumes from where it left off (skipping completed
-   * iterations, retrying the in-flight one).
-   *
-   * Must run AFTER the container is booted (so dispatchService is available)
-   * but BEFORE the server accepts traffic (so no concurrent dispatches race
-   * with this reconciliation). Called as a void background task from boot()
-   * so an error here does not prevent the daemon from starting.
-   *
-   * Design choice: we re-dispatch the session directly, which sets it back to
-   * status=ready -> running. A concurrent incoming dispatch for the same session
-   * would be rejected by dispatch-core.ts ("Already running") so there is no
-   * double-dispatch hazard once the reconcile kick lands.
-   */
-  async _reconcileForEachSessions(): Promise<void> {
-    try {
-      const { logInfo: li, logError: le } = await import("./observability/structured-log.js");
-      // Sweep every tenant -- a hosted deployment can have running sessions
-      // across many tenant_ids, and the root repo is bound to "default" only.
-      const running = await this.sessions.listAcrossTenants({ status: "running", limit: 500 });
-      for (const session of running) {
-        const cp = (session.config as Record<string, unknown> | null)?.for_each_checkpoint;
-        if (!cp || typeof cp !== "object") continue;
-        const cpTyped = cp as import("./services/flow.js").ForEachCheckpoint;
-
-        li(
-          "boot",
-          `reconciling for_each session ${session.id} stage '${cpTyped.stage_name}' ` +
-            `at iteration ${cpTyped.next_index}/${cpTyped.total_items}`,
-        );
-
-        // Reset session to ready so dispatch can proceed (it was left as running
-        // when the daemon crashed). Route every write + dispatch through the
-        // session's tenant scope so tenant-scoped repos, services, and providers
-        // land in the right tenant (Core P1-6).
-        try {
-          const tenantApp = this.forTenant(session.tenant_id);
-          await tenantApp.sessions.update(session.id, { status: "ready", session_id: null });
-          await tenantApp.dispatchService.dispatch(session.id);
-        } catch (err: any) {
-          le("boot", `reconcile for_each session ${session.id} failed: ${err?.message ?? err}`);
-        }
-      }
-    } catch (err: any) {
-      try {
-        const { logWarn: lw2 } = await import("./observability/structured-log.js");
-        lw2("boot", `_reconcileForEachSessions: scan failed: ${err?.message ?? err}`);
-      } catch {
-        // best-effort
-      }
-    }
-  }
-
-  /**
-   * Rehydrate inline-flow definitions from persisted session config after a
-   * daemon restart. Sessions spawned with an inline flow store the definition
-   * under `config.inline_flow`; on restart the ephemeral overlay is empty so
-   * we scan active sessions and re-register any definitions found there.
-   *
-   * Best-effort: a failure here does not prevent boot from completing. If a
-   * session's inline flow cannot be rehydrated, stage lookups for that session
-   * will fail gracefully (flow not found) rather than crashing the daemon.
-   */
-  private async _rehydrateInlineFlows(): Promise<void> {
-    try {
-      // Sweep every tenant -- inline flow definitions persist under
-      // session.config.inline_flow across all tenants, not just "default".
-      // The flows store's inline overlay is process-wide (shared registry),
-      // so registering a tenant-A inline flow here is safe: the flow store
-      // is keyed by name and used by dispatch to look up the definition.
-      const sessions = await this.sessions.listAcrossTenants({ limit: 1000 });
-      for (const session of sessions) {
-        const inlineFlow = (session.config as Record<string, unknown> | null)?.inline_flow;
-        if (!inlineFlow || typeof inlineFlow !== "object") continue;
-        const def = inlineFlow as import("./services/flow.js").FlowDefinition;
-        if (!def.name || !Array.isArray(def.stages)) continue;
-        this.flows.registerInline?.(def.name, def);
-      }
-    } catch {
-      // Best-effort -- log nothing so tests don't see noise.
-    }
-  }
-
-  /**
-   * Re-arm status pollers + arkd events consumers for sessions that were
-   * `running` when the daemon last stopped. Without this, hot-reloads
-   * (`bun --watch`) and operator restarts orphan in-flight sessions: the
-   * agents on the worker keep going, but the conductor stops polling and
-   * stops draining the arkd events stream, so the UI never sees progress
-   * and the session never auto-advances on completion. Closes #424.
-   *
-   * The status poller registry + the events-consumer registry are owned
-   * by AppContext; they were torn down on the previous container's
-   * disposal. Pollers are normally started by `post-launch.ts` on the
-   * dispatch path. Events consumers are started by `EC2Compute.setup-
-   * Transport` (and equivalents) during provisioning. Neither path runs
-   * for an already-launched session at boot; this method fills that gap.
-   */
-  private async _rehydrateRunningSessions(): Promise<void> {
-    const { logInfo: li, logWarn: lw } = await import("./observability/structured-log.js");
-    let pollers = 0;
-    let stalePortsCleared = 0;
-    const computesNeedingTransport = new Map<string, string>();
-    try {
-      // Hosted deployments may have running sessions in many tenants; sweep
-      // across all of them. Local single-tenant mode degenerates to one
-      // tenant, no extra cost.
-      const sessions = await this.sessions.listAcrossTenants({ status: "running", limit: 500 });
-      for (const session of sessions) {
-        // RESILIENCE: clear `arkd_local_forward_port` from session config on
-        // boot. The port indexes a SSM port-forward subprocess that lived on
-        // the PREVIOUS conductor process -- once the daemon restarts that
-        // tunnel is dead, but the port stays cached on the session row. The
-        // next arkd RPC (status-poller, action stages, terminal attach...)
-        // would post to a port that nobody's listening on and fail with
-        // ECONNREFUSED. Clearing here forces the next ensureReachable to
-        // allocate a fresh tunnel before any RPC fires.
-        const cfg = session.config as Record<string, unknown> | null;
-        if (cfg && typeof cfg.arkd_local_forward_port === "number") {
-          try {
-            const tenantApp = this.forTenant(session.tenant_id);
-            const next = { ...cfg };
-            delete next.arkd_local_forward_port;
-            await tenantApp.sessions.update(session.id, { config: next });
-            stalePortsCleared++;
-          } catch (err: any) {
-            lw("boot", `rehydrate: failed to clear stale port for ${session.id}: ${err?.message ?? err}`);
-          }
-        }
-        if (!session.session_id || !session.compute_name) continue;
-        // Track the (compute, tenant) pair so we restart consumers exactly once
-        // per compute, scoped to a tenant that owns at least one session there.
-        if (!computesNeedingTransport.has(session.compute_name)) {
-          computesNeedingTransport.set(session.compute_name, session.tenant_id);
-        }
-        try {
-          const { startStatusPoller } = await import("./executors/status-poller.js");
-          const { resolveSessionExecutor } = await import("./executors/resolve.js");
-          // Read the canonical launch_executor (set by post-launch when the
-          // session was dispatched), with the agent-definition runtime as
-          // fallback for legacy sessions. Defaulting to "claude-code" was a
-          // mix of concerns: each runtime needs its own probeStatus path --
-          // claude-agent uses /process/status, not tmux. A wrong runtime
-          // here makes the poller probe the wrong endpoint.
-          const tenantApp = this.forTenant(session.tenant_id);
-          const runtime = await resolveSessionExecutor(tenantApp, session);
-          if (!runtime) {
-            lw("boot", `rehydrate: no runtime for session ${session.id} -- skipping poller`);
-            continue;
-          }
-          startStatusPoller(tenantApp, session.id, session.session_id, runtime);
-          pollers++;
-        } catch (err: any) {
-          lw("boot", `rehydrate poller failed for ${session.id}: ${err?.message ?? err}`);
-        }
-      }
-    } catch (err: any) {
-      lw("boot", `_rehydrateRunningSessions: scan failed: ${err?.message ?? err}`);
-      return;
-    }
-
-    let consumers = 0;
-    for (const [computeName, tenantId] of computesNeedingTransport) {
-      try {
-        const tenantApp = this.forTenant(tenantId);
-        const compute = await tenantApp.computes.get(computeName);
-        if (!compute) continue;
-        const computeImpl = tenantApp.getCompute(compute.compute_kind);
-        if (!computeImpl) continue;
-        const handle = computeImpl.attachExistingHandle?.({
-          name: compute.name,
-          status: compute.status,
-          config: (compute.config ?? {}) as Record<string, unknown>,
-        });
-        if (!handle) continue;
-        const arkdUrl = computeImpl.getArkdUrl(handle);
-        if (!arkdUrl) continue;
-        const { startArkdEventsConsumer } = await import("./services/channel/arkd-events-consumer.js");
-        startArkdEventsConsumer(tenantApp, computeName, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null);
-        consumers++;
-      } catch (err: any) {
-        lw("boot", `rehydrate consumer failed for ${computeName}: ${err?.message ?? err}`);
-      }
-    }
-
-    if (pollers > 0 || consumers > 0 || stalePortsCleared > 0) {
-      li(
-        "boot",
-        `rehydrated ${pollers} status pollers + ${consumers} events consumers, cleared ${stalePortsCleared} stale arkd-tunnel ports for in-flight sessions`,
-      );
-    }
-  }
-
-  private _initFilesystem(): void {
-    // Hosted mode: the conductor is a stateless multi-tenant control-plane
-    // process. Per-process arkDir paths are not tenant-scoped and are lost
-    // on pod restart, so we never materialise them. The structured-log file
-    // sink and the profiles store both no-op when their arkDir is null --
-    // skipping the setLog*/setProfiles* calls keeps them that way.
-    //
-    // We also stamp `ARK_MODE=hosted` on the process env so leaf helpers
-    // (`claude/trust.ts`, anything that can't take an AppContext) can gate
-    // local-fs writes without re-importing AppContext.
-    //
-    // Local mode keeps the existing behaviour: mkdir the four standard dirs
-    // (ark/tracks/worktrees/logs) and bind the JSONL log + profiles file to
-    // arkDir so subsequent writes land on disk.
-    if (this.mode.kind === "hosted") {
-      process.env.ARK_MODE = "hosted";
-      return;
-    }
-
-    for (const dir of [
-      this.config.dirs.ark,
-      this.config.dirs.tracks,
-      this.config.dirs.worktrees,
-      this.config.dirs.logs,
-    ]) {
-      mkdirSync(dir, { recursive: true });
-    }
-    setLogArkDir(this.config.dirs.ark);
-    setProfilesArkDir(this.config.dirs.ark);
-  }
-
-  private async _openDatabase(): Promise<DatabaseAdapter> {
-    // `this.mode` lazily builds a `preBootMode` when the container isn't up
-    // yet -- safe at boot-time because `buildAppMode` is a pure function of
-    // config. All downstream dialect decisions read `mode.database.dialect`
-    // instead of re-sniffing `databaseUrl`, so this is the ONE place in the
-    // codebase that converts a URL into a dialect + constructs the adapter.
-    if (this.mode.database.dialect === "postgres") {
-      const { PostgresAdapter } = await import("./database/postgres.js");
-      const adapter = new PostgresAdapter(this.mode.database.url!);
-      // Expose a drizzle client sharing the same postgres.js connection so
-      // repository rewrites (Phase B of the cutover) can opt in incrementally
-      // without spinning up a second pool.
-      this._drizzle = buildPostgresDrizzle(adapter.connection);
-      return adapter;
-    }
-    // bun:sqlite + BunSqliteAdapter are loaded lazily so the worker, which
-    // only runs in Postgres mode, can boot under Node without these imports
-    // failing at module load time. See feedback memory on the Bun ↔ Temporal
-    // worker SDK V8 isolate hang -- the worker now runs on Node.
-    const { Database } = await import("bun:sqlite");
-    const { BunSqliteAdapter } = await import("./database/index.js");
-    const rawDb = new Database(this.config.dbPath);
-    rawDb.run("PRAGMA journal_mode = WAL");
-    rawDb.run("PRAGMA busy_timeout = 5000");
-    this._drizzle = buildSqliteDrizzle(rawDb);
-    return new BunSqliteAdapter(rawDb);
-  }
-
-  private async _initSchema(db: DatabaseAdapter): Promise<void> {
-    // Schema bootstrap + ongoing migrations both flow through AppMode.migrations.
-    // The capability is dialect-bound at construction; the runner records
-    // every applied version in `ark_schema_migrations`. Backwards compat for
-    // pre-migration installs (laptop SQLite + the running pai-risk-mlops
-    // Postgres) is handled inside the runner: if the apply log is empty but
-    // the canonical legacy `compute` table exists, 001_initial is recorded
-    // as already-applied so its body doesn't re-run.
-    await this.mode.migrations.apply(db);
-    await this.mode.computeBootstrap.seed(db);
-  }
-
-  private async _seedComputeTemplates(db: DatabaseAdapter): Promise<void> {
-    if (!this.config.computeTemplates?.length) return;
-    // Seed under the `__system__` sentinel tenant. Every tenant-scoped
-    // `computeTemplates.list/get` unions in system rows, so hosted
-    // deployments see the seeded blueprints from every tenant without
-    // duplicating one row per tenant. A tenant can override any system
-    // template by creating one of the same name under their own tenant_id.
-    const { SYSTEM_TENANT_ID } = await import("./repositories/compute-template.js");
-    const tmplRepo = new ComputeTemplateRepositoryCtor(db);
-    tmplRepo.setTenant(SYSTEM_TENANT_ID);
-    for (const tmpl of this.config.computeTemplates) {
-      if (!(await tmplRepo.get(tmpl.name))) {
-        const axes = legacyProviderNameToAxesForTemplates(tmpl.provider ?? "local");
-        await tmplRepo.create({
-          name: tmpl.name,
-          description: tmpl.description,
-          compute: axes.compute_kind,
-          isolation: axes.isolation_kind,
-          config: tmpl.config,
-        });
-      }
-    }
   }
 
   // ── Accessors (resolved from the DI container) ────────────────────────
@@ -754,8 +490,20 @@ export class AppContext {
   get sessionHooks(): SessionHooks {
     return this._resolve("sessionHooks");
   }
-  get sessionLifecycle(): SessionLifecycle {
-    return this._resolve("sessionLifecycle");
+  get sessionCreator(): SessionCreator {
+    return this._resolve("sessionCreator");
+  }
+  get sessionTerminator(): SessionTerminator {
+    return this._resolve("sessionTerminator");
+  }
+  get sessionSuspender(): SessionSuspender {
+    return this._resolve("sessionSuspender");
+  }
+  get sessionForker(): SessionForker {
+    return this._resolve("sessionForker");
+  }
+  get sessionReviewer(): SessionReviewer {
+    return this._resolve("sessionReviewer");
   }
   get sessionAttach(): SessionAttachService {
     return this._resolve("sessionAttach");
@@ -763,8 +511,8 @@ export class AppContext {
   get dispatchService(): DispatchService {
     return this._resolve("dispatchService");
   }
-  get stageAdvance(): StageAdvanceService {
-    return this._resolve("stageAdvance");
+  get sessionProgression(): SessionProgression {
+    return this._resolve("sessionProgression");
   }
 
   // ── Resource stores ────────────────────────────────────────────────────
@@ -1041,7 +789,7 @@ export class AppContext {
     return this._container;
   }
 
-  // ── Compute / Isolation / Pool registries ──────────────────────────────
+  // ── Compute / Isolation registries ─────────────────────────────────────
 
   registerCompute(c: NewCompute): void {
     this._registries.registerCompute(c);
@@ -1060,19 +808,6 @@ export class AppContext {
   }
   listIsolations(): IsolationKind[] {
     return this._registries.listIsolations();
-  }
-
-  registerComputePool(pool: ComputePool): void {
-    this._registries.registerPool(pool);
-  }
-  deregisterComputePool(kind: ComputeKind): void {
-    this._registries.deregisterPool(kind);
-  }
-  getComputePool(kind: ComputeKind): ComputePool | null {
-    return this._registries.getPool(kind);
-  }
-  listComputePools(): ComputeKind[] {
-    return this._registries.listPools();
   }
 
   /** Resolve the ComputeTarget for a session. Delegated to compute-resolver.ts. */
@@ -1155,44 +890,6 @@ async function installTestSecrets(app: AppContext): Promise<void> {
         // surface a clearer error if any of these turn out to be required.
       }
     }
-  }
-}
-
-/**
- * Map a config-template's legacy `provider` string to the new two-axis
- * (compute_kind, isolation_kind) pair. Mirrors the (now-deleted)
- * `pairToProvider` table; kept inline here because seeding system templates
- * is the only `app.ts` caller that still consumes the legacy name.
- */
-function legacyProviderNameToAxesForTemplates(name: string): {
-  compute_kind: import("../types/index.js").ComputeKindName;
-  isolation_kind: import("../types/index.js").IsolationKindName;
-} {
-  switch (name) {
-    case "local":
-      return { compute_kind: "local", isolation_kind: "direct" };
-    case "docker":
-      return { compute_kind: "local", isolation_kind: "docker" };
-    case "devcontainer":
-      return { compute_kind: "local", isolation_kind: "devcontainer" };
-    case "firecracker":
-      return { compute_kind: "firecracker", isolation_kind: "direct" };
-    case "ec2":
-    case "remote-arkd":
-    case "remote-worktree":
-      return { compute_kind: "ec2", isolation_kind: "direct" };
-    case "ec2-docker":
-    case "remote-docker":
-      return { compute_kind: "ec2", isolation_kind: "docker" };
-    case "ec2-devcontainer":
-    case "remote-devcontainer":
-      return { compute_kind: "ec2", isolation_kind: "devcontainer" };
-    case "k8s":
-      return { compute_kind: "k8s", isolation_kind: "direct" };
-    case "k8s-kata":
-      return { compute_kind: "k8s-kata", isolation_kind: "direct" };
-    default:
-      return { compute_kind: "local", isolation_kind: "direct" };
   }
 }
 

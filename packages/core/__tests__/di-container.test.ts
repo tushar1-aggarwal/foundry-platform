@@ -8,6 +8,8 @@
 
 import { legacyProviderLabel as providerOf } from "./_util/legacy-provider-label.js";
 import { describe, it, expect, afterEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { asValue } from "awilix";
 import { AppContext } from "../app.js";
 import { SessionRepository } from "../repositories/session.js";
@@ -18,10 +20,41 @@ import { TodoRepository } from "../repositories/todo.js";
 import { SessionService } from "../services/session.js";
 import { ComputeService } from "../services/compute.js";
 import { clearApp, getApp, setApp } from "./test-helpers.js";
+import { attachTemporalTestHarness, drainTemporalTestHarness, waitForSessionStatus } from "../temporal/test-harness.js";
 
 let app: AppContext | null = null;
+let detach: (() => void) | null = null;
+
+/**
+ * Temporal is the sole orchestrator: `sessionService.start()` always launches
+ * a real sessionWorkflow. DI tests that exercise `start()` route it through
+ * the in-process harness against a single self-terminating `di-auto` flow
+ * (`bare`/`default` are gate:manual and would park forever -> drain hangs).
+ * Returns once boot + harness wiring is done.
+ */
+async function bootHarnessed(a: AppContext): Promise<void> {
+  const flowDir = join(a.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "di-auto.yaml"),
+    `name: di-auto
+description: single auto stage
+stages:
+  - name: work
+    agent: implementer
+    gate: auto
+`,
+  );
+  await a.boot();
+  detach = await attachTemporalTestHarness(a);
+}
 
 afterEach(async () => {
+  if (detach) {
+    await drainTemporalTestHarness();
+    detach();
+    detach = null;
+  }
   if (app) {
     await app.shutdown();
     clearApp();
@@ -134,11 +167,11 @@ describe("resolved instances have correct types", async () => {
 describe("service dependency injection", async () => {
   it("SessionService can create and query sessions (repos wired)", async () => {
     app = await AppContext.forTestAsync();
-    await app.boot();
+    await bootHarnessed(app);
     setApp(app);
 
     const svc = app.sessionService;
-    const session = await svc.start({ summary: "DI test", ticket: "DI-1" });
+    const session = await svc.start({ summary: "DI test", ticket: "DI-1", flow: "di-auto" });
     expect(session.id).toMatch(/^s-[0-9a-z]{10}$/);
     expect(session.summary).toBe("DI test");
 
@@ -150,21 +183,27 @@ describe("service dependency injection", async () => {
     // Verify event was logged
     const evts = await app.events.list(session.id, { type: "session_created" });
     expect(evts.length).toBe(1);
-  });
+
+    // Drive the workflow to terminal so afterEach drain is fast.
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+  }, 45_000);
 
   it("SessionService stop writes through to same DB", async () => {
     app = await AppContext.forTestAsync();
-    await app.boot();
+    await bootHarnessed(app);
     setApp(app);
 
     const svc = app.sessionService;
-    const session = await svc.start({});
+    const session = await svc.start({ flow: "di-auto" });
     await app.sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running" } as any);
 
     const result = await svc.stop(session.id);
     expect(result.ok).toBe(true);
-    expect((await app.sessions.get(session.id))!.status).toBe("stopped");
-  });
+    // stop() terminates the workflow and writes a terminal state. The
+    // race with the auto workflow means the row settles at stopped OR
+    // completed -- both are terminal and acceptable.
+    expect(["stopped", "completed"]).toContain((await app.sessions.get(session.id))!.status);
+  }, 45_000);
 
   it("ComputeService delegates to ComputeRepository correctly", async () => {
     app = await AppContext.forTestAsync();
@@ -187,23 +226,29 @@ describe("service dependency injection", async () => {
 describe("forTest() isolation", async () => {
   it("two forTest() instances have independent databases", async () => {
     const app1 = await AppContext.forTestAsync();
-    await app1.boot();
+    await bootHarnessed(app1);
 
     const app2 = await AppContext.forTestAsync();
     await app2.boot();
 
-    // Create session in app1
-    await app1.sessionService.start({ summary: "app1 session" });
+    // Create session in app1 (its start() launches the harnessed workflow).
+    const s1 = await app1.sessionService.start({ summary: "app1 session", flow: "di-auto" });
 
     // app2 should not see it via its own session repo
     const results = await app2.sessions.list({ limit: 100 });
     expect(results.find((s) => s.summary === "app1 session")).toBeUndefined();
 
+    // Drive app1's workflow to terminal, then drain before shutdown.
+    await waitForSessionStatus(app1, s1.id, ["completed", "failed"]);
+    await drainTemporalTestHarness();
+    detach?.();
+    detach = null;
+
     // Cleanup
     await app2.shutdown();
     await app1.shutdown();
     app = null; // prevent afterEach double-shutdown
-  });
+  }, 45_000);
 
   it("forTest() uses temp directory for arkDir", async () => {
     app = await AppContext.forTestAsync();
@@ -314,7 +359,7 @@ describe("resource stores via container", async () => {
     const flows = app.flows;
     expect(typeof flows.list).toBe("function");
     // Should at least have builtin flows
-    const list = flows.list();
+    const list = await flows.list();
     expect(list.length).toBeGreaterThanOrEqual(0);
   });
 
@@ -340,80 +385,45 @@ describe("resource stores via container", async () => {
 // ── Cross-service integration ───────────────────────────────────────────────
 
 describe("cross-service integration through container", async () => {
-  it("full session lifecycle through DI-wired services", async () => {
-    app = await AppContext.forTestAsync();
-    await app.boot();
-    setApp(app);
-
-    const svc = app.sessionService;
-
-    // Create
-    const session = await svc.start({ summary: "Full lifecycle", ticket: "LC-1" });
-    expect(session.status).toBe("pending");
-
-    // Pause
-    const pauseResult = await svc.pause(session.id, "Waiting for review");
-    expect(pauseResult.ok).toBe(true);
-    expect((await app.sessions.get(session.id))!.status).toBe("blocked");
-
-    // Resume
-    const resumeResult = await svc.resume(session.id);
-    expect(resumeResult.ok).toBe(true);
-    expect((await app.sessions.get(session.id))!.status).toBe("ready");
-
-    // Stop
-    const stopResult = await svc.stop(session.id);
-    expect(stopResult.ok).toBe(true);
-    expect((await app.sessions.get(session.id))!.status).toBe("stopped");
-
-    // Delete
-    const deleteResult = await svc.delete(session.id);
-    expect(deleteResult.ok).toBe(true);
-    expect((await app.sessions.get(session.id))!.status).toBe("deleting");
-
-    // Undelete
-    const undeleteResult = await svc.undelete(session.id);
-    expect(undeleteResult.ok).toBe(true);
-    expect((await app.sessions.get(session.id))!.status).toBe("stopped");
-
-    // Verify events trail
-    const allEvents = await app.events.list(session.id);
-    const types = allEvents.map((e) => e.type);
-    expect(types).toContain("session_created");
-    expect(types).toContain("session_paused");
-    expect(types).toContain("session_resumed");
-    expect(types).toContain("session_stopped");
-    expect(types).toContain("session_deleted");
-    expect(types).toContain("session_undeleted");
-  });
+  // DELETED "full session lifecycle through DI-wired services": asserted the
+  // bespoke synchronous start->pending->pause->resume->stop->delete->undelete
+  // contract in lockstep. Temporal is the sole orchestrator now -- start()
+  // launches a workflow that drives the session asynchronously, so that
+  // deterministic synchronous lifecycle no longer exists. The DI wiring of
+  // these services is covered by the sibling DI tests; the pause/resume/
+  // stop/delete prod ops by session-stop-resume + e2e-session-lifecycle.
 
   it("session + compute coexist in same container", async () => {
     app = await AppContext.forTestAsync();
-    await app.boot();
+    await bootHarnessed(app);
     setApp(app);
 
     // Create session and compute through services
-    const session = await app.sessionService.start({ summary: "With compute" });
+    const session = await app.sessionService.start({ summary: "With compute", flow: "di-auto" });
     const compute = await app.computeService.create({ name: "test-ec2", compute: "ec2", isolation: "direct" });
 
     // Both write to the same underlying database
     expect(await app.sessions.get(session.id)).not.toBeNull();
     expect(await app.computes.get("test-ec2")).not.toBeNull();
-  });
+
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+  }, 45_000);
 
   it("messages sent through repo are visible via service complete()", async () => {
     app = await AppContext.forTestAsync();
-    await app.boot();
+    await bootHarnessed(app);
     setApp(app);
 
-    const session = await app.sessionService.start({ summary: "Msg test" });
+    const session = await app.sessionService.start({ summary: "Msg test", flow: "di-auto" });
     await app.messages.send(session.id, "agent", "Done!", "text");
     expect(await app.messages.unreadCount(session.id)).toBe(1);
 
     // complete() marks messages as read
     await app.sessionService.complete(session.id);
     expect(await app.messages.unreadCount(session.id)).toBe(0);
-  });
+
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+  }, 45_000);
 });
 
 // -- Transitive dependency sharing ------------------------------------------
@@ -421,10 +431,10 @@ describe("cross-service integration through container", async () => {
 describe("transitive dependency sharing", async () => {
   it("SessionService and SessionRepository share the same DB", async () => {
     app = await AppContext.forTestAsync();
-    await app.boot();
+    await bootHarnessed(app);
     setApp(app);
 
-    const session = await app.sessionService.start({ summary: "Shared DB test" });
+    const session = await app.sessionService.start({ summary: "Shared DB test", flow: "di-auto" });
 
     // Write directly to the DB via the db accessor
     const row = (await app.db.prepare("SELECT id FROM sessions WHERE id = ?").get(session.id)) as
@@ -432,7 +442,9 @@ describe("transitive dependency sharing", async () => {
       | undefined;
     expect(row).toBeDefined();
     expect(row!.id).toBe(session.id);
-  });
+
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+  }, 45_000);
 
   it("all repos resolve with the same DB instance", async () => {
     app = await AppContext.forTestAsync();
@@ -470,7 +482,9 @@ describe("container override", async () => {
     await app.boot();
     setApp(app);
 
-    const session = await app.sessionService.start({ summary: "Before override" });
+    // A real row is all this needs -- create() (no Temporal workflow) keeps
+    // the container-override assertion deterministic.
+    const session = await app.sessions.create({ summary: "Before override" });
     expect(await app.sessions.get(session.id)).not.toBeNull();
 
     const fakeSessions = {
@@ -488,7 +502,7 @@ describe("container override", async () => {
     setApp(app);
 
     const originalRepo = app.sessions;
-    const session = await app.sessionService.start({ summary: "ref test" });
+    const session = await app.sessions.create({ summary: "ref test" });
 
     app.container.register({ sessions: asValue({ get: () => null }) });
 
@@ -499,51 +513,12 @@ describe("container override", async () => {
 });
 
 // -- SessionHooks dispatch wiring -------------------------------------------
-
-describe("sessionHooks.dispatch wiring (Bug A regression)", async () => {
-  it("propagates the underlying DispatchResult instead of swallowing it", async () => {
-    app = await AppContext.forTestAsync();
-    await app.boot();
-    setApp(app);
-
-    // Override dispatchService AFTER boot. The wired callback resolves
-    // c.app.dispatchService at call time, so subsequent dispatch() calls
-    // route through this fake.
-    const fakeResult = { ok: false as const, message: "wired-dispatch-failure" };
-    const fakeDispatchService = {
-      dispatch: async () => fakeResult,
-    };
-    app.container.register({ dispatchService: asValue(fakeDispatchService) });
-
-    // Reach into the private deps to invoke the wired dispatch callback
-    // exactly as HandoffMediator would. Pre-Bug-A this returned undefined;
-    // post-fix it must return the DispatchResult verbatim.
-    const hooks = app.sessionHooks as unknown as {
-      handoff: { deps: { dispatch: (id: string) => Promise<unknown> } };
-    };
-    const out = await hooks.handoff.deps.dispatch("s-anything");
-
-    expect(out).toEqual(fakeResult);
-  });
-
-  it("propagates a successful DispatchResult unchanged", async () => {
-    app = await AppContext.forTestAsync();
-    await app.boot();
-    setApp(app);
-
-    const fakeResult = { ok: true as const, message: "ok-from-fake" };
-    app.container.register({
-      dispatchService: asValue({ dispatch: async () => fakeResult }),
-    });
-
-    const hooks = app.sessionHooks as unknown as {
-      handoff: { deps: { dispatch: (id: string) => Promise<unknown> } };
-    };
-    const out = await hooks.handoff.deps.dispatch("s-anything");
-
-    expect(out).toEqual(fakeResult);
-  });
-});
+//
+// DELETED "sessionHooks.dispatch wiring (Bug A regression)" (both cases):
+// reached into `app.sessionHooks.handoff.deps.dispatch` -- the bespoke
+// HandoffMediator dispatch-callback wiring. SessionHooks no longer has a
+// `handoff` mediator (Temporal owns stage handoff), so the contract under
+// test was deleted with no equivalent.
 
 // -- Post-shutdown behavior -------------------------------------------------
 
@@ -603,13 +578,15 @@ describe("getApp() global singleton integration", async () => {
 
   it("data written through getApp() is visible through direct app reference", async () => {
     app = await AppContext.forTestAsync();
-    await app.boot();
+    await bootHarnessed(app);
     setApp(app);
 
-    const session = await getApp().sessionService.start({ summary: "Global write" });
+    const session = await getApp().sessionService.start({ summary: "Global write", flow: "di-auto" });
 
     const found = await app.sessions.get(session.id);
     expect(found).not.toBeNull();
     expect(found!.summary).toBe("Global write");
-  });
+
+    await waitForSessionStatus(app, session.id, ["completed", "failed"]);
+  }, 45_000);
 });

@@ -14,6 +14,7 @@
 
 import type { AppContext } from "../../app.js";
 import { handleReport } from "../../services/channel/report-pipeline.js";
+import { depsFromApp } from "../../services/deps.js";
 import { handleHookStatusHttp } from "../../services/channel/hook-status-http.js";
 import type { OutboundMessage } from "../../services/channel/channel-types.js";
 import { appForRequest } from "../../services/channel/tenant.js";
@@ -61,7 +62,7 @@ export function startTestServer(app: AppContext, port: number): TestServerHandle
           const resolved = await appForRequest(app, req);
           if (resolved.ok === false) return resolved.response;
           const report = (await req.json()) as OutboundMessage;
-          await handleReport(resolved.app, sessionId, report);
+          await handleReport(depsFromApp(resolved.app), sessionId, report);
           return Response.json({ status: "ok" });
         } catch (e: any) {
           return Response.json({ error: String(e) }, { status: 500 });

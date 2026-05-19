@@ -20,6 +20,7 @@ import { execFile } from "child_process";
 import { logWarn } from "../../observability/structured-log.js";
 import { detectInjection } from "../../session/prompt-guard.js";
 import { buildAuthedHttpsUrl } from "../git/auth-url.js";
+import { depsFromApp } from "../deps.js";
 import { isRepoUrl } from "../../repo-url.js";
 import type { DispatchDeps, DispatchResult } from "./types.js";
 import type { Session } from "../../../types/index.js";
@@ -81,12 +82,12 @@ export async function validateSessionForDispatch(
  * return immediately; returns null when the stage is not an action.
  */
 export async function maybeHandleActionStage(
-  deps: Pick<DispatchDeps, "sessions" | "getStageAction" | "executeAction" | "mediateStageHandoff">,
+  deps: Pick<DispatchDeps, "sessions" | "getStageAction" | "executeAction">,
   session: Session,
 ): Promise<DispatchResult | null> {
   const sessionId = session.id;
   const stage = session.stage!;
-  const earlyAction = deps.getStageAction(session.flow, stage);
+  const earlyAction = await deps.getStageAction(session.flow, stage);
   if (earlyAction.type !== "action") return null;
 
   const result = await deps.executeAction(sessionId, earlyAction.action ?? "");
@@ -98,16 +99,13 @@ export async function maybeHandleActionStage(
     return { ok: false, message: result.message };
   }
   // Action ran to completion on the conductor (no agent in a pod to emit
-  // hooks). Write the per-stage-done signal so awaitStageCompletionActivity's
-  // poll on session.status unblocks. Also clear session_id (sticky from the
-  // previous agent stage); the workflow's downstream projectStageActivity
-  // skips its `status: "running"` write only when session_id is null, so
-  // without this clear the "running" overwrites our "ready" 4ms later.
+  // hooks). Write the per-stage-done signal so awaitStageCompletionActivity
+  // -- which polls session.status and treats "ready" as stage-done -- unblocks.
+  // Also clear session_id (sticky from the previous agent stage); the
+  // projection seam skips its `status: "running"` write only when session_id
+  // is null, so without this clear "running" would overwrite "ready". The
+  // Temporal workflow drives the next-stage handoff from here.
   await deps.sessions.update(sessionId, { status: "ready", session_id: null });
-  const postAction = await deps.sessions.get(sessionId);
-  if (postAction?.status === "ready") {
-    await deps.mediateStageHandoff(sessionId, { autoDispatch: true, source: "dispatch_action" });
-  }
   return {
     ok: true,
     launched: false,
@@ -214,7 +212,7 @@ export async function cloneRemoteRepoIfNeeded(
     // Inject tenant-scoped basic-auth creds (BITBUCKET_TOKEN/USERNAME,
     // GITHUB_TOKEN) into the URL for hosts we know how to authenticate.
     // Non-https URLs and unknown hosts pass through unchanged.
-    const clonedUrl = await buildAuthedHttpsUrl(deps.getApp(), session, remoteUrl);
+    const clonedUrl = await buildAuthedHttpsUrl(depsFromApp(deps.getApp()), session, remoteUrl);
     await execFileAsync("git", ["clone", "--depth", "1", clonedUrl, tmpDir], { timeout: 120_000 });
     // Update BOTH workdir and repo so setupSessionWorktree's later
     // `resolve(session.repo)` lands on the cloned dir (a real local git

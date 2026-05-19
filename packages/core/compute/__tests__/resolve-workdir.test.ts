@@ -4,15 +4,13 @@
  * Pure transformation -- no AppContext / network / SSH stubs needed.
  * The interface method is optional; LocalCompute omits it (callers fall
  * back to session.workdir), K8sCompute returns null pending the pod-side
- * mount layout, and EC2Compute / FirecrackerCompute mirror the legacy
+ * mount layout, and EC2Compute mirrors the legacy
  * `${remoteHome}/Projects/<sid>/<repo>` shape.
  */
 
 import { describe, expect, test } from "bun:test";
 import { LocalCompute } from "../local.js";
 import { EC2Compute } from "../ec2/compute.js";
-import { K8sCompute } from "../k8s.js";
-import { FirecrackerCompute } from "../firecracker/compute.js";
 
 const STUB_APP = {} as never;
 
@@ -77,36 +75,6 @@ describe("Compute.resolveWorkdir", () => {
   test("EC2Compute returns null when neither remoteRepo nor session.repo is set", () => {
     const c = new EC2Compute(STUB_APP);
     const r = c.resolveWorkdir!({ kind: "ec2", name: "ec2-test", meta: { ec2: {} } }, {
-      id: "s-abc",
-      config: {},
-      repo: null,
-    } as never);
-    expect(r).toBeNull();
-  });
-
-  test("FirecrackerCompute returns the guest-side path (EC2 shape)", () => {
-    const c = new FirecrackerCompute(STUB_APP);
-    const r = c.resolveWorkdir!({ kind: "firecracker", name: "fc-test", meta: { firecracker: {} } }, {
-      id: "s-abc",
-      config: { remoteRepo: "git@example.com:org/repo.git" },
-      repo: null,
-    } as never);
-    // Default guestHome falls back to /home/ubuntu.
-    expect(r).toBe("/home/ubuntu/Projects/s-abc/repo");
-  });
-
-  test("FirecrackerCompute strips .git suffix from the repo basename", () => {
-    const c = new FirecrackerCompute(STUB_APP);
-    const r = c.resolveWorkdir!(
-      { kind: "firecracker", name: "fc-test", meta: { firecracker: { guestHome: "/root" } } },
-      { id: "s-abc", config: { remoteRepo: "git@bitbucket.org:team/payments-service.git" }, repo: null } as never,
-    );
-    expect(r).toBe("/root/Projects/s-abc/payments-service");
-  });
-
-  test("FirecrackerCompute returns null when neither remoteRepo nor session.repo is set", () => {
-    const c = new FirecrackerCompute(STUB_APP);
-    const r = c.resolveWorkdir!({ kind: "firecracker", name: "fc-test", meta: { firecracker: {} } }, {
       id: "s-abc",
       config: {},
       repo: null,

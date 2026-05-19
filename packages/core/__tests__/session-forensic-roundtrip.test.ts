@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { AppContext } from "../app.js";
 import { captureWorkerForensics, readSessionForensic, workerSessionDir } from "../services/session-forensic.js";
+import { depsFromApp } from "../services/deps.js";
 import { encodeLocator, LOCAL_TENANT_ID } from "../storage/blob-store.js";
 import { allocatePort } from "../config/port-allocator.js";
 import type { Session } from "../../types/index.js";
@@ -57,7 +58,7 @@ afterAll(async () => {
 
 describe("forensic capture/read round-trip -- no truncation", () => {
   it("capture stores the full bytes (well under the 8MB cap) byte-for-byte", async () => {
-    const { stdioTail } = await captureWorkerForensics(app, session, arkdUrl);
+    const { stdioTail } = await captureWorkerForensics(depsFromApp(app), session, arkdUrl);
 
     const tx = await app.blobStore.get(
       encodeLocator({
@@ -76,7 +77,7 @@ describe("forensic capture/read round-trip -- no truncation", () => {
   });
 
   it("small file round-trips identically through the blob fallback", async () => {
-    const r = await readSessionForensic(app, session, "stdio.log");
+    const r = await readSessionForensic(depsFromApp(app), session, "stdio.log");
     expect(r.exists).toBe(true);
     expect(r.tooLarge).toBe(false);
     expect(r.content).toBe(SMALL);
@@ -84,7 +85,7 @@ describe("forensic capture/read round-trip -- no truncation", () => {
   });
 
   it("over-cap read with no tail REFUSES (tooLarge) instead of silently truncating", async () => {
-    const r = await readSessionForensic(app, session, "transcript.jsonl");
+    const r = await readSessionForensic(depsFromApp(app), session, "transcript.jsonl");
     expect(r.exists).toBe(true);
     expect(r.tooLarge).toBe(true);
     expect(r.content).toBe(""); // never a partial body
@@ -92,7 +93,7 @@ describe("forensic capture/read round-trip -- no truncation", () => {
   });
 
   it("over-cap read with tail returns the exact last N lines at a line boundary", async () => {
-    const r = await readSessionForensic(app, session, "transcript.jsonl", { tail: 50 });
+    const r = await readSessionForensic(depsFromApp(app), session, "transcript.jsonl", { tail: 50 });
     expect(r.exists).toBe(true);
     expect(r.tooLarge).toBe(false);
     expect(r.size).toBe(Buffer.byteLength(BIG));

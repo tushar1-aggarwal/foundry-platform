@@ -1,16 +1,35 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../core/app.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../core/temporal/test-harness.js";
 import { registerSessionHandlers } from "../handlers/session.js";
 import { registerResourceHandlers } from "../handlers/resource.js";
 import { Router } from "../router.js";
 import { createRequest, type JsonRpcResponse, type JsonRpcError } from "../../protocol/types.js";
 
 let app: AppContext;
+let detach: (() => void) | undefined;
 beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+  );
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 afterAll(async () => {
+  detach?.();
   await app?.shutdown();
 });
 
@@ -31,8 +50,10 @@ function err(res: unknown): { code: number; message: string } {
 }
 
 async function createSession(summary: string): Promise<string> {
-  const res = await router.dispatch(createRequest(1, "session/start", { summary, repo: ".", flow: "bare" }));
-  return (ok(res).session as Record<string, unknown>).id as string;
+  const res = await router.dispatch(createRequest(1, "session/start", { summary, repo: ".", flow: "x-auto" }));
+  const id = (ok(res).session as Record<string, unknown>).id as string;
+  await waitForSessionStatus(app, id, ["completed", "failed"]);
+  return id;
 }
 
 // ── session/read ───────────────────────────────────────────────────────────
@@ -44,7 +65,7 @@ describe("session/read", async () => {
     const result = ok(res);
     expect((result.session as Record<string, unknown>).id).toBe(id);
     expect((result.session as Record<string, unknown>).summary).toBe("read-basic");
-  });
+  }, 45_000);
 
   it("returns error for unknown session id", async () => {
     const res = await router.dispatch(createRequest(1, "session/read", { sessionId: "s-does-not-exist" }));
@@ -62,7 +83,7 @@ describe("session/read", async () => {
     const events = result.events as Array<Record<string, unknown>>;
     expect(events.length).toBeGreaterThanOrEqual(1);
     expect(events.some((e) => e.type === "test-event")).toBe(true);
-  });
+  }, 45_000);
 
   it("includes messages when requested", async () => {
     const id = await createSession("read-messages");
@@ -74,7 +95,7 @@ describe("session/read", async () => {
     const messages = result.messages as Array<Record<string, unknown>>;
     expect(messages.length).toBeGreaterThanOrEqual(1);
     expect(messages.some((m) => m.content === "hello from test")).toBe(true);
-  });
+  }, 45_000);
 
   it("includes both events and messages when requested", async () => {
     const id = await createSession("read-both");
@@ -89,7 +110,7 @@ describe("session/read", async () => {
     expect(result.messages).toBeDefined();
     expect((result.events as unknown[]).length).toBeGreaterThanOrEqual(1);
     expect((result.messages as unknown[]).length).toBeGreaterThanOrEqual(1);
-  });
+  }, 45_000);
 
   it("omits events and messages when include is not specified", async () => {
     const id = await createSession("read-no-include");
@@ -100,7 +121,7 @@ describe("session/read", async () => {
     const result = ok(res);
     expect(result.events).toBeUndefined();
     expect(result.messages).toBeUndefined();
-  });
+  }, 45_000);
 });
 
 // ── agent/read ─────────────────────────────────────────────────────────────
@@ -149,7 +170,8 @@ describe("compute/read", async () => {
     const result = ok(res);
     expect(result.compute).toBeDefined();
     expect((result.compute as Record<string, unknown>).name).toBe(name);
-    expect((result.compute as Record<string, unknown>).provider).toBe("docker");
+    expect((result.compute as Record<string, unknown>).compute_kind).toBe("local");
+    expect((result.compute as Record<string, unknown>).isolation_kind).toBe("docker");
   });
 
   it("returns error for unknown compute", async () => {

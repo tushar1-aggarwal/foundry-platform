@@ -160,7 +160,6 @@ export function registerServerDaemonCommands(serverCmd: Command) {
 
       const server = new ArkServer();
       registerAllHandlers(server.router, app);
-      server.attachLifecycle(app);
       server.attachAuth(app);
       server.attachApp(app);
 

@@ -7,8 +7,15 @@
  * `notSupported: true`).
  */
 
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeEach, beforeAll, afterAll, afterEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../core/app.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../core/temporal/test-harness.js";
 import { registerSessionHandlers } from "../handlers/session.js";
 import { Router } from "../router.js";
 import { createRequest, type JsonRpcResponse } from "../../protocol/types.js";
@@ -21,17 +28,29 @@ import type {
   Snapshot,
 } from "../../core/compute/types.js";
 import { NotSupportedError } from "../../core/compute/types.js";
-import { setApp } from "../../core/__tests__/test-helpers.js";
 
 let app: AppContext;
 let router: Router;
+let detach: (() => void) | undefined;
 
 beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+  );
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 
 afterAll(async () => {
+  detach?.();
   await app?.shutdown();
 });
 
@@ -41,11 +60,13 @@ beforeEach(() => {
 });
 
 // ── A fake snapshot-capable compute we can swap into the registry per test ──
+// Registered under the surviving `k8s` kind: registerCompute() keys by kind,
+// so this overrides the real (snapshot-incapable) K8sCompute for the test,
+// giving us a real snapshot/restore path to exercise pause/resume against.
 class FakeSnapshotCompute implements Compute {
-  readonly kind: ComputeKind = "firecracker";
+  readonly kind: ComputeKind = "k8s";
   readonly capabilities: ComputeCapabilities = {
     snapshot: true,
-    pool: false,
     networkIsolation: true,
     provisionLatency: "seconds",
   };
@@ -56,7 +77,7 @@ class FakeSnapshotCompute implements Compute {
   setApp(_app: AppContext): void {}
 
   async provision(_opts: ProvisionOpts): Promise<ComputeHandle> {
-    return { kind: this.kind, name: "fake-fc", meta: {} };
+    return { kind: this.kind, name: "fake-k8s", meta: {} };
   }
   async start(_h: ComputeHandle): Promise<void> {}
   async stop(_h: ComputeHandle): Promise<void> {}
@@ -77,39 +98,47 @@ class FakeSnapshotCompute implements Compute {
   async restore(s: Snapshot): Promise<ComputeHandle> {
     this.restoreCalls++;
     this.lastRestored = s;
-    return { kind: this.kind, name: "fake-fc", meta: { restored: true } };
+    return { kind: this.kind, name: "fake-k8s", meta: { restored: true } };
   }
 }
 
 /** Create a compute row if it doesn't already exist. */
-async function ensureCompute(ctx: AppContext, name: string, _provider: string, computeKind?: string): Promise<void> {
+async function ensureCompute(ctx: AppContext, name: string, computeKind?: string): Promise<void> {
   if (await ctx.computes.get(name)) return;
   await ctx.computeService.create({
     name,
-    compute: (computeKind ?? "firecracker") as any,
+    compute: (computeKind ?? "k8s") as any,
     isolation: "direct",
     config: {},
   });
 }
 
+// session/start now starts a Temporal workflow. Let the real workflow run to
+// terminal (so projectSessionActivity is done writing the row), then reset the
+// row to a clean dispatchable "ready" state -- exactly the state a freshly
+// started session sat in under the old park-at-gate behaviour, with no live
+// workflow left to race the pause/resume RPC writes.
 async function startSession(opts: Record<string, unknown> = {}): Promise<string> {
   const res = await router.dispatch(
-    createRequest(1, "session/start", { summary: "pause-test", repo: ".", flow: "bare", ...opts }),
+    createRequest(1, "session/start", { summary: "pause-test", repo: ".", flow: "x-auto", ...opts }),
   );
   const session = ((res as JsonRpcResponse).result as Record<string, any>).session;
-  return session.id as string;
+  const id = session.id as string;
+  await waitForSessionStatus(app, id, ["completed", "failed"]);
+  await app.sessions.update(id, { status: "ready", error: null, breakpoint_reason: null, session_id: null });
+  return id;
 }
 
 describe("session/pause", async () => {
   it("on a snapshot-capable compute: calls compute.snapshot() and persists via SnapshotStore", async () => {
-    // Register the fake firecracker first so `computeService.create` finds
-    // a Compute for the kind (firecracker isn't auto-registered on macOS
-    // test runners -- requires /dev/kvm).
+    // Register the fake snapshot-capable compute under `k8s` so it overrides
+    // the real (snapshot-incapable) K8sCompute and `computeService.create`
+    // resolves a snapshot-capable Compute for the kind.
     const fake = new FakeSnapshotCompute();
     app.registerCompute(fake);
-    await ensureCompute(app, "firecracker-1", "firecracker", "firecracker");
+    await ensureCompute(app, "k8s-1", "k8s");
 
-    const id = await startSession({ compute_name: "firecracker-1" });
+    const id = await startSession({ compute_name: "k8s-1" });
 
     const res = await router.dispatch(createRequest(2, "session/pause", { sessionId: id, reason: "test" }));
     const result = (res as JsonRpcResponse).result as Record<string, any>;
@@ -118,7 +147,7 @@ describe("session/pause", async () => {
     expect(fake.snapshotCalls).toBe(1);
     expect(result.snapshot).toBeDefined();
     expect(result.snapshot.id).toBeTruthy();
-    expect(result.snapshot.computeKind).toBe("firecracker");
+    expect(result.snapshot.computeKind).toBe("k8s");
     expect(result.snapshot.sessionId).toBe(id);
     expect(result.snapshot.metadata).toEqual({ memFilePath: "/tmp/m", stateFilePath: "/tmp/s" });
 
@@ -126,7 +155,7 @@ describe("session/pause", async () => {
     const session = await app.sessions.get(id)!;
     expect(session.status).toBe("blocked");
     expect((session.config as Record<string, unknown>).last_snapshot_id).toBe(result.snapshot.id);
-  });
+  }, 45_000);
 
   it("on a non-snapshot compute: degrades to state-only pause with notSupported=true", async () => {
     const id = await startSession(); // defaults to local compute
@@ -140,16 +169,16 @@ describe("session/pause", async () => {
 
     const session = await app.sessions.get(id)!;
     expect(session.status).toBe("blocked");
-  });
+  }, 45_000);
 });
 
 describe("session/resume", async () => {
   it("restores from the session's last snapshot and clears blocked state", async () => {
-    await ensureCompute(app, "firecracker-resume", "firecracker", "firecracker");
+    await ensureCompute(app, "k8s-resume", "k8s");
     const fake = new FakeSnapshotCompute();
     app.registerCompute(fake);
 
-    const id = await startSession({ compute_name: "firecracker-resume" });
+    const id = await startSession({ compute_name: "k8s-resume" });
     // Pause to produce a snapshot.
     const pauseRes = await router.dispatch(createRequest(2, "session/pause", { sessionId: id }));
     const pauseResult = (pauseRes as JsonRpcResponse).result as Record<string, any>;
@@ -167,7 +196,7 @@ describe("session/resume", async () => {
     const session = await app.sessions.get(id)!;
     expect(session.status).toBe("ready");
     expect(session.breakpoint_reason).toBeNull();
-  });
+  }, 45_000);
 
   it("on a session with no snapshot: falls through to state-only resume", async () => {
     const id = await startSession();
@@ -180,7 +209,7 @@ describe("session/resume", async () => {
     expect(result.ok).toBe(true);
     const session = await app.sessions.get(id)!;
     expect(session.status).toBe("ready");
-  });
+  }, 45_000);
 
   it("falls back to state-only resume when the referenced snapshot's compute lacks restore support", async () => {
     // Save a snapshot referencing a kind whose registered compute doesn't support restore.
@@ -203,7 +232,7 @@ describe("session/resume", async () => {
     const result = (res as JsonRpcResponse).result as Record<string, any>;
     expect(result.ok).toBe(true);
     expect((await app.sessions.get(id))!.status).toBe("ready");
-  });
+  }, 45_000);
 });
 
 describe("NotSupportedError surface", () => {

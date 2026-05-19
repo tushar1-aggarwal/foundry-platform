@@ -1,14 +1,14 @@
 /**
  * Git author identity on remote-compute prepareWorkspace.
  *
- * The conductor's setupSessionWorktree short-circuits for K8s/EC2/Firecracker
+ * The conductor's setupSessionWorktree short-circuits for K8s/EC2
  * (any compute with supportsWorktree=false), so the per-worktree
  * `applyWorktreeGitIdentity` write never runs. Without a fix, the sandbox
  * pod has NO git config -- the agent invents an identity at commit time
  * (e.g. "Planner <planner@foundry.local>" on session s-tdthtvenac), which
  * Bitbucket's BB Violator rewrites and the repo loses real authorship.
  *
- * Spec: `Compute.prepareWorkspace` (K8s + Local-docker + EC2 + Firecracker)
+ * Spec: `Compute.prepareWorkspace` (K8s + Local-docker + EC2)
  * resolves the agent identity via the same chain as the conductor and
  * issues two extra arkd exec ops AFTER the checkout:
  *   git -C <wd> config user.name <name>

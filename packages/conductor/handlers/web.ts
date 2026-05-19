@@ -12,6 +12,7 @@ import { getThemeMode } from "../../core/theme.js";
 import { getAllSessionCosts, exportCostsCsv } from "../../core/observability/costs.js";
 import { getActiveProfile } from "../../core/services/profile.js";
 import { cleanupWorktrees } from "../../core/services/worktree/index.js";
+import { depsFromApp } from "../../core/services/deps.js";
 import { exportSession } from "../../core/session/share.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
 import { generateOpenApiSpec } from "../../core/openapi.js";
@@ -84,7 +85,7 @@ export function registerWebHandlers(router: Router, app: AppContext): void {
   });
 
   router.handle("worktree/cleanup", async () => {
-    const result = await cleanupWorktrees(app);
+    const result = await cleanupWorktrees(depsFromApp(app));
     return { ok: true, ...result };
   });
 

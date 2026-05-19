@@ -26,8 +26,6 @@ import { logWarn } from "../observability/structured-log.js";
 import { UsageRecorder as UsageRecorderCtor } from "../observability/usage.js";
 import { TranscriptParserRegistry } from "../runtimes/transcript-parser.js";
 import { ClaudeTranscriptParser } from "../runtimes/claude/parser.js";
-import { CodexTranscriptParser } from "../runtimes/codex/parser.js";
-import { GeminiTranscriptParser } from "../runtimes/gemini/parser.js";
 import { AgentSdkParser } from "../runtimes/claude-agent/parser.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { FsSnapshotStore } from "../compute/snapshot-store-fs.js";
@@ -109,8 +107,6 @@ export function registerRuntime(container: AppContainer): void {
         // not a TODO. See packages/core/runtimes/claude/parser.ts for how
         // findForSession degrades when the callback yields nothing.
         registry.register(new ClaudeTranscriptParser(undefined, (_workdir) => null));
-        registry.register(new CodexTranscriptParser());
-        registry.register(new GeminiTranscriptParser());
         registry.register(new AgentSdkParser(_c.config.dirs.tracks));
         return registry;
       },

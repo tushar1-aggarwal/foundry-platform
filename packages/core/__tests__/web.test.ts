@@ -1,3 +1,8 @@
+// Import the harness FIRST: its top-level mock.module("@temporalio/workflow")
+// must run before any transitive import pulls in the real Temporal client,
+// otherwise the conductor's session/start handler dials a non-existent
+// Temporal server and the RPC hangs.
+import { attachTemporalTestHarness, drainTemporalTestHarness } from "../temporal/test-harness.js";
 import { describe, it, expect, afterEach } from "bun:test";
 import { startWebServer } from "../hosted/web.js";
 import { withTestContext } from "./test-helpers.js";
@@ -132,11 +137,24 @@ describe("web server", async () => {
   });
 
   it("creates a session via RPC", async () => {
+    // session/start crosses the prod Temporal start path; route it through
+    // the in-process harness so it drives the real sessionWorkflow instead
+    // of dialing a non-existent Temporal server.
+    const { mkdirSync, writeFileSync } = await import("fs");
+    const { join } = await import("path");
+    const flowDir = join(getApp().config.dirs.ark, "flows");
+    mkdirSync(flowDir, { recursive: true });
+    writeFileSync(
+      join(flowDir, "x-auto.yaml"),
+      `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+    );
+    await attachTemporalTestHarness(getApp());
     server = startWebServer(getApp(), { port: 18430 });
-    const data = await rpcResult(18430, "session/start", { summary: "web-create-test", repo: "." });
+    const data = await rpcResult(18430, "session/start", { summary: "web-create-test", flow: "x-auto" });
     const result = data.result as Record<string, unknown>;
     expect(result.session).toBeDefined();
     expect((result.session as any).summary).toBe("web-create-test");
+    await drainTemporalTestHarness();
   });
 
   it("returns system status via RPC", async () => {
@@ -181,11 +199,25 @@ describe("web server", async () => {
   // --- RPC endpoint tests ---
 
   it("session/clone works via RPC", async () => {
-    const s = await getApp().sessions.create({ summary: "fork-me" });
+    // session/clone starts a fresh session workflow for the clone; route the
+    // prod Temporal start path through the in-process harness. The source
+    // session uses a single-stage auto flow so the clone's workflow can run
+    // to completion instead of parking on the default flow's manual gate.
+    const { mkdirSync, writeFileSync } = await import("fs");
+    const { join } = await import("path");
+    const flowDir = join(getApp().config.dirs.ark, "flows");
+    mkdirSync(flowDir, { recursive: true });
+    writeFileSync(
+      join(flowDir, "x-auto.yaml"),
+      `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+    );
+    await attachTemporalTestHarness(getApp());
+    const s = await getApp().sessions.create({ summary: "fork-me", flow: "x-auto" });
     server = startWebServer(getApp(), { port: 18535 });
     const data = await rpcResult(18535, "session/clone", { sessionId: s.id, name: "forked-copy" });
     const result = data.result as Record<string, unknown>;
     expect(result.session).toBeDefined();
+    await drainTemporalTestHarness();
   });
 
   it("profile/list returns profiles via RPC", async () => {

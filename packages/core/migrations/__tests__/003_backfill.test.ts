@@ -65,11 +65,11 @@ describe("Migration 003 -- tenants backfill", () => {
       .run("c-1", "initech", ts, ts);
 
     await db.exec(
-      "CREATE TABLE IF NOT EXISTS tenant_policies (tenant_id TEXT PRIMARY KEY, allowed_providers TEXT, default_provider TEXT, max_concurrent_sessions INTEGER, max_cost_per_day_usd REAL, compute_pools TEXT, created_at TEXT, updated_at TEXT)",
+      "CREATE TABLE IF NOT EXISTS tenant_policies (tenant_id TEXT PRIMARY KEY, allowed_compute TEXT, default_compute TEXT, max_concurrent_sessions INTEGER, max_cost_per_day_usd REAL, compute_pools TEXT, created_at TEXT, updated_at TEXT)",
     );
     await db
       .prepare(
-        "INSERT INTO tenant_policies (tenant_id, allowed_providers, default_provider, max_concurrent_sessions, compute_pools, created_at, updated_at) VALUES (?, '[]', 'k8s', 10, '[]', ?, ?)",
+        'INSERT INTO tenant_policies (tenant_id, allowed_compute, default_compute, max_concurrent_sessions, compute_pools, created_at, updated_at) VALUES (?, \'[]\', \'{"compute_kind":"k8s","isolation_kind":"direct"}\', 10, \'[]\', ?, ?)',
       )
       .run("policycorp", ts, ts);
 

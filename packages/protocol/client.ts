@@ -1,24 +1,10 @@
 /**
  * ArkClient -- typed JSON-RPC 2.0 client for the Ark protocol.
  *
- * Thin facade over domain-scoped mixin clients under `./clients/*`.
  * Owns the transport, pending-promise bookkeeping, connection status,
- * and notification dispatch. Every RPC method comes from one of the
- * mixins via `applyMixins` -- the public surface is unchanged from the
- * monolithic pre-refactor version.
- *
- * Split layout (kept at <= 25 methods each):
- *   - SessionClient        (session lifecycle + queries + worktree)
- *   - SessionInteractClient (messaging / gates / todos / inputs / spawn / pause + extended session ops)
- *   - ComputeClient        (compute / template / cluster / group / k8s + agent-G)
- *   - AgentClient          (agent / skill / recipe / runtime + agent-C)
- *   - FlowClient           (flow / execution)
- *   - AdminTenantClient    (tenant CRUD + agent-F tenant auth bindings)
- *   - AdminTeamClient      (team / user / tenant policy / api-key + agent-B)
- *   - SecretsClient        (secret / secret-blob, agent-F blob half)
- *   - TicketsClient        (trigger / connector / integration)
- *   - ObservabilityClient  (costs / eval / dashboard + agent-E conductor/sage)
- *   - SystemClient         (config / profile / history / tools / mcp / schedule)
+ * and notification dispatch, plus the full typed RPC surface. Each RPC
+ * method is a one-line shim over `this.rpc(method, params)`; the method
+ * name maps to the wire string defined in `./rpc-schemas.ts`.
  */
 
 import type { Transport, ConnectionStatus } from "./transport.js";
@@ -33,60 +19,125 @@ import {
   type RequestId,
   type JsonRpcMessage,
 } from "./types.js";
-import type { RpcFn } from "./clients/rpc.js";
-import { SessionClient } from "./clients/session.js";
-import { SessionInteractClient } from "./clients/session-interact.js";
-import { ComputeClient } from "./clients/compute.js";
-import { AgentClient } from "./clients/agent.js";
-import { FlowClient } from "./clients/flow.js";
-import { AdminTenantClient } from "./clients/admin-tenant.js";
-import { AdminTeamClient } from "./clients/admin-team.js";
-import { SecretsClient } from "./clients/secrets.js";
-import { TicketsClient } from "./clients/tickets.js";
-import { ObservabilityClient } from "./clients/observability.js";
-import { SystemClient } from "./clients/system.js";
-import { InfraClient } from "./clients/infra.js";
-import { SkillHubClient } from "./clients/skillhub.js";
+import type {
+  Session,
+  Event,
+  Message,
+  SessionOpResult,
+  SessionStartResult,
+  SessionListParams,
+  SessionListResult,
+  SessionReadResult,
+  SessionUpdateResult,
+  SessionEventsResult,
+  SessionMessagesResult,
+  SessionForkResult,
+  SessionCloneResult,
+  SessionOutputResult,
+  Compute,
+  ComputeSnapshot,
+  ComputeCreateResult,
+  ComputeListResult,
+  ComputeReadResult,
+  ComputePingResult,
+  ComputeCleanZombiesResult,
+  MetricsSnapshotResult,
+  GroupListResult,
+  GroupCreateResult,
+  AgentDefinition,
+  AgentListResult,
+  AgentReadResult,
+  SkillListResult,
+  SkillReadResult,
+  RuntimeListResult,
+  RuntimeReadResult,
+  SkillDefinition,
+  RuntimeDefinition,
+  FlowDefinition,
+  FlowListResult,
+  FlowReadResult,
+  FlowValidateParams,
+  FlowValidateResult,
+  CostsReadResult,
+  Profile,
+  ToolEntry,
+  Schedule,
+  ScheduleListResult,
+  ScheduleCreateResult,
+  ScheduleDeleteResult,
+  ProfileListResult,
+  ProfileCreateResult,
+  ToolsListResult,
+  ConfigReadResult,
+  SkillhubDeleteResult,
+  SkillhubGetResult,
+  SkillhubGetWithAncestorParams,
+  SkillhubGetWithAncestorResult,
+  SkillhubListResult,
+  SkillhubPutParams,
+  SkillhubPutResult,
+  SkillhubSkill,
+  SkillhubSyncStatusLocalVersion,
+  SkillhubSyncStatusResult,
+} from "../types/index.js";
+import type {
+  WorkerRegisterParams,
+  WorkerRegisterResult,
+  WorkerHeartbeatParams,
+  WorkerHeartbeatResult,
+  WorkerDeregisterParams,
+  WorkerDeregisterResult,
+  WorkerListResult,
+  ChannelDeliverParams,
+  ChannelRelayParams,
+  HookForwardParams,
+  SessionStdioResult,
+  SessionTranscriptResult,
+  LogSubscribeResult,
+  TerminalSubscribeResult,
+} from "./rpc-schemas.js";
+import type { ScopingOverrideRow } from "./clients/admin-team.js";
 
-// Re-exports so callers that previously imported these types directly from
-// `protocol/client.js` keep compiling unchanged.
-export type { ReplayStep, SessionSnapshotRef } from "./clients/session.js";
+export type { ScopingOverrideRow } from "./clients/admin-team.js";
 
-type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
-
-/**
- * Copy own enumerable methods from each source prototype onto the target
- * prototype. Uses `defineProperty` so inherited accessors stay intact.
- */
-function applyMixins(target: any, sources: any[]): void {
-  for (const src of sources) {
-    for (const name of Object.getOwnPropertyNames(src.prototype)) {
-      if (name === "constructor") continue;
-      const desc = Object.getOwnPropertyDescriptor(src.prototype, name);
-      if (!desc) continue;
-      Object.defineProperty(target.prototype, name, desc);
-    }
-  }
+/** Replay step returned by session/replay -- mirrors core/session/replay.ts */
+export interface ReplayStep {
+  index: number;
+  timestamp: string;
+  elapsed: string;
+  type: string;
+  stage: string | null;
+  actor: string | null;
+  summary: string;
+  detail: string | null;
+  data: Record<string, unknown> | null;
 }
 
-// Interface merge: declare that ArkClient carries every mixin's public surface.
-// TypeScript treats this as a structural contract; the runtime methods are
-// wired by `applyMixins` below.
-export interface ArkClient
-  extends
-    SessionClient,
-    SessionInteractClient,
-    ComputeClient,
-    AgentClient,
-    FlowClient,
-    AdminTenantClient,
-    AdminTeamClient,
-    SecretsClient,
-    TicketsClient,
-    ObservabilityClient,
-    SystemClient,
-    InfraClient,
-    SkillHubClient {}
+/**
+ * Shape of a `SnapshotRef` as returned to RPC clients. Keeps the structural
+ * contract independent of the `compute/` package so the protocol layer
+ * doesn't leak compute internals.
+ */
+export interface SessionSnapshotRef {
+  id: string;
+  computeKind: string;
+  sessionId: string;
+  createdAt: string;
+  sizeBytes: number;
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * Long-running infra calls (EC2 launch + cloud-init, k8s pod schedule,
+ * SG/key cleanup) routinely take 60-180s end-to-end. The default 30s
+ * RPC timeout was firing mid-provision and surfacing as spurious "RPC
+ * timeout" errors even though the server completed successfully. 5 min
+ * covers the slowest provider path with margin; the user can still
+ * Ctrl-C if it's truly stuck.
+ */
+const INFRA_TIMEOUT_MS = 5 * 60 * 1000;
+
+type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
 export class ArkClient {
   private transport: Transport;
@@ -96,16 +147,10 @@ export class ArkClient {
   private _connectionStatus: ConnectionStatus = "connected";
   private _statusHandlers = new Set<(status: ConnectionStatus) => void>();
   private _lastSubscribe?: string[];
-  // The mixins read `this.rpc` to issue RPC calls -- `applyMixins` copies
-  // their method bodies onto this class, so `this` points at ArkClient at
-  // runtime. The rpc field must be non-private because the interface merge
-  // below surfaces it structurally on ArkClient.
-  readonly rpc!: RpcFn;
 
   constructor(transport: Transport) {
     this.transport = transport;
     this.transport.onMessage((msg) => this.handleMessage(msg));
-    this.rpc = this.rpcCall.bind(this) as RpcFn;
   }
 
   /** Current connection status. */
@@ -169,7 +214,7 @@ export class ArkClient {
     }
   }
 
-  private rpcCall<T = unknown>(method: string, params?: Record<string, unknown>, timeoutMs = 30000): Promise<T> {
+  private rpc<T = unknown>(method: string, params?: Record<string, unknown>, timeoutMs = 30000): Promise<T> {
     const id = ++this.idCounter;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -194,7 +239,7 @@ export class ArkClient {
   async initialize(opts?: { subscribe?: string[] }): Promise<{ server: { name: string; version: string } }> {
     const subscribe = opts?.subscribe ?? ["**"];
     this._lastSubscribe = subscribe;
-    const result = await this.rpcCall<{ server: { name: string; version: string } }>("initialize", {
+    const result = await this.rpc<{ server: { name: string; version: string } }>("initialize", {
       client: { name: "ark-client", version: ARK_VERSION },
       subscribe,
     });
@@ -228,25 +273,1544 @@ export class ArkClient {
     this.listeners.clear();
     this.transport.close();
   }
-}
 
-// Wire every mixin's methods onto ArkClient.prototype. Each mixin reads
-// `this.rpc` -- that's the bound `rpcCall` set in the constructor above,
-// so the transport + pending-promise bookkeeping flows through `this`.
-// InfraClient additionally reads `this.on` / `this.off` which are defined
-// as public methods on ArkClient, so they resolve at runtime correctly.
-applyMixins(ArkClient, [
-  SessionClient,
-  SessionInteractClient,
-  ComputeClient,
-  AgentClient,
-  FlowClient,
-  AdminTenantClient,
-  AdminTeamClient,
-  SecretsClient,
-  TicketsClient,
-  ObservabilityClient,
-  SystemClient,
-  InfraClient,
-  SkillHubClient,
-]);
+  // ── Session: lifecycle ──────────────────────────────────────────────────────
+
+  async sessionStart(opts: Record<string, unknown>): Promise<Session> {
+    const { session } = await this.rpc<SessionStartResult>("session/start", opts);
+    return session;
+  }
+
+  async sessionStop(sessionId: string): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("session/stop", { sessionId });
+  }
+
+  async sessionAdvance(sessionId: string, force?: boolean): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("session/advance", { sessionId, force });
+  }
+
+  async sessionComplete(sessionId: string): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("session/complete", { sessionId });
+  }
+
+  async sessionDelete(sessionId: string): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("session/delete", { sessionId });
+  }
+
+  async sessionUndelete(sessionId: string): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("session/undelete", { sessionId });
+  }
+
+  async sessionFork(sessionId: string, name?: string, groupName?: string): Promise<Session> {
+    const { session } = await this.rpc<SessionForkResult>("session/fork", { sessionId, name, group_name: groupName });
+    return session;
+  }
+
+  async sessionClone(sessionId: string, name?: string): Promise<Session> {
+    const { session } = await this.rpc<SessionCloneResult>("session/clone", { sessionId, name });
+    return session;
+  }
+
+  async sessionUpdate(sessionId: string, fields: Record<string, unknown>): Promise<Session> {
+    const { session } = await this.rpc<SessionUpdateResult>("session/update", { sessionId, fields });
+    return session;
+  }
+
+  async sessionList(filters?: SessionListParams & Record<string, unknown>): Promise<Session[]> {
+    const { sessions } = await this.rpc<SessionListResult>("session/list", filters as Record<string, unknown>);
+    return sessions;
+  }
+
+  async sessionRead(sessionId: string, include?: string[]): Promise<SessionReadResult> {
+    return this.rpc<SessionReadResult>("session/read", { sessionId, include });
+  }
+
+  async sessionAttachCommand(
+    sessionId: string,
+  ): Promise<{ command: string; displayHint: string; attachable: boolean; reason?: string }> {
+    return this.rpc("session/attach-command", { sessionId });
+  }
+
+  // ── Session: queries ────────────────────────────────────────────────────────
+
+  async sessionEvents(sessionId: string, limit?: number): Promise<Event[]> {
+    const { events } = await this.rpc<SessionEventsResult>("session/events", { sessionId, limit });
+    return events;
+  }
+
+  async sessionMessages(sessionId: string, limit?: number): Promise<Message[]> {
+    const { messages } = await this.rpc<SessionMessagesResult>("session/messages", { sessionId, limit });
+    return messages;
+  }
+
+  // ── Worktree ────────────────────────────────────────────────────────────────
+
+  async worktreeFinish(sessionId: string, opts?: { noMerge?: boolean }): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("worktree/finish", { sessionId, ...opts });
+  }
+
+  async worktreeCreatePR(
+    sessionId: string,
+    opts?: { title?: string; body?: string; base?: string; draft?: boolean },
+  ): Promise<SessionOpResult & { pr_url?: string }> {
+    return this.rpc("worktree/create-pr", { sessionId, ...opts });
+  }
+
+  async worktreeDiff(
+    sessionId: string,
+    opts?: { base?: string },
+  ): Promise<{
+    ok: boolean;
+    stat: string;
+    diff: string;
+    branch: string;
+    baseBranch: string;
+    filesChanged: number;
+    insertions: number;
+    deletions: number;
+    modifiedSinceReview: string[];
+    message?: string;
+  }> {
+    return this.rpc("worktree/diff", { sessionId, ...opts });
+  }
+
+  // ── Messaging + gates ───────────────────────────────────────────────────────
+
+  async messageSend(sessionId: string, content: string): Promise<void> {
+    await this.rpc("message/send", { sessionId, content });
+  }
+
+  async messageMarkRead(sessionId: string): Promise<void> {
+    await this.rpc("message/markRead", { sessionId });
+  }
+
+  async gateApprove(sessionId: string): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("gate/approve", { sessionId });
+  }
+
+  /** Reject a review gate with a reason; triggers a rework cycle. */
+  async gateReject(sessionId: string, reason: string): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("gate/reject", { sessionId, reason });
+  }
+
+  /** Alias used by CLI + web UI -- matches the `sessionReject` naming scheme. */
+  async sessionReject(sessionId: string, reason: string): Promise<SessionOpResult> {
+    return this.gateReject(sessionId, reason);
+  }
+
+  // ── Input blobs ─────────────────────────────────────────────────────────────
+
+  /**
+   * Upload a session input file. Server persists through the configured
+   * BlobStore (local disk or S3) and returns an opaque locator.
+   */
+  async inputUpload(opts: {
+    name: string;
+    role: string;
+    content: string;
+    contentEncoding?: "base64" | "utf-8";
+  }): Promise<{ locator: string }> {
+    return this.rpc<{ locator: string }>("input/upload", opts as unknown as Record<string, unknown>);
+  }
+
+  /** Read back a previously-uploaded input by locator. Tenant-enforced. */
+  async inputRead(locator: string): Promise<{
+    filename: string;
+    contentType: string;
+    content: string;
+    contentEncoding: "base64";
+    size: number;
+  }> {
+    return this.rpc("input/read", { locator });
+  }
+
+  // ── Session: extended ───────────────────────────────────────────────────────
+
+  async sessionOutput(sessionId: string, lines?: number): Promise<string> {
+    const { output } = await this.rpc<SessionOutputResult>("session/output", { sessionId, lines });
+    return output;
+  }
+
+  async sessionHandoff(sessionId: string, agent: string, instructions?: string): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("session/handoff", { sessionId, agent, instructions });
+  }
+
+  async sessionJoin(sessionId: string, force?: boolean): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("session/join", { sessionId, force });
+  }
+
+  async sessionSpawn(
+    sessionId: string,
+    opts: { task: string; agent?: string; model?: string; group_name?: string },
+  ): Promise<SessionOpResult & { sessionId?: string }> {
+    return this.rpc<SessionOpResult & { sessionId?: string }>("session/spawn", { sessionId, ...opts });
+  }
+
+  async sessionFanOut(
+    sessionId: string,
+    tasks: Array<{ summary: string; agent?: string; flow?: string }>,
+  ): Promise<{ ok: boolean; childIds?: string[]; message?: string }> {
+    return this.rpc<{ ok: boolean; childIds?: string[]; message?: string }>("session/fan-out", { sessionId, tasks });
+  }
+
+  async sessionResume(sessionId: string, snapshotId?: string): Promise<SessionOpResult & { snapshotId?: string }> {
+    return this.rpc<SessionOpResult & { snapshotId?: string }>("session/resume", { sessionId, snapshotId });
+  }
+
+  async sessionPause(
+    sessionId: string,
+    reason?: string,
+  ): Promise<SessionOpResult & { snapshot?: SessionSnapshotRef | null; notSupported?: boolean }> {
+    return this.rpc<SessionOpResult & { snapshot?: SessionSnapshotRef | null; notSupported?: boolean }>(
+      "session/pause",
+      { sessionId, reason },
+    );
+  }
+
+  /**
+   * Interrupt a running agent with a correction message. `content` is injected
+   * as the next user turn after the current turn aborts. Matches the server
+   * contract at `packages/protocol/rpc-schemas.ts:sessionInterruptRequest`.
+   */
+  async sessionInterrupt(sessionId: string, content: string): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("session/interrupt", { sessionId, content });
+  }
+
+  async sessionArchive(sessionId: string): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("session/archive", { sessionId });
+  }
+
+  async sessionRestore(sessionId: string): Promise<SessionOpResult> {
+    return this.rpc<SessionOpResult>("session/restore", { sessionId });
+  }
+
+  async sessionExport(sessionId: string, filePath?: string): Promise<{ ok: boolean; filePath?: string; data?: any }> {
+    return this.rpc<{ ok: boolean; filePath?: string; data?: any }>("session/export", { sessionId, filePath });
+  }
+
+  async sessionReplay(sessionId: string): Promise<ReplayStep[]> {
+    const { steps } = await this.rpc<{ steps: ReplayStep[] }>("session/replay", { sessionId });
+    return steps;
+  }
+
+  // ── Todos & verification ────────────────────────────────────────────────────
+
+  async todoList(sessionId: string): Promise<{ todos: any[] }> {
+    return this.rpc("todo/list", { sessionId });
+  }
+
+  async todoAdd(sessionId: string, content: string): Promise<{ todo: any }> {
+    return this.rpc("todo/add", { sessionId, content });
+  }
+
+  async todoToggle(id: number): Promise<{ todo: any }> {
+    return this.rpc("todo/toggle", { id });
+  }
+
+  async todoDelete(id: number): Promise<{ ok: boolean }> {
+    return this.rpc("todo/delete", { id });
+  }
+
+  async verifyRun(sessionId: string): Promise<any> {
+    return this.rpc("verify/run", { sessionId });
+  }
+
+  // ── Compute / template / cluster / group / k8s ──────────────────────────────
+
+  async computeList(opts?: { include?: "all" | "concrete" | "template" }): Promise<Compute[]> {
+    const { targets } = await this.rpc<ComputeListResult>("compute/list", opts ?? {});
+    return targets;
+  }
+
+  /**
+   * Discover k8s contexts (and optionally namespaces) from the server's
+   * kubeconfig. Powers interactive pickers in the CLI and web UI.
+   */
+  async k8sDiscover(opts?: { kubeconfig?: string; includeNamespaces?: boolean }): Promise<{
+    contexts: Array<{ name: string; cluster?: string; user?: string }>;
+    current: string;
+    namespacesByContext?: Record<string, string[]>;
+  }> {
+    return this.rpc("k8s/discover", opts ?? {});
+  }
+
+  async computeCreate(opts: Record<string, unknown>): Promise<Compute> {
+    const { compute } = await this.rpc<ComputeCreateResult>("compute/create", opts);
+    return compute;
+  }
+
+  async computeUpdate(name: string, fields: Record<string, unknown>): Promise<void> {
+    await this.rpc("compute/update", { name, fields });
+  }
+
+  async computeRead(name: string): Promise<Compute> {
+    const { compute } = await this.rpc<ComputeReadResult>("compute/read", { name });
+    return compute;
+  }
+
+  async computeProvision(name: string): Promise<void> {
+    await this.rpc("compute/provision", { name }, INFRA_TIMEOUT_MS);
+  }
+
+  async computeStopInstance(name: string): Promise<void> {
+    await this.rpc("compute/stop-instance", { name }, INFRA_TIMEOUT_MS);
+  }
+
+  async computeStartInstance(name: string): Promise<void> {
+    await this.rpc("compute/start-instance", { name }, INFRA_TIMEOUT_MS);
+  }
+
+  async computeDestroy(name: string): Promise<void> {
+    await this.rpc("compute/destroy", { name }, INFRA_TIMEOUT_MS);
+  }
+
+  async computeClean(name: string): Promise<void> {
+    await this.rpc("compute/clean", { name });
+  }
+
+  async computeReboot(name: string): Promise<void> {
+    await this.rpc("compute/reboot", { name }, INFRA_TIMEOUT_MS);
+  }
+
+  async computePing(name: string): Promise<ComputePingResult> {
+    return this.rpc<ComputePingResult>("compute/ping", { name });
+  }
+
+  async computeCleanZombies(): Promise<ComputeCleanZombiesResult> {
+    return this.rpc<ComputeCleanZombiesResult>("compute/clean-zombies");
+  }
+
+  async computeTemplateList(): Promise<{
+    templates: Array<{
+      name: string;
+      description?: string;
+      provider: string;
+      compute?: string;
+      runtime?: string;
+      config: Record<string, unknown>;
+    }>;
+  }> {
+    return this.rpc("compute/template/list");
+  }
+
+  async computeTemplateGet(
+    name: string,
+  ): Promise<{ name: string; description?: string; provider: string; config: Record<string, unknown> } | null> {
+    return this.rpc("compute/template/get", { name });
+  }
+
+  async groupList(): Promise<Array<{ name: string; created_at: string }>> {
+    const { groups } = await this.rpc<GroupListResult>("group/list");
+    return groups;
+  }
+
+  async groupCreate(name: string): Promise<{ name: string; created_at: string }> {
+    const { group } = await this.rpc<GroupCreateResult>("group/create", { name });
+    return group;
+  }
+
+  async groupDelete(name: string): Promise<void> {
+    await this.rpc("group/delete", { name });
+  }
+
+  async metricsSnapshot(computeName?: string): Promise<ComputeSnapshot | null> {
+    const { snapshot } = await this.rpc<MetricsSnapshotResult>("metrics/snapshot", { computeName });
+    return snapshot;
+  }
+
+  /**
+   * List the effective cluster list for the current tenant. Returns each
+   * cluster's name / kind / apiEndpoint / defaultNamespace (auth blocks are
+   * never surfaced over the wire).
+   */
+  async clusterList(): Promise<
+    Array<{
+      name: string;
+      kind: "k8s";
+      apiEndpoint: string;
+      defaultNamespace?: string;
+    }>
+  > {
+    const { clusters } = await this.rpc<{
+      clusters: Array<{
+        name: string;
+        kind: "k8s";
+        apiEndpoint: string;
+        defaultNamespace?: string;
+      }>;
+    }>("cluster/list");
+    return clusters;
+  }
+
+  /** Fetch a tenant's compute-config YAML blob (admin only). */
+  async tenantComputeConfigGet(tenantId: string): Promise<string | null> {
+    const { yaml } = await this.rpc<{ yaml: string | null }>("admin/tenant/config/get-compute", {
+      tenant_id: tenantId,
+    });
+    return yaml;
+  }
+
+  /**
+   * Write a tenant's compute-config YAML blob (admin only). The server
+   * validates the YAML shape before persisting.
+   */
+  async tenantComputeConfigSet(tenantId: string, yaml: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/tenant/config/set-compute", {
+      tenant_id: tenantId,
+      yaml,
+    });
+    return ok;
+  }
+
+  /** Clear a tenant's compute-config YAML blob (admin only). */
+  async tenantComputeConfigClear(tenantId: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/tenant/config/clear-compute", {
+      tenant_id: tenantId,
+    });
+    return ok;
+  }
+
+  // ── Agent / skill / runtime ─────────────────────────────────────────────────
+
+  async agentList(): Promise<AgentDefinition[]> {
+    const { agents } = await this.rpc<AgentListResult>("agent/list");
+    return agents;
+  }
+
+  async agentRead(name: string): Promise<AgentDefinition> {
+    const { agent } = await this.rpc<AgentReadResult>("agent/read", { name });
+    return agent;
+  }
+
+  async agentSave(
+    agent: Partial<AgentDefinition> & { name: string },
+    opts?: { scope?: "global" | "project"; update?: boolean },
+  ): Promise<{ ok: boolean; name: string; scope: string }> {
+    const method = opts?.update ? "agent/update" : "agent/create";
+    return this.rpc(method, { ...agent, scope: opts?.scope });
+  }
+
+  async agentDelete(name: string, scope?: "global" | "project"): Promise<{ ok: boolean }> {
+    return this.rpc("agent/delete", { name, scope });
+  }
+
+  async skillList(): Promise<SkillDefinition[]> {
+    const { skills } = await this.rpc<SkillListResult>("skill/list");
+    return skills;
+  }
+
+  async skillRead(name: string): Promise<SkillDefinition> {
+    const { skill } = await this.rpc<SkillReadResult>("skill/read", { name });
+    return skill;
+  }
+
+  async skillSave(
+    skill: Partial<SkillDefinition> & { name: string },
+    opts?: { scope?: "global" | "project" },
+  ): Promise<{ ok: boolean; name: string; scope: string }> {
+    return this.rpc("skill/save", { ...skill, scope: opts?.scope });
+  }
+
+  async skillDelete(name: string, scope?: "global" | "project"): Promise<{ ok: boolean }> {
+    return this.rpc("skill/delete", { name, scope });
+  }
+
+  async runtimeList(): Promise<RuntimeDefinition[]> {
+    const { runtimes } = await this.rpc<RuntimeListResult>("runtime/list");
+    return runtimes;
+  }
+
+  async runtimeRead(name: string): Promise<RuntimeDefinition> {
+    const { runtime } = await this.rpc<RuntimeReadResult>("runtime/read", { name });
+    return runtime;
+  }
+
+  /**
+   * Create a new agent from a full YAML string. The daemon parses the YAML,
+   * validates it, and writes it to the resource store. Scope defaults to
+   * `global` unless `project` is requested (and a project root resolves).
+   */
+  async agentCreate(opts: {
+    name: string;
+    yaml: string;
+    scope?: "global" | "project";
+  }): Promise<{ ok: boolean; name: string; scope: string }> {
+    return this.rpc("agent/create", opts as unknown as Record<string, unknown>);
+  }
+
+  /**
+   * Overwrite an existing agent's YAML. Returns a 404-equivalent error if
+   * the agent doesn't exist; refuses to edit builtin agents (copy first).
+   */
+  async agentEdit(opts: {
+    name: string;
+    yaml: string;
+    scope?: "global" | "project";
+  }): Promise<{ ok: boolean; name: string; scope: string }> {
+    return this.rpc("agent/edit", opts as unknown as Record<string, unknown>);
+  }
+
+  /**
+   * Duplicate an agent under a new name. Source may be any scope (including
+   * builtin); destination is written at the requested scope.
+   */
+  async agentCopy(opts: {
+    from: string;
+    to: string;
+    scope?: "global" | "project";
+  }): Promise<{ ok: boolean; name: string; scope: string }> {
+    return this.rpc("agent/copy", opts as unknown as Record<string, unknown>);
+  }
+
+  /**
+   * Create a new skill from a full YAML string. Same shape as `agentCreate`.
+   */
+  async skillCreate(opts: {
+    name: string;
+    yaml: string;
+    scope?: "global" | "project";
+  }): Promise<{ ok: boolean; name: string; scope: string }> {
+    return this.rpc("skill/create", opts as unknown as Record<string, unknown>);
+  }
+
+  // ── Flow / execution ────────────────────────────────────────────────────────
+
+  async flowList(): Promise<FlowDefinition[]> {
+    const { flows } = await this.rpc<FlowListResult>("flow/list");
+    return flows;
+  }
+
+  async flowRead(name: string): Promise<FlowDefinition> {
+    const { flow } = await this.rpc<FlowReadResult>("flow/read", { name });
+    return flow;
+  }
+
+  async flowCreate(opts: {
+    name: string;
+    description?: string;
+    stages: FlowDefinition["stages"];
+    scope?: "global" | "project";
+  }): Promise<{ ok: boolean; name: string }> {
+    return this.rpc("flow/create", opts as unknown as Record<string, unknown>);
+  }
+
+  async flowDelete(name: string, scope?: "global" | "project"): Promise<{ ok: boolean }> {
+    return this.rpc("flow/delete", { name, scope });
+  }
+
+  /**
+   * Dry-run validation for an inline or named flow payload (#403). Never
+   * creates a session; returns `{ ok, problems, flow? }` so the caller can
+   * render the problem list without a follow-up session/start round-trip.
+   */
+  async flowValidate(opts: FlowValidateParams): Promise<FlowValidateResult> {
+    return this.rpc<FlowValidateResult>("flow/validate", opts as unknown as Record<string, unknown>);
+  }
+
+  // ── Admin: tenants ──────────────────────────────────────────────────────────
+
+  async adminTenantList(): Promise<
+    Array<{ id: string; slug: string; name: string; status: string; created_at: string; updated_at: string }>
+  > {
+    const { tenants } = await this.rpc<{ tenants: any[] }>("admin/tenant/list");
+    return tenants;
+  }
+
+  async adminTenantGet(id: string): Promise<{
+    id: string;
+    slug: string;
+    name: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+  } | null> {
+    try {
+      const { tenant } = await this.rpc<{ tenant: any }>("admin/tenant/get", { id });
+      return tenant;
+    } catch (e) {
+      if (e instanceof RpcError && e.code === -32002) return null;
+      throw e;
+    }
+  }
+
+  async adminTenantCreate(opts: { slug: string; name: string; status?: string }): Promise<any> {
+    const { tenant } = await this.rpc<{ tenant: any }>("admin/tenant/create", opts as Record<string, unknown>);
+    return tenant;
+  }
+
+  async adminTenantUpdate(opts: { id: string; slug?: string; name?: string; status?: string }): Promise<any> {
+    const { tenant } = await this.rpc<{ tenant: any }>("admin/tenant/update", opts as Record<string, unknown>);
+    return tenant;
+  }
+
+  async adminTenantSetStatus(id: string, status: string): Promise<any> {
+    const { tenant } = await this.rpc<{ tenant: any }>("admin/tenant/set-status", { id, status });
+    return tenant;
+  }
+
+  async adminTenantDelete(id: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/tenant/delete", { id });
+    return ok;
+  }
+
+  /** Get the current Claude auth binding for a tenant (or null if none). */
+  async tenantAuthGet(tenantId: string): Promise<{
+    tenant_id: string;
+    kind: "api_key" | "subscription_blob";
+    secret_ref: string;
+    created_at: string;
+    updated_at: string;
+  } | null> {
+    const { auth } = await this.rpc<{ auth: any | null }>("admin/tenant/auth/get", { tenant_id: tenantId });
+    return auth;
+  }
+
+  /**
+   * Set the Claude auth binding. `kind: "api_key"` points at a string
+   * secret (the value becomes `ANTHROPIC_API_KEY` at dispatch).
+   * `kind: "subscription_blob"` points at a blob (materialized into a
+   * per-session k8s Secret at `/root/.claude`).
+   */
+  async tenantAuthSet(tenantId: string, kind: "api_key" | "subscription_blob", secretRef: string): Promise<any> {
+    const { auth } = await this.rpc<{ auth: any }>("admin/tenant/auth/set", {
+      tenant_id: tenantId,
+      kind,
+      secret_ref: secretRef,
+    });
+    return auth;
+  }
+
+  /** Clear the Claude auth binding. Idempotent; returns true when a row was removed. */
+  async tenantAuthClear(tenantId: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/tenant/auth/clear", { tenant_id: tenantId });
+    return ok;
+  }
+
+  // ── Admin: teams ────────────────────────────────────────────────────────────
+
+  async adminTeamList(tenant_id: string): Promise<any[]> {
+    const { teams } = await this.rpc<{ teams: any[] }>("admin/team/list", { tenant_id });
+    return teams;
+  }
+
+  async adminTeamGet(id: string): Promise<any | null> {
+    try {
+      const { team } = await this.rpc<{ team: any }>("admin/team/get", { id });
+      return team;
+    } catch (e) {
+      if (e instanceof RpcError && e.code === -32002) return null;
+      throw e;
+    }
+  }
+
+  async adminTeamCreate(opts: {
+    tenant_id: string;
+    slug: string;
+    name: string;
+    description?: string | null;
+  }): Promise<any> {
+    const { team } = await this.rpc<{ team: any }>("admin/team/create", opts as Record<string, unknown>);
+    return team;
+  }
+
+  async adminTeamUpdate(opts: { id: string; slug?: string; name?: string; description?: string | null }): Promise<any> {
+    const { team } = await this.rpc<{ team: any }>("admin/team/update", opts as Record<string, unknown>);
+    return team;
+  }
+
+  async adminTeamDelete(id: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/team/delete", { id });
+    return ok;
+  }
+
+  async adminTeamMembersList(team_id: string): Promise<
+    Array<{
+      id: string;
+      user_id: string;
+      team_id: string;
+      role: "owner" | "admin" | "member" | "viewer";
+      created_at: string;
+      email: string;
+      name?: string | null;
+    }>
+  > {
+    const { members } = await this.rpc<{ members: any[] }>("admin/team/members/list", { team_id });
+    return members;
+  }
+
+  async adminTeamMembersAdd(opts: {
+    team_id: string;
+    user_id?: string;
+    email?: string;
+    role?: "owner" | "admin" | "member" | "viewer";
+  }): Promise<any> {
+    const { membership } = await this.rpc<{ membership: any }>(
+      "admin/team/members/add",
+      opts as Record<string, unknown>,
+    );
+    return membership;
+  }
+
+  async adminTeamMembersRemove(opts: { team_id: string; user_id?: string; email?: string }): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/team/members/remove", opts as Record<string, unknown>);
+    return ok;
+  }
+
+  async adminTeamMembersSetRole(opts: {
+    team_id: string;
+    user_id?: string;
+    email?: string;
+    role: "owner" | "admin" | "member" | "viewer";
+  }): Promise<any> {
+    const { membership } = await this.rpc<{ membership: any }>(
+      "admin/team/members/set-role",
+      opts as Record<string, unknown>,
+    );
+    return membership;
+  }
+
+  // ── Admin: users ────────────────────────────────────────────────────────────
+
+  async adminUserList(): Promise<
+    Array<{ id: string; email: string; name: string | null; created_at: string; updated_at: string }>
+  > {
+    const { users } = await this.rpc<{ users: any[] }>("admin/user/list");
+    return users;
+  }
+
+  async adminUserGet(id: string): Promise<any | null> {
+    try {
+      const { user } = await this.rpc<{ user: any }>("admin/user/get", { id });
+      return user;
+    } catch (e) {
+      if (e instanceof RpcError && e.code === -32002) return null;
+      throw e;
+    }
+  }
+
+  async adminUserCreate(opts: { email: string; name?: string | null }): Promise<any> {
+    const { user } = await this.rpc<{ user: any }>("admin/user/create", opts as Record<string, unknown>);
+    return user;
+  }
+
+  async adminUserUpsert(opts: { email: string; name?: string | null }): Promise<any> {
+    const { user } = await this.rpc<{ user: any }>("admin/user/upsert", opts as Record<string, unknown>);
+    return user;
+  }
+
+  async adminUserDelete(id: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/user/delete", { id });
+    return ok;
+  }
+
+  // ── Admin: tenant policy + api keys ─────────────────────────────────────────
+
+  async tenantPolicyList(): Promise<
+    Array<{
+      tenant_id: string;
+      allowed_compute: Array<{ compute_kind: string; isolation_kind: string }>;
+      default_compute: { compute_kind: string; isolation_kind: string };
+      max_concurrent_sessions: number;
+      max_cost_per_day_usd: number | null;
+      compute_pools: Array<{
+        pool_name: string;
+        compute: { compute_kind: string; isolation_kind: string };
+        min: number;
+        max: number;
+        config: Record<string, unknown>;
+      }>;
+      router_enabled: boolean | null;
+      router_required: boolean;
+      router_policy: string | null;
+      auto_index: boolean | null;
+      auto_index_required: boolean;
+      tensorzero_enabled: boolean | null;
+      allowed_k8s_contexts: string[];
+    }>
+  > {
+    const { policies } = await this.rpc<{ policies: any[] }>("admin/tenant/policy/list");
+    return policies;
+  }
+
+  async tenantPolicyGet(tenantId: string): Promise<any | null> {
+    const { policy } = await this.rpc<{ policy: any | null }>("admin/tenant/policy/get", { tenant_id: tenantId });
+    return policy;
+  }
+
+  async tenantPolicySet(opts: {
+    tenant_id: string;
+    allowed_compute?: Array<{ compute_kind: string; isolation_kind: string }>;
+    default_compute?: { compute_kind: string; isolation_kind: string };
+    max_concurrent_sessions?: number;
+    max_cost_per_day_usd?: number | null;
+    compute_pools?: Array<{
+      pool_name: string;
+      compute: { compute_kind: string; isolation_kind: string };
+      min: number;
+      max: number;
+      config: Record<string, unknown>;
+    }>;
+    router_enabled?: boolean | null;
+    router_required?: boolean;
+    router_policy?: string | null;
+    auto_index?: boolean | null;
+    auto_index_required?: boolean;
+    tensorzero_enabled?: boolean | null;
+    allowed_k8s_contexts?: string[];
+  }): Promise<any> {
+    const { policy } = await this.rpc<{ policy: any }>(
+      "admin/tenant/policy/set",
+      opts as unknown as Record<string, unknown>,
+    );
+    return policy;
+  }
+
+  async tenantPolicyDelete(tenantId: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/tenant/policy/delete", { tenant_id: tenantId });
+    return ok;
+  }
+
+  async apiKeyList(tenantId: string): Promise<
+    Array<{
+      id: string;
+      tenant_id: string;
+      name: string;
+      role: "admin" | "member" | "viewer";
+      created_at: string;
+      last_used_at: string | null;
+      expires_at: string | null;
+    }>
+  > {
+    const { keys } = await this.rpc<{ keys: any[] }>("admin/apikey/list", { tenant_id: tenantId });
+    return keys;
+  }
+
+  async apiKeyCreate(opts: {
+    tenant_id: string;
+    name: string;
+    role?: "admin" | "member" | "viewer";
+    expires_at?: string;
+  }): Promise<{
+    id: string;
+    key: string;
+    tenant_id: string;
+    name: string;
+    role: "admin" | "member" | "viewer";
+    expires_at: string | null;
+  }> {
+    return this.rpc("admin/apikey/create", opts as unknown as Record<string, unknown>);
+  }
+
+  async apiKeyRevoke(id: string, tenantId?: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/apikey/revoke", {
+      id,
+      ...(tenantId ? { tenant_id: tenantId } : {}),
+    });
+    return ok;
+  }
+
+  async apiKeyRotate(id: string, tenantId?: string): Promise<{ ok: boolean; key: string }> {
+    return this.rpc<{ ok: boolean; key: string }>("admin/apikey/rotate", {
+      id,
+      ...(tenantId ? { tenant_id: tenantId } : {}),
+    });
+  }
+
+  // ── Admin: scoping overrides ────────────────────────────────────────────────
+
+  async scopingSet(opts: {
+    scope_kind: "user" | "team" | "tenant";
+    scope_id: string;
+    key: string;
+    value: unknown;
+  }): Promise<ScopingOverrideRow> {
+    const { row } = await this.rpc<{ row: ScopingOverrideRow }>(
+      "admin/scoping/set",
+      opts as unknown as Record<string, unknown>,
+    );
+    return row;
+  }
+
+  async scopingList(
+    opts: {
+      scope_kind?: "user" | "team" | "tenant";
+      scope_id?: string;
+      key?: string;
+      includeDeleted?: boolean;
+    } = {},
+  ): Promise<ScopingOverrideRow[]> {
+    const { rows } = await this.scopingListPage(opts);
+    return rows;
+  }
+
+  /**
+   * Like `scopingList` but exposes the server's `truncated` flag so
+   * callers (CLI, scripts) can warn when the safety cap was hit.
+   */
+  async scopingListPage(
+    opts: {
+      scope_kind?: "user" | "team" | "tenant";
+      scope_id?: string;
+      key?: string;
+      includeDeleted?: boolean;
+    } = {},
+  ): Promise<{ rows: ScopingOverrideRow[]; truncated: boolean }> {
+    const { rows, truncated } = await this.rpc<{ rows: ScopingOverrideRow[]; truncated: boolean }>(
+      "admin/scoping/list",
+      opts as unknown as Record<string, unknown>,
+    );
+    return { rows, truncated };
+  }
+
+  async scopingGet(id: string): Promise<ScopingOverrideRow> {
+    const { row } = await this.rpc<{ row: ScopingOverrideRow }>("admin/scoping/get", { id });
+    return row;
+  }
+
+  async scopingDelete(
+    opts: { id: string } | { scope_kind: "user" | "team" | "tenant"; scope_id: string; key: string },
+  ): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("admin/scoping/delete", opts as Record<string, unknown>);
+    return ok;
+  }
+
+  // ── Secrets ─────────────────────────────────────────────────────────────────
+
+  async secretList(): Promise<
+    Array<{
+      tenant_id: string;
+      name: string;
+      description?: string | null;
+      created_at?: string | null;
+      updated_at?: string | null;
+    }>
+  > {
+    const { secrets } = await this.rpc<{ secrets: any[] }>("secret/list");
+    return secrets;
+  }
+
+  async secretGet(name: string): Promise<string | null> {
+    const { value } = await this.rpc<{ value: string | null }>("secret/get", { name });
+    return value;
+  }
+
+  async secretSet(name: string, value: string, description?: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("secret/set", { name, value, description });
+    return ok;
+  }
+
+  async secretDelete(name: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("secret/delete", { name });
+    return ok;
+  }
+
+  /** List blob-secret names for the current tenant. Never returns contents. */
+  async secretBlobList(): Promise<string[]> {
+    const { blobs } = await this.rpc<{ blobs: string[] }>("secret/blob/list");
+    return blobs;
+  }
+
+  /**
+   * Fetch every file in a blob. Files are returned base64-encoded so the
+   * wire format is binary-safe; callers decode locally when writing to disk.
+   */
+  async secretBlobGet(name: string): Promise<{ files: Record<string, string>; encoding: "base64" } | null> {
+    const { blob } = await this.rpc<{
+      blob: { files: Record<string, string>; encoding: "base64" } | null;
+    }>("secret/blob/get", { name });
+    return blob;
+  }
+
+  /**
+   * Create-or-replace a blob. Files default to base64-encoded values; pass
+   * `encoding: "utf-8"` to let the server TextEncoder them server-side
+   * (convenient for tests dealing with plaintext payloads).
+   */
+  async secretBlobSet(
+    name: string,
+    files: Record<string, string>,
+    opts?: { encoding?: "base64" | "utf-8" },
+  ): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("secret/blob/set", {
+      name,
+      files,
+      encoding: opts?.encoding ?? "base64",
+    });
+    return ok;
+  }
+
+  /** Delete a blob. Returns true when a blob was actually removed. */
+  async secretBlobDelete(name: string): Promise<boolean> {
+    const { ok } = await this.rpc<{ ok: boolean }>("secret/blob/delete", { name });
+    return ok;
+  }
+
+  // ── Triggers (unified webhook / schedule / poll / event) ────────────────────
+
+  async triggerList(tenant?: string): Promise<{ triggers: any[] }> {
+    return this.rpc("trigger/list", { tenant });
+  }
+
+  async triggerGet(name: string, tenant?: string): Promise<{ trigger: any }> {
+    return this.rpc("trigger/get", { name, tenant });
+  }
+
+  async triggerEnable(name: string, tenant?: string): Promise<void> {
+    await this.rpc("trigger/enable", { name, tenant });
+  }
+
+  async triggerDisable(name: string, tenant?: string): Promise<void> {
+    await this.rpc("trigger/disable", { name, tenant });
+  }
+
+  async triggerReload(): Promise<void> {
+    await this.rpc("trigger/reload");
+  }
+
+  async triggerSources(): Promise<{
+    sources: Array<{ name: string; label: string; status: string; secretEnvVar: string }>;
+  }> {
+    return this.rpc("trigger/sources");
+  }
+
+  async triggerTest(opts: {
+    name: string;
+    payload: unknown;
+    headers?: Record<string, string>;
+    tenant?: string;
+    dryRun?: boolean;
+  }): Promise<{ ok: boolean; fired: boolean; sessionId?: string; dryRun?: boolean; message?: string; event?: any }> {
+    return this.rpc("trigger/test", opts);
+  }
+
+  // ── Connectors (outbound half of the integration framework) ─────────────────
+
+  async connectorsList(): Promise<{
+    connectors: Array<{
+      name: string;
+      label: string;
+      kind: "mcp" | "rest" | "context";
+      status: "full" | "scaffolded" | "stub";
+      auth: { kind: string; envVar?: string; secretsKey?: string } | null;
+      mcp: { configName?: string; configPath?: string | null; hasInline: boolean } | null;
+      rest: { baseUrl?: string; endpoints?: string[] } | null;
+      hasContext: boolean;
+    }>;
+  }> {
+    return this.rpc("connectors/list");
+  }
+
+  async connectorsGet(name: string): Promise<{ connector: any }> {
+    return this.rpc("connectors/get", { name });
+  }
+
+  async connectorsTest(name: string): Promise<{ name: string; reachable: boolean; details: string }> {
+    return this.rpc("connectors/test", { name });
+  }
+
+  // ── Integrations (unified trigger + connector catalog) ──────────────────────
+
+  async integrationsList(): Promise<{
+    integrations: Array<{
+      name: string;
+      label: string;
+      status: "full" | "scaffolded" | "stub";
+      has_trigger: boolean;
+      has_connector: boolean;
+      trigger_kind: string | null;
+      connector_kind: string | null;
+      auth: { envVar?: string; triggerSecretEnvVar?: string } | null;
+    }>;
+  }> {
+    return this.rpc("integrations/list");
+  }
+
+  // ── Costs ───────────────────────────────────────────────────────────────────
+
+  async costsRead(): Promise<CostsReadResult> {
+    return this.rpc<CostsReadResult>("costs/read");
+  }
+
+  async costsSummary(opts?: { groupBy?: string; tenantId?: string; since?: string; until?: string }): Promise<{
+    summary: Array<{ key: string; cost: number; input_tokens: number; output_tokens: number; count: number }>;
+    total: number;
+  }> {
+    return this.rpc("costs/summary", opts as Record<string, unknown>);
+  }
+
+  async costsTrend(opts?: { tenantId?: string; days?: number }): Promise<{
+    trend: Array<{ date: string; cost: number }>;
+  }> {
+    return this.rpc("costs/trend", opts as Record<string, unknown>);
+  }
+
+  async costsSession(sessionId: string): Promise<{
+    cost: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    total_tokens: number;
+    records: Array<{
+      id: number;
+      session_id: string;
+      tenant_id: string;
+      model: string;
+      provider: string;
+      runtime: string | null;
+      agent_role: string | null;
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_tokens: number;
+      cache_write_tokens: number;
+      cost_usd: number;
+      source: string;
+      created_at: string;
+    }>;
+  }> {
+    return this.rpc("costs/session", { sessionId });
+  }
+
+  async costsRecord(opts: {
+    sessionId: string;
+    model: string;
+    provider: string;
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+    tenantId?: string;
+    runtime?: string;
+    agentRole?: string;
+    source?: string;
+  }): Promise<{ ok: boolean }> {
+    return this.rpc("costs/record", opts as Record<string, unknown>);
+  }
+
+  // ── Evals ───────────────────────────────────────────────────────────────────
+
+  async evalStats(agentRole?: string): Promise<{
+    stats: {
+      totalSessions: number;
+      completionRate: number;
+      avgDurationMs: number;
+      avgCost: number;
+      avgTurns: number;
+      testPassRate: number;
+      prRate: number;
+    };
+  }> {
+    return this.rpc("eval/stats", { agentRole });
+  }
+
+  async evalDrift(
+    agentRole?: string,
+    recentDays?: number,
+  ): Promise<{ drift: { completionRateDelta: number; avgCostDelta: number; avgTurnsDelta: number; alert: boolean } }> {
+    return this.rpc("eval/drift", { agentRole, recentDays });
+  }
+
+  async evalList(
+    agentRole?: string,
+    limit?: number,
+  ): Promise<{
+    evals: Array<{
+      agentRole: string;
+      runtime: string;
+      model: string;
+      sessionId: string;
+      metrics: {
+        completed: boolean;
+        testsPassed: boolean | null;
+        prCreated: boolean;
+        turnCount: number;
+        durationMs: number;
+        tokenCost: number;
+        filesChanged: number;
+        retryCount: number;
+      };
+      timestamp: string;
+    }>;
+  }> {
+    return this.rpc("eval/list", { agentRole, limit });
+  }
+
+  // ── Dashboard ───────────────────────────────────────────────────────────────
+
+  async dashboardSummary(): Promise<{
+    counts: Record<string, number>;
+    costs: { total: number; today: number; week: number; month: number; byModel: Record<string, number>; budget: any };
+    recentEvents: Array<{
+      sessionId: string;
+      sessionSummary: string | null;
+      type: string;
+      data: any;
+      created_at: string;
+    }>;
+    topCostSessions: Array<{ sessionId: string; summary: string | null; model: string | null; cost: number }>;
+    system: { conductor: boolean; router: boolean };
+    activeCompute: number;
+  }> {
+    return this.rpc("dashboard/summary");
+  }
+
+  // ── Conductor + sage + costs extended ───────────────────────────────────────
+
+  async conductorStatus(): Promise<{ running: boolean; port: number; pid?: number }> {
+    return this.rpc("conductor/status");
+  }
+
+  async conductorLearnings(): Promise<{
+    learnings: Array<{
+      id: string;
+      title: string;
+      description: string;
+      recurrence: number;
+      promoted: boolean;
+      lastSeen: string;
+    }>;
+  }> {
+    return this.rpc("conductor/learnings");
+  }
+
+  async conductorLearn(opts: { title: string; description?: string }): Promise<{
+    ok: boolean;
+    learning: {
+      id: string;
+      title: string;
+      description: string;
+      recurrence: number;
+      promoted: boolean;
+      lastSeen: string;
+    };
+  }> {
+    return this.rpc("conductor/learn", opts as Record<string, unknown>);
+  }
+
+  async conductorBridge(): Promise<{ ok: boolean; running: boolean; message?: string }> {
+    return this.rpc("conductor/bridge");
+  }
+
+  async conductorNotify(message: string): Promise<{ ok: boolean; message?: string }> {
+    return this.rpc("conductor/notify", { message });
+  }
+
+  async sageContext(opts: { analysisId: string; sageUrl?: string }): Promise<{
+    analysisId: string;
+    baseUrl: string;
+    summary: string | null;
+    streamCount: number;
+    taskCount: number;
+    streams: Array<{ repo: string; branch: string | null; tasks: Array<{ title: string }> }>;
+  }> {
+    return this.rpc("sage/context", opts as Record<string, unknown>);
+  }
+
+  async sageAnalyze(opts: { analysisId: string; sageUrl?: string; compute?: string; repo?: string }): Promise<{
+    ok: boolean;
+    sessionId: string;
+    analysisId: string;
+    streamCount: number;
+    taskCount: number;
+    message?: string;
+  }> {
+    return this.rpc("sage/analyze", opts as Record<string, unknown>);
+  }
+
+  async costsSync(): Promise<{ ok: boolean; synced: number; skipped: number }> {
+    return this.rpc("costs/sync");
+  }
+
+  async costsExport(opts?: { limit?: number }): Promise<{
+    total: number;
+    rows: Array<{
+      sessionId: string;
+      summary: string | null;
+      model: string | null;
+      cost: number;
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_tokens: number;
+      cache_write_tokens: number;
+    }>;
+  }> {
+    return this.rpc("costs/export", (opts ?? {}) as Record<string, unknown>);
+  }
+
+  // ── System: config ──────────────────────────────────────────────────────────
+
+  async configRead(): Promise<Record<string, unknown>> {
+    const { config } = await this.rpc<ConfigReadResult>("config/read");
+    return config;
+  }
+
+  async configWrite(config: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const { config: updated } = await this.rpc<ConfigReadResult>("config/write", config);
+    return updated;
+  }
+
+  async profileList(): Promise<ProfileListResult> {
+    return this.rpc<ProfileListResult>("profile/list");
+  }
+
+  async profileSet(name: string): Promise<void> {
+    await this.rpc("profile/set", { name });
+  }
+
+  async profileCreate(name: string, description?: string): Promise<Profile> {
+    const { profile } = await this.rpc<ProfileCreateResult>("profile/create", { name, description });
+    return profile;
+  }
+
+  async profileDelete(name: string): Promise<void> {
+    await this.rpc("profile/delete", { name });
+  }
+
+  // ── System: tools ───────────────────────────────────────────────────────────
+
+  async toolsList(projectRoot?: string): Promise<ToolEntry[]> {
+    const { tools } = await this.rpc<ToolsListResult>("tools/list", { projectRoot });
+    return tools;
+  }
+
+  async toolsDelete(id: string): Promise<void> {
+    await this.rpc("tools/delete", { id });
+  }
+
+  async toolsDeleteItem(opts: {
+    name: string;
+    kind: string;
+    source?: string;
+    scope?: string;
+    projectRoot?: string;
+  }): Promise<void> {
+    await this.rpc("tools/delete", opts);
+  }
+
+  async toolsRead(opts: { name: string; kind: string; projectRoot?: string }): Promise<any> {
+    return this.rpc("tools/read", opts);
+  }
+
+  // ── System: schedule ────────────────────────────────────────────────────────
+
+  async scheduleList(): Promise<Schedule[]> {
+    const { schedules } = await this.rpc<ScheduleListResult>("schedule/list");
+    return schedules;
+  }
+
+  async scheduleCreate(opts: Record<string, unknown>): Promise<Schedule> {
+    const { schedule } = await this.rpc<ScheduleCreateResult>("schedule/create", opts);
+    return schedule;
+  }
+
+  async scheduleDelete(id: string): Promise<boolean> {
+    const { ok } = await this.rpc<ScheduleDeleteResult>("schedule/delete", { id });
+    return ok;
+  }
+
+  async scheduleEnable(id: string): Promise<void> {
+    await this.rpc("schedule/enable", { id });
+  }
+
+  async scheduleDisable(id: string): Promise<void> {
+    await this.rpc("schedule/disable", { id });
+  }
+
+  // ── Worker registry ─────────────────────────────────────────────────────────
+
+  async workerRegister(params: WorkerRegisterParams): Promise<WorkerRegisterResult> {
+    return this.rpc<WorkerRegisterResult>("worker/register", params as unknown as Record<string, unknown>);
+  }
+
+  async workerHeartbeat(params: WorkerHeartbeatParams): Promise<WorkerHeartbeatResult> {
+    return this.rpc<WorkerHeartbeatResult>("worker/heartbeat", params as unknown as Record<string, unknown>);
+  }
+
+  async workerDeregister(params: WorkerDeregisterParams): Promise<WorkerDeregisterResult> {
+    return this.rpc<WorkerDeregisterResult>("worker/deregister", params as unknown as Record<string, unknown>);
+  }
+
+  async workerList(): Promise<WorkerListResult> {
+    return this.rpc<WorkerListResult>("worker/list");
+  }
+
+  // ── Channel ─────────────────────────────────────────────────────────────────
+
+  async channelDeliver(params: ChannelDeliverParams): Promise<{ ok: true }> {
+    return this.rpc<{ ok: true }>("channel/deliver", params as unknown as Record<string, unknown>);
+  }
+
+  async channelRelay(params: ChannelRelayParams): Promise<{ ok: true }> {
+    return this.rpc<{ ok: true }>("channel/relay", params as unknown as Record<string, unknown>);
+  }
+
+  // ── Hook ────────────────────────────────────────────────────────────────────
+
+  async hookForward(params: HookForwardParams): Promise<{ ok: true; guardrail?: unknown; mapped?: unknown }> {
+    return this.rpc<{ ok: true; guardrail?: unknown; mapped?: unknown }>(
+      "hook/forward",
+      params as unknown as Record<string, unknown>,
+    );
+  }
+
+  // ── Forensic reads ──────────────────────────────────────────────────────────
+
+  async sessionStdio(sessionId: string, tail?: number): Promise<SessionStdioResult> {
+    return this.rpc<SessionStdioResult>("session/stdio", { sessionId, tail });
+  }
+
+  async sessionTranscript(sessionId: string): Promise<SessionTranscriptResult> {
+    return this.rpc<SessionTranscriptResult>("session/transcript", { sessionId });
+  }
+
+  // ── Subscriptions ───────────────────────────────────────────────────────────
+
+  /**
+   * Subscribe to live tree snapshots for a root session.
+   *
+   * Returns the initial tree and an `unsubscribe()` function. The server
+   * pushes `session/tree-update` notifications whenever any descendant
+   * changes. `onUpdate` is called for each update where the `sessionId`
+   * matches.
+   */
+  async sessionTreeStream(
+    sessionId: string,
+    onUpdate: (root: unknown) => void,
+  ): Promise<{ tree: unknown; unsubscribe: () => void }> {
+    const handler = (data: { sessionId: string; root: unknown }) => {
+      if (data.sessionId === sessionId) {
+        onUpdate(data.root);
+      }
+    };
+    this.on("session/tree-update", handler);
+    let unsubscribed = false;
+    const unsubscribe = () => {
+      if (unsubscribed) return;
+      unsubscribed = true;
+      this.off("session/tree-update", handler);
+    };
+    try {
+      const result = await this.rpc<{ tree: unknown }>("session/tree-stream", { sessionId });
+      return { tree: result.tree, unsubscribe };
+    } catch (err) {
+      unsubscribe();
+      throw err;
+    }
+  }
+
+  /**
+   * Subscribe to terminal output for a session.
+   *
+   * Returns a handle string and an `unsubscribe()` function. The server
+   * pushes `terminal/frame` notifications (bytes as base64). `onFrame` is
+   * called with a `Buffer` decoded from the base64 payload for each frame
+   * whose `sessionId` matches.
+   */
+  async terminalSubscribe(
+    sessionId: string,
+    onFrame: (bytes: Buffer) => void,
+  ): Promise<{ handle: string; streamHandle: string; initialBuffer: string | null; unsubscribe: () => void }> {
+    const handler = (data: { sessionId: string; bytes: string }) => {
+      if (data.sessionId === sessionId) {
+        onFrame(Buffer.from(data.bytes, "base64"));
+      }
+    };
+    this.on("terminal/frame", handler);
+    let unsubscribed = false;
+    const unsubscribe = () => {
+      if (unsubscribed) return;
+      unsubscribed = true;
+      this.off("terminal/frame", handler);
+    };
+    try {
+      const result = await this.rpc<TerminalSubscribeResult>("terminal/subscribe", { sessionId });
+      return { ...result, unsubscribe };
+    } catch (err) {
+      unsubscribe();
+      throw err;
+    }
+  }
+
+  /**
+   * Send input bytes to a terminal handle obtained from `terminalSubscribe`.
+   * `bytes` is sent as a base64-encoded string over the wire.
+   */
+  async terminalInput(handle: string, bytes: Buffer): Promise<{ ok: true }> {
+    return this.rpc<{ ok: true }>("terminal/input", { handle, bytes: bytes.toString("base64") });
+  }
+
+  /**
+   * Tail a forensic log file with live push.
+   *
+   * Returns the current file contents as `initial` (empty string when the
+   * file doesn't exist yet). New appends arrive via `log/chunk` notifications.
+   * `onChunk` is called with a `Buffer` decoded from the base64 payload for
+   * each chunk whose `sessionId` and `file` match.
+   */
+  async logSubscribe(
+    sessionId: string,
+    file: "stdio" | "transcript",
+    onChunk: (bytes: Buffer) => void,
+  ): Promise<{ initial: string; size: number; exists: boolean; unsubscribe: () => void }> {
+    const handler = (data: { sessionId: string; file: string; bytes: string }) => {
+      if (data.sessionId === sessionId && data.file === file) {
+        onChunk(Buffer.from(data.bytes, "base64"));
+      }
+    };
+    this.on("log/chunk", handler);
+    let unsubscribed = false;
+    const unsubscribe = () => {
+      if (unsubscribed) return;
+      unsubscribed = true;
+      this.off("log/chunk", handler);
+    };
+    try {
+      const result = await this.rpc<LogSubscribeResult>("log/subscribe", { sessionId, file });
+      return { ...result, unsubscribe };
+    } catch (err) {
+      unsubscribe();
+      throw err;
+    }
+  }
+
+  // ── SkillHub ────────────────────────────────────────────────────────────────
+
+  async skillhubList(): Promise<SkillhubSkill[]> {
+    const { skills } = await this.rpc<SkillhubListResult>("skillhub/list");
+    return skills;
+  }
+
+  async skillhubGet(id: string): Promise<SkillhubSkill> {
+    const { skill } = await this.rpc<SkillhubGetResult>("skillhub/get", { id });
+    return skill;
+  }
+
+  async skillhubPut(params: SkillhubPutParams): Promise<SkillhubPutResult> {
+    return this.rpc<SkillhubPutResult>("skillhub/put", params as unknown as Record<string, unknown>);
+  }
+
+  async skillhubDelete(id: string): Promise<SkillhubDeleteResult> {
+    return this.rpc<SkillhubDeleteResult>("skillhub/delete", { id });
+  }
+
+  async skillhubSyncStatus(local_versions: SkillhubSyncStatusLocalVersion[]): Promise<SkillhubSyncStatusResult> {
+    return this.rpc<SkillhubSyncStatusResult>("skillhub/sync_status", { local_versions });
+  }
+
+  async skillhubGetWithAncestor(params: SkillhubGetWithAncestorParams): Promise<SkillhubGetWithAncestorResult> {
+    return this.rpc<SkillhubGetWithAncestorResult>(
+      "skillhub/get_with_ancestor",
+      params as unknown as Record<string, unknown>,
+    );
+  }
+
+  async skillhubSearch(query: string): Promise<SkillhubSkill[]> {
+    const { skills } = await this.rpc<SkillhubListResult>("skillhub/search", { query });
+    return skills;
+  }
+
+  async skillhubPublishedAfter(since: string): Promise<SkillhubSkill[]> {
+    const { skills } = await this.rpc<SkillhubListResult>("skillhub/published_after", { since });
+    return skills;
+  }
+}

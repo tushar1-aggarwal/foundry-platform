@@ -7,19 +7,38 @@
  * - session/messages returns interleaved user + agent messages
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from "bun:test";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { AppContext } from "../../core/app.js";
+import {
+  attachTemporalTestHarness,
+  drainTemporalTestHarness,
+  waitForSessionStatus,
+} from "../../core/temporal/test-harness.js";
 import { registerSessionHandlers } from "../handlers/session.js";
 import { registerMessagingHandlers } from "../handlers/messaging.js";
 import { Router } from "../router.js";
 import { createRequest, type JsonRpcResponse } from "../../protocol/types.js";
 
 let app: AppContext;
+let detach: (() => void) | undefined;
 beforeAll(async () => {
   app = await AppContext.forTestAsync();
+  const flowDir = join(app.config.dirs.ark, "flows");
+  mkdirSync(flowDir, { recursive: true });
+  writeFileSync(
+    join(flowDir, "x-auto.yaml"),
+    `name: x-auto\nstages:\n  - name: work\n    agent: implementer\n    gate: auto\n`,
+  );
   await app.boot();
+  detach = await attachTemporalTestHarness(app);
+});
+afterEach(async () => {
+  await drainTemporalTestHarness();
 });
 afterAll(async () => {
+  detach?.();
   await app?.shutdown();
 });
 
@@ -31,12 +50,17 @@ beforeEach(() => {
   registerMessagingHandlers(router, app);
 });
 
-/** Helper to create a session and return its id. Simulates a dispatched session with session_id set. */
+/**
+ * Create a session, drive its Temporal workflow to terminal, then stamp
+ * session_id + running so the messaging handlers operate on a settled row
+ * (the workflow is no longer live, so this write won't be raced by
+ * projectSessionActivity).
+ */
 async function createSession(summary = "test"): Promise<string> {
-  const res = await router.dispatch(createRequest(1, "session/start", { summary, repo: ".", flow: "bare" }));
+  const res = await router.dispatch(createRequest(1, "session/start", { summary, repo: ".", flow: "x-auto" }));
   const result = (res as JsonRpcResponse).result as Record<string, any>;
   const id = result.session.id;
-  // Set session_id to simulate a dispatched session (send() requires it)
+  await waitForSessionStatus(app, id, ["completed", "failed"]);
   await app.sessions.update(id, { session_id: "ark-" + id, status: "running" });
   return id;
 }
@@ -60,7 +84,7 @@ describe("messaging handlers", async () => {
     expect(userMsg).toBeDefined();
     expect(userMsg.role).toBe("user");
     expect(userMsg.type).toBe("text");
-  });
+  }, 45_000);
 
   it("message/send persists user message to conversation history", async () => {
     const sessionId = await createSession("persist-test");
@@ -74,7 +98,7 @@ describe("messaging handlers", async () => {
     expect(userMsg.role).toBe("user");
     expect(userMsg.type).toBe("text");
     expect(userMsg.content).toBe("hello from user");
-  });
+  }, 45_000);
 
   it("user and agent messages are interleaved correctly", async () => {
     const sessionId = await createSession("interleave-test");
@@ -96,7 +120,7 @@ describe("messaging handlers", async () => {
     expect(messages[1].content).toBe("agent reply 1");
     expect(messages[2].role).toBe("user");
     expect(messages[2].content).toBe("user msg 2");
-  });
+  }, 45_000);
 
   it("message/markRead marks messages as read", async () => {
     const sessionId = await createSession("markread-test");
@@ -113,13 +137,13 @@ describe("messaging handlers", async () => {
     expect(result.ok).toBe(true);
 
     expect(await app.messages.unreadCount(sessionId)).toBe(0);
-  });
+  }, 45_000);
 
   it("session/messages returns empty array for session with no messages", async () => {
     const sessionId = await createSession("empty-msgs");
     const messages = await listMessages(sessionId);
     expect(messages).toEqual([]);
-  });
+  }, 45_000);
 
   it("message/send to nonexistent session returns ok:false", async () => {
     const res = await router.dispatch(

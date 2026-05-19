@@ -79,7 +79,7 @@ export function ComputeDetailPanel({
       <div className="flex items-center gap-3 mb-4">
         <h2 className="text-lg font-semibold text-foreground">{compute.name || compute.id}</h2>
         <Badge variant="secondary" className="text-[10px]">
-          {compute.provider || compute.type || "local"}
+          {`${compute.compute_kind || "local"}/${compute.isolation_kind || "direct"}`}
         </Badge>
         {isTemplate ? (
           <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
@@ -407,8 +407,10 @@ export function ComputeDetailPanel({
       <div className="mb-4">
         <h3 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground mb-2">Details</h3>
         <div className="grid grid-cols-[120px_1fr] gap-y-1.5 gap-x-3 text-[13px]">
-          <span className="text-muted-foreground">Provider</span>
-          <span className="text-card-foreground font-mono">{compute.provider || compute.type || "-"}</span>
+          <span className="text-muted-foreground">Compute</span>
+          <span className="text-card-foreground font-mono">
+            {`${compute.compute_kind || "-"}/${compute.isolation_kind || "-"}`}
+          </span>
           {compute.ip && (
             <>
               <span className="text-muted-foreground">IP</span>

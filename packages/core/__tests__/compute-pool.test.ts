@@ -16,13 +16,13 @@ describe("ComputePoolManager", async () => {
     const manager = new ComputePoolManager(app);
     const pool = await manager.createPool({
       name: "test-pool",
-      provider: "ec2",
+      compute: { compute_kind: "ec2", isolation_kind: "direct" },
       min: 2,
       max: 10,
       config: { size: "m", region: "us-east-1" },
     });
     expect(pool.name).toBe("test-pool");
-    expect(pool.provider).toBe("ec2");
+    expect(pool.compute).toEqual({ compute_kind: "ec2", isolation_kind: "direct" });
     expect(pool.min).toBe(2);
     expect(pool.max).toBe(10);
 
@@ -44,7 +44,7 @@ describe("ComputePoolManager", async () => {
     // Create another pool
     await manager.createPool({
       name: "test-pool-2",
-      provider: "docker",
+      compute: { compute_kind: "local", isolation_kind: "docker" },
       min: 0,
       max: 5,
       config: { image: "ubuntu:22.04" },
@@ -55,7 +55,7 @@ describe("ComputePoolManager", async () => {
 
     const dockerPool = pools.find((p) => p.name === "test-pool-2");
     expect(dockerPool).toBeDefined();
-    expect(dockerPool!.provider).toBe("docker");
+    expect(dockerPool!.compute).toEqual({ compute_kind: "local", isolation_kind: "docker" });
     expect(dockerPool!.active).toBe(0);
     expect(dockerPool!.available).toBe(0);
   });
@@ -64,7 +64,7 @@ describe("ComputePoolManager", async () => {
     const manager = new ComputePoolManager(app);
     await manager.createPool({
       name: "to-delete",
-      provider: "local",
+      compute: { compute_kind: "local", isolation_kind: "direct" },
       min: 0,
       max: 1,
       config: {},

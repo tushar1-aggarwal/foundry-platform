@@ -24,6 +24,7 @@ import { ModelService } from "../../models/ModelService.js";
 import { resolveAgentWithRuntime, buildClaudeArgs as buildClaudeArgsHelper } from "../../agent/agent.js";
 import { getExecutor } from "../../executor.js";
 import { buildTaskWithHandoff, extractSubtasks } from "../../services/task-builder.js";
+import { getStage as flowGetStage, getStageAction as flowGetStageAction } from "../../services/flow.js";
 import { startStatusPoller } from "../../executors/status-poller.js";
 import { saveCheckpoint } from "../../session/checkpoint.js";
 import { executeAction } from "../../services/actions/index.js";
@@ -187,44 +188,12 @@ export function buildDispatchDeps(orchDeps: OrchestrationDeps): TemporalDispatch
     // needed inside a Temporal activity.
     getScheduler: () => null,
 
-    // ── Phase 3.5 ports: read directly from FlowStore ────────────────────────
-    getStage: (flowName, stageName) => {
-      const f = orchDeps.flows.get(flowName);
-      // Hosted DB store can return a Promise on cache miss; treat as "not loaded".
-      if (f && typeof (f as { then?: unknown }).then === "function") return null;
-      const stages = (f as { stages?: any[] })?.stages ?? [];
-      return stages.find((s: { name: string }) => s.name === stageName) ?? null;
-    },
-    getStageAction: (flowName, stageName) => {
-      const f = orchDeps.flows.get(flowName);
-      if (f && typeof (f as { then?: unknown }).then === "function") return { type: "unknown" };
-      const stages = (f as { stages?: any[] })?.stages ?? [];
-      const stage = stages.find((s: { name: string }) => s.name === stageName);
-      if (!stage) return { type: "unknown" };
-      if (stage.for_each !== undefined) {
-        return { type: "for_each", on_failure: stage.on_failure, optional: stage.optional };
-      }
-      if (stage.type === "fork") {
-        return {
-          type: "fork",
-          agent: stage.agent ?? "implementer",
-          strategy: stage.strategy ?? "plan",
-          max_parallel: stage.max_parallel ?? 4,
-          on_failure: stage.on_failure,
-          optional: stage.optional,
-        };
-      }
-      if (stage.action) {
-        return { type: "action", action: stage.action, on_failure: stage.on_failure, optional: stage.optional };
-      }
-      if (stage.agent) {
-        return { type: "agent", agent: stage.agent, on_failure: stage.on_failure, optional: stage.optional };
-      }
-      return { type: "unknown", on_failure: stage.on_failure, optional: stage.optional };
-    },
+    // ── Phase 3.5 ports: delegate to the canonical async flow helpers ────────
+    getStage: (flowName, stageName) => flowGetStage(orchDeps, flowName, stageName),
+    getStageAction: (flowName, stageName) => flowGetStageAction(orchDeps, flowName, stageName),
     // ── Phase 3.5 ports: helpers via AppContext shim from OrchestrationDeps ──
-    buildTask: (session, stage, agentName) => buildTaskWithHandoff(buildAppShim(orchDeps), session, stage, agentName),
-    extractSubtasks: (session) => extractSubtasks(buildAppShim(orchDeps), session),
+    buildTask: (session, stage, agentName) => buildTaskWithHandoff(orchDeps, session, stage, agentName),
+    extractSubtasks: (session) => extractSubtasks(orchDeps, session),
     resolveAgent: (agentName, sessionVars, opts) =>
       resolveAgentWithRuntime(buildAppShim(orchDeps), agentName, sessionVars, opts),
     buildClaudeArgs: (agent, opts) =>
@@ -255,12 +224,8 @@ export function buildDispatchDeps(orchDeps: OrchestrationDeps): TemporalDispatch
     startStatusPoller: (sessionId, tmuxName, runtime) =>
       startStatusPoller(buildAppShim(orchDeps), sessionId, tmuxName, runtime),
 
-    // mediateStageHandoff is a no-op under Temporal. In bespoke mode it
-    // advances the next stage via StageAdvanceService; under Temporal the
-    // session-workflow loop drives stage advancement itself, so a stage's
-    // post-action handoff has nothing to do.
-    mediateStageHandoff: async (_sessionId, _opts) => undefined,
-    executeAction: (sessionId, action) => executeAction(buildAppShim(orchDeps), sessionId, action),
+    executeAction: (sessionId, action) =>
+      executeAction({ ...orchDeps, app: buildAppShim(orchDeps) }, sessionId, action),
     dispatchChild: (_childId) => notPortedYet("dispatchChild", NOT_PORTED_GUIDANCE.dispatchChild),
     fork: (_parentId, _task, _opts) => notPortedYet("fork", NOT_PORTED_GUIDANCE.fork),
 

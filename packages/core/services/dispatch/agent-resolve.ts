@@ -40,7 +40,7 @@ export async function resolveDispatchAgent(
     // buildInlineAgent so runtime defaults (model, env, etc.) are respected
     // the same way as stored agents.
     const { buildInlineAgent } = await import("../../agent/agent.js");
-    const agent = buildInlineAgent(deps.getApp(), agentRef, sessionAsVars(session));
+    const agent = await buildInlineAgent(deps.getApp(), agentRef, sessionAsVars(session));
     const agentName = agent?.name ?? "inline";
     if (!agent) return { ok: false, message: `Inline agent build failed (missing runtime or system_prompt?)` };
     return { ok: true, resolved: { agent, agentName } };
@@ -48,14 +48,14 @@ export async function resolveDispatchAgent(
 
   const agentName = agentRef!;
   log(`Resolving agent: ${agentName}`);
-  let agent = deps.resolveAgent(agentName, sessionAsVars(session), { projectRoot }) as AgentDefinition | null;
+  let agent = (await deps.resolveAgent(agentName, sessionAsVars(session), { projectRoot })) as AgentDefinition | null;
   if (!agent) {
     const { findProjectRoot } = await import("../../agent/agent.js");
     const serverRoot = findProjectRoot(process.cwd()) ?? undefined;
     if (serverRoot && serverRoot !== projectRoot) {
-      agent = deps.resolveAgent(agentName, sessionAsVars(session), {
+      agent = (await deps.resolveAgent(agentName, sessionAsVars(session), {
         projectRoot: serverRoot,
-      }) as AgentDefinition | null;
+      })) as AgentDefinition | null;
     }
   }
   if (!agent) return { ok: false, message: `Agent '${agentName}' not found` };
@@ -71,13 +71,13 @@ export async function resolveDispatchAgent(
  *   this id"; we leave the model untouched so explicit out-of-band slugs still
  *   pass through.
  */
-export function applyStageModelAndResolveSlug(
+export async function applyStageModelAndResolveSlug(
   deps: Pick<DispatchDeps, "models" | "runtimes">,
   agent: AgentDefinition,
   stageDef: StageDefinition | null,
   projectRoot: string | undefined,
   log: (msg: string) => void,
-): void {
+): Promise<void> {
   // Stage-level model override (legacy stage.model field) still wins if set.
   if (stageDef?.model) {
     agent.model = stageDef.model;
@@ -89,9 +89,9 @@ export function applyStageModelAndResolveSlug(
   // to anthropic-direct).
   if (agent.model && deps.models) {
     const runtimeName = agent.runtime;
-    const runtimeDef = runtimeName ? deps.runtimes.get(runtimeName) : null;
+    const runtimeDef = runtimeName ? await deps.runtimes.get(runtimeName) : null;
     const runtimeCompat = runtimeDef?.compat ?? [];
-    const resolved = deps.models.resolveSlug(agent.model, runtimeCompat, projectRoot);
+    const resolved = await deps.models.resolveSlug(agent.model, runtimeCompat, projectRoot);
     if (resolved && resolved !== agent.model) {
       log(`Catalog: ${agent.model} -> ${resolved} (compat: [${runtimeCompat.join(",")}])`);
       agent.model = resolved;
@@ -117,12 +117,12 @@ export function applyStageModelAndResolveSlug(
  *
  * Mutates `agent` in place. Idempotent on a no-hint or no-op.
  */
-export function applyScopingRuntimeHint(
+export async function applyScopingRuntimeHint(
   deps: Pick<DispatchDeps, "runtimes">,
   agent: AgentDefinition,
   hint: string | undefined,
   log: (msg: string) => void,
-): void {
+): Promise<void> {
   if (!hint) return;
   // Emit on BOTH the streaming dispatch log (for live subscribers) and
   // the structured-log channel (for ops grep / dashboards). The streaming
@@ -134,7 +134,7 @@ export function applyScopingRuntimeHint(
     logInfo("scoping", msg);
     return;
   }
-  const def = deps.runtimes.get(hint);
+  const def = await deps.runtimes.get(hint);
   if (!def) {
     const msg = `runtime hint '${hint}' no longer registered; falling back to '${agent.runtime}'`;
     log(msg);
@@ -168,13 +168,13 @@ export function applyScopingRuntimeHint(
  * catalog resolution sees the post-hint model. Mutates `agent` in
  * place. Idempotent on a no-hint or no-op.
  */
-export function applyScopingModelHint(
+export async function applyScopingModelHint(
   deps: Pick<DispatchDeps, "models">,
   agent: AgentDefinition,
   hint: string | undefined,
   projectRoot: string | undefined,
   log: (msg: string) => void,
-): void {
+): Promise<void> {
   if (!hint) return;
   if (agent.model_locked) {
     const msg = `model hint '${hint}' ignored (agent '${agent.name}' has model_locked)`;
@@ -187,7 +187,7 @@ export function applyScopingModelHint(
   // wasn't visible at session/start). If the model has been removed
   // entirely between start and dispatch, drop the hint -- don't fail
   // an in-flight session for an upstream config edit.
-  const def = deps.models?.get(hint, projectRoot);
+  const def = await deps.models?.get(hint, projectRoot);
   if (!def) {
     const msg = `model hint '${hint}' no longer in catalog; falling back to '${agent.model}'`;
     log(msg);

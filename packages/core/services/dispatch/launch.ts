@@ -131,7 +131,7 @@ export async function buildLaunchEnv(
       const stageSecrets = stageDef?.secrets ?? [];
       let runtimeSecrets: string[] = [];
       try {
-        const rt = deps.runtimes?.get?.(runtime);
+        const rt = await deps.runtimes?.get?.(runtime);
         runtimeSecrets = Array.isArray(rt?.secrets) ? (rt as { secrets?: string[] }).secrets! : [];
       } catch (err: any) {
         // Runtime row may be absent in legacy/test paths -- the legacy

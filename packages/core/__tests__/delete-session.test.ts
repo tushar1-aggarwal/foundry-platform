@@ -28,9 +28,9 @@ afterEach(async () => {
 
 // ── Unit tests ──────────────────────────────────────────────────────────────
 
-describe("sessionLifecycle.deleteSession", async () => {
+describe("sessionTerminator.deleteSession", async () => {
   it("soft-deletes session from database", async () => {
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       repo: "/tmp/fake-repo",
       summary: "delete-db-test",
       flow: "bare",
@@ -39,7 +39,7 @@ describe("sessionLifecycle.deleteSession", async () => {
     // Verify it exists
     expect(await app.sessions.get(session.id)).not.toBeNull();
 
-    const result = await app.sessionLifecycle.deleteSession(session.id);
+    const result = await app.sessionTerminator.deleteSession(session.id);
     expect(result.ok).toBe(true);
     expect(result.message).toBe("Session deleted (undo available for 90s)");
 
@@ -50,7 +50,7 @@ describe("sessionLifecycle.deleteSession", async () => {
   });
 
   it("preserves events after soft-delete", async () => {
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       repo: "/tmp/fake-repo",
       summary: "delete-events-test",
       flow: "bare",
@@ -64,7 +64,7 @@ describe("sessionLifecycle.deleteSession", async () => {
     const eventsBefore = await app.events.list(session.id);
     expect(eventsBefore.length).toBeGreaterThanOrEqual(3);
 
-    await app.sessionLifecycle.deleteSession(session.id);
+    await app.sessionTerminator.deleteSession(session.id);
 
     // Soft-delete preserves events (plus session_deleted event)
     const eventsAfter = await app.events.list(session.id);
@@ -72,7 +72,7 @@ describe("sessionLifecycle.deleteSession", async () => {
   });
 
   it("returns ok:false for nonexistent session", async () => {
-    const result = await app.sessionLifecycle.deleteSession("s-nonexistent");
+    const result = await app.sessionTerminator.deleteSession("s-nonexistent");
     expect(result.ok).toBe(false);
     expect(result.message).toContain("not found");
   });
@@ -89,7 +89,7 @@ describe("sessionLifecycle.deleteSession", async () => {
     writeFileSync(join(wtPath, "dummy.txt"), "test content");
     expect(existsSync(wtPath)).toBe(true);
 
-    await app.sessionLifecycle.deleteSession(session.id);
+    await app.sessionTerminator.deleteSession(session.id);
 
     // Worktree directory should be gone (rmSync fallback)
     expect(existsSync(wtPath)).toBe(false);
@@ -105,7 +105,7 @@ describe("sessionLifecycle.deleteSession", async () => {
     mkdirSync(repoDir, { recursive: true });
     writeFileSync(join(repoDir, "file.txt"), "important");
 
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       repo: repoDir,
       workdir: repoDir,
       summary: "delete-no-worktree-test",
@@ -116,7 +116,7 @@ describe("sessionLifecycle.deleteSession", async () => {
     const wtPath = join(getApp().config.dirs.worktrees, session.id);
     expect(existsSync(wtPath)).toBe(false);
 
-    await app.sessionLifecycle.deleteSession(session.id);
+    await app.sessionTerminator.deleteSession(session.id);
 
     // The repo dir should still exist and be intact
     expect(existsSync(repoDir)).toBe(true);
@@ -132,7 +132,7 @@ describe("sessionLifecycle.deleteSession", async () => {
     const workdir = join(app.config.dirs.ark, "hook-test-workdir");
     mkdirSync(workdir, { recursive: true });
 
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       repo: workdir,
       workdir,
       summary: "delete-hooks-test",
@@ -149,7 +149,7 @@ describe("sessionLifecycle.deleteSession", async () => {
     expect(beforeSettings.hooks).toBeDefined();
     expect(Object.keys(beforeSettings.hooks).length).toBeGreaterThan(0);
 
-    await app.sessionLifecycle.deleteSession(session.id);
+    await app.sessionTerminator.deleteSession(session.id);
 
     // After deletion, hooks should be cleaned from settings
     if (existsSync(settingsPath)) {
@@ -166,7 +166,7 @@ describe("sessionLifecycle.deleteSession", async () => {
   // ── Integration patterns ──────────────────────────────────────────────────
 
   it("works when session has no tmux session (session_id is null)", async () => {
-    const session = await app.sessionLifecycle.start({
+    const session = await app.sessionCreator.start({
       repo: "/tmp/fake-repo",
       summary: "no-tmux-test",
       flow: "bare",
@@ -176,7 +176,7 @@ describe("sessionLifecycle.deleteSession", async () => {
     expect(session.session_id).toBeNull();
 
     // Should not throw
-    const result = await app.sessionLifecycle.deleteSession(session.id);
+    const result = await app.sessionTerminator.deleteSession(session.id);
     expect(result.ok).toBe(true);
     expect(result.message).toBe("Session deleted (undo available for 90s)");
     // Soft-delete: session still exists with status "deleting"

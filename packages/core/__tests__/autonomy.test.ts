@@ -130,7 +130,7 @@ describe("writeSettings autonomy", () => {
 // ── Flow YAML with autonomy ──────────────────────────────────────────────────
 
 describe("flow autonomy field", () => {
-  it("loads flow YAML with autonomy 'read-only' on a stage", () => {
+  it("loads flow YAML with autonomy 'read-only' on a stage", async () => {
     writeUserFlow("autonomy-flow", {
       name: "autonomy-flow",
       stages: [
@@ -139,24 +139,24 @@ describe("flow autonomy field", () => {
       ],
     });
 
-    const flow = getApp().flows.get("autonomy-flow");
+    const flow = await getApp().flows.get("autonomy-flow");
     expect(flow).not.toBeNull();
     expect(flow!.stages[0].autonomy).toBe("read-only");
     expect(flow!.stages[1].autonomy).toBe("full");
   });
 
-  it("autonomy field is undefined when not set in YAML", () => {
+  it("autonomy field is undefined when not set in YAML", async () => {
     writeUserFlow("no-autonomy-flow", {
       name: "no-autonomy-flow",
       stages: [{ name: "work", agent: "worker", gate: "auto" }],
     });
 
-    const flow = getApp().flows.get("no-autonomy-flow");
+    const flow = await getApp().flows.get("no-autonomy-flow");
     expect(flow).not.toBeNull();
     expect(flow!.stages[0].autonomy).toBeUndefined();
   });
 
-  it("resolveFlow preserves autonomy field after variable substitution", () => {
+  it("resolveFlow preserves autonomy field after variable substitution", async () => {
     writeUserFlow("resolve-autonomy", {
       name: "resolve-autonomy",
       stages: [
@@ -166,7 +166,7 @@ describe("flow autonomy field", () => {
       ],
     });
 
-    const flow = resolveFlow(getApp(), "resolve-autonomy", { ticket: "PROJ-1" });
+    const flow = await resolveFlow(getApp(), "resolve-autonomy", { ticket: "PROJ-1" });
     expect(flow).not.toBeNull();
     expect(flow!.stages[0].autonomy).toBe("edit");
     expect(flow!.stages[0].task).toBe("Plan PROJ-1");

@@ -24,9 +24,15 @@ import type { StatusPollerRegistry } from "./executors/status-poller.js";
 import type { SessionService } from "./services/session.js";
 import type { ComputeService } from "./services/compute.js";
 import type { SessionHooks } from "./services/session-hooks/index.js";
-import type { SessionLifecycle } from "./services/session/index.js";
+import type {
+  SessionCreator,
+  SessionTerminator,
+  SessionSuspender,
+  SessionForker,
+  SessionReviewer,
+} from "./services/session/index.js";
 import type { DispatchService } from "./services/dispatch/index.js";
-import type { StageAdvanceService } from "./services/stage-advance/index.js";
+import type { SessionProgression } from "./services/session-progression.js";
 import type { FlowStore } from "./stores/flow-store.js";
 import type { SkillStore } from "./stores/skill-store.js";
 import type { AgentStore } from "./stores/agent-store.js";
@@ -114,9 +120,13 @@ export interface Cradle {
   sessionService: SessionService;
   computeService: ComputeService;
   sessionHooks: SessionHooks;
-  sessionLifecycle: SessionLifecycle;
+  sessionCreator: SessionCreator;
+  sessionTerminator: SessionTerminator;
+  sessionSuspender: SessionSuspender;
+  sessionForker: SessionForker;
+  sessionReviewer: SessionReviewer;
   dispatchService: DispatchService;
-  stageAdvance: StageAdvanceService;
+  sessionProgression: SessionProgression;
 
   // Resource stores
   flows: FlowStore;

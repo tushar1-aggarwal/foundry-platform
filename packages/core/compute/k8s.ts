@@ -23,30 +23,26 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { DEFAULT_CONDUCTOR_URL } from "../constants.js";
 import type { AppContext } from "../app.js";
 import type { Session } from "../../types/session.js";
 import { ArkdClient } from "../../arkd/client/index.js";
 import { allocatePort } from "../config/port-allocator.js";
 import { attachComputeMethods, rehydrateArkdBackedHandle, type ArkdClientFactory } from "./handle-helpers.js";
 import type {
-  Compute,
   ComputeCapabilities,
   ComputeHandle,
   ComputeKind,
   EnsureReachableOpts,
-  FlushPlacementOpts,
   MethodedComputeHandle,
   PersistedComputeHandleState,
-  PrepareWorkspaceOpts,
   ProvisionOpts,
   Snapshot,
 } from "./types.js";
 import { NotSupportedError } from "./types.js";
-import { cloneWorkspaceViaArkd } from "./workspace-clone.js";
-import { resolveAgentIdentityForRemoteCompute } from "./git-identity.js";
+import { RemoteArkdCompute } from "./remote-arkd-compute.js";
 import { logDebug, logError, logInfo } from "../observability/structured-log.js";
 import { provisionStep } from "../services/provisioning-steps.js";
+import { depsFromApp } from "../services/deps.js";
 import { K8sPlacementCtx } from "./k8s-placement-ctx.js";
 import type { PlacementCtx } from "../secrets/placement-types.js";
 
@@ -199,11 +195,10 @@ const DEFAULT_DEPS: K8sComputeDeps = {
 
 const ARKD_POD_PORT = 19300;
 
-export class K8sCompute implements Compute {
+export class K8sCompute extends RemoteArkdCompute {
   readonly kind: ComputeKind = "k8s";
   readonly capabilities: ComputeCapabilities = {
     snapshot: false,
-    pool: true,
     networkIsolation: false,
     provisionLatency: "seconds",
     singleton: false,
@@ -221,7 +216,9 @@ export class K8sCompute implements Compute {
   private apiCache = new Map<string, unknown>();
   protected clientFactory: ArkdClientFactory = (url) => new ArkdClient(url);
 
-  constructor(protected readonly app: AppContext) {}
+  constructor(app: AppContext) {
+    super(app);
+  }
 
   /** Test-only: swap in stub deps (k8s SDK, kubectl spawn, port allocator). */
   setDeps(deps: Partial<K8sComputeDeps>): void {
@@ -458,7 +455,13 @@ export class K8sCompute implements Compute {
     const arkdUrl = this.getArkdUrl(h);
     if (arkdUrl) {
       const { startArkdEventsConsumer } = await import("../services/channel/arkd-events-consumer.js");
-      startArkdEventsConsumer(opts.app, h.name, arkdUrl, process.env.ARK_ARKD_TOKEN ?? null, opts.sessionId);
+      startArkdEventsConsumer(
+        depsFromApp(opts.app),
+        h.name,
+        arkdUrl,
+        process.env.ARK_ARKD_TOKEN ?? null,
+        opts.sessionId,
+      );
       // Durable, session-attached proof the conductor pointed a hooks
       // consumer at THIS session's pod arkd. If a session's event log has
       // no arkd_consumer_attached, ensureReachable never ran for it; if it
@@ -604,7 +607,7 @@ export class K8sCompute implements Compute {
     };
 
     if (useStep) {
-      await provisionStep(opts.app!, opts.sessionId!, "k8s-port-forward", fn, { context: stepCtx });
+      await provisionStep(depsFromApp(opts.app!), opts.sessionId!, "k8s-port-forward", fn, { context: stepCtx });
     } else {
       await fn();
     }
@@ -667,97 +670,30 @@ export class K8sCompute implements Compute {
     return `http://localhost:${meta.arkdLocalPort}`;
   }
 
-  // ── resolveWorkdir ───────────────────────────────────────────────────────
+  // ── RemoteArkdCompute hooks ──────────────────────────────────────────────
   //
-  // Mirrors LocalCompute's layout, rooted at `/workspace/<sid>/<repo>` inside
-  // the per-session pod. Returning null here previously caused the
-  // prepare-workspace lifecycle step to be silently skipped (the guard at
-  // target-lifecycle.ts requires a non-null remoteWorkdir), leaving the pod
-  // with no checkout and the agent with nothing to edit. The `/workspace`
-  // prefix is the layout the K8s pod-template provisions writable space at.
-  // Bare-worktree dispatch (no session.repo) still returns null so the clone
-  // is honestly skipped rather than landing on a meaningless path.
-  resolveWorkdir(_h: ComputeHandle, session: Session): string | null {
-    const cloneSource = (session.config as { remoteRepo?: string } | null)?.remoteRepo ?? session.repo;
-    if (!cloneSource) return null;
-    const repoBasename =
-      cloneSource
-        .split("/")
-        .pop()
-        ?.replace(/\.git$/, "") ?? "project";
-    return `/workspace/${session.id}/${repoBasename}`;
+  // Per-session checkout lands under `/workspace` (the writable emptyDir the
+  // pod template mounts; / is root-owned and the pod runs non-root).
+
+  protected workdirRoot(_h: ComputeHandle, _session: Session): string {
+    return "/workspace";
   }
 
-  // ── prepareWorkspace ─────────────────────────────────────────────────────
-  //
-  // mkdir + git clone via arkd HTTP using the URL from `getArkdUrl(h)`.
-  // Idempotent on the leaf path (the dispatcher's resolveWorkdir embeds
-  // session.id when it lands on a fresh path; re-dispatch into the same
-  // sessionId hits the same leaf and the second clone fails fast on
-  // "already exists" -- caller is expected to scope per session id).
-  //
-  // Ordering invariant: `ensureReachable` (which sets up the kubectl
-  // port-forward + binds the local arkdLocalPort) must have run on `h`
-  // before this call so `getArkdUrl(h)` resolves to the live local
-  // tunnel. The dispatcher's `runTargetLifecycle` enforces this.
-
-  /**
-   * Test-only: swap the helper that performs `mkdir -p` + `git clone`
-   * via arkd. Default is the production `cloneWorkspaceViaArkd`.
-   */
-  setCloneHelperForTesting(fn: typeof cloneWorkspaceViaArkd): void {
-    this.cloneHelper = fn;
+  protected arkdPort(): number {
+    return ARKD_POD_PORT;
   }
 
-  protected cloneHelper: typeof cloneWorkspaceViaArkd = cloneWorkspaceViaArkd;
-
-  async prepareWorkspace(h: ComputeHandle, opts: PrepareWorkspaceOpts): Promise<void> {
-    if (!opts.source || !opts.remoteWorkdir) return;
-    const arkdUrl = this.getArkdUrl(h);
-    const arkdToken = process.env.ARK_ARKD_TOKEN ?? null;
-    // Resolve the effective branch: explicit session.branch wins; otherwise
-    // a deterministic per-session default. Always pass a branch so the agent
-    // can't accidentally commit to upstream/main.
-    const branch = opts.branch ?? `ark-${opts.sessionId}`;
-    // Resolve the agent's commit identity (config → env → tenant secret →
-    // placeholder). cloneHelper pins it on the sandbox repo so the
-    // implement-stage commit and the PR-stage push carry a real author.
-    const identity = await resolveAgentIdentityForRemoteCompute(this.app, this.app.tenantId ?? "default");
-    await this.cloneHelper({
-      arkdUrl,
-      arkdToken,
-      source: opts.source,
-      remoteWorkdir: opts.remoteWorkdir,
-      branch,
-      authorName: identity.name,
-      authorEmail: identity.email,
-    });
-    // Persist the resolved workdir + branch on the session row so the
-    // conductor-side observers (PR action, status poller, web UI) see the
-    // pod's real checkout instead of null / a stale value. The conductor's
-    // setupSessionWorktree short-circuits for K8s, so this is the only
-    // place that writes these columns for hosted-mode sessions.
-    await this.app.sessions.update(opts.sessionId, { workdir: opts.remoteWorkdir, branch });
+  // K8s pods bake the `ark` binary in their image.
+  protected channelBinaryPath(): string {
+    return "/usr/local/bin/ark";
   }
-
-  // ── flushPlacement ──────────────────────────────────────────────────────
-  //
-  // Replay queued typed-secret placement ops onto a `K8sPlacementCtx`.
-  //
-  // Today's `K8sPlacementCtx` is a `NoopPlacementCtx` subclass (Phase 2 --
-  // file-typed secrets are dropped with a debug log). When that's swapped
-  // for a real impl in Phase 3 (kubectl cp + kubectl exec), nothing here
-  // needs to change: the queue contract and the PlacementCtx interface
-  // stay stable.
-  //
-  // No-op when the deferred queue is empty (env-only sessions). KataCompute
-  // inherits this method unchanged -- the placement medium is the same
-  // (kubectl into the pod), regardless of the runtime class.
 
   /**
    * Test-only: swap the K8sPlacementCtx factory so unit tests can assert
    * the factory was invoked with the right meta-derived fields without
-   * exercising the NoopPlacementCtx underneath.
+   * exercising the NoopPlacementCtx underneath. KataCompute inherits this
+   * unchanged -- the placement medium is kubectl into the pod regardless
+   * of the runtime class.
    */
   setPlacementCtxFactoryForTesting(fn: (deps: { namespace: string; podName: string }) => PlacementCtx): void {
     this.placementCtxFactory = fn;
@@ -766,11 +702,9 @@ export class K8sCompute implements Compute {
   protected placementCtxFactory: (deps: { namespace: string; podName: string }) => PlacementCtx = () =>
     new K8sPlacementCtx();
 
-  async flushPlacement(h: ComputeHandle, opts: FlushPlacementOpts): Promise<void> {
-    if (!opts.placement.hasDeferred()) return;
+  protected placementCtxFor(h: ComputeHandle): PlacementCtx {
     const meta = this.readMeta(h);
-    const ctx = this.placementCtxFactory({ namespace: meta.namespace, podName: meta.podName });
-    await opts.placement.flush(ctx);
+    return this.placementCtxFactory({ namespace: meta.namespace, podName: meta.podName });
   }
 
   async snapshot(_h: ComputeHandle): Promise<Snapshot> {
@@ -781,38 +715,11 @@ export class K8sCompute implements Compute {
     throw new NotSupportedError(this.kind, "restore");
   }
 
-  // ── buildChannelConfig ──────────────────────────────────────────────────
-  //
-  // K8s pods bake the `ark` binary in their image (`/usr/local/bin/ark`).
-  // The image's arkd listens on the pod-local loopback. Same wire shape as
-  // EC2; only the binary path differs.
-
-  buildChannelConfig(
-    sessionId: string,
-    stage: string,
-    channelPort: number,
-    opts?: { conductorUrl?: string },
-  ): Record<string, unknown> {
-    return {
-      command: "/usr/local/bin/ark",
-      args: ["channel"],
-      env: {
-        ARK_SESSION_ID: sessionId,
-        ARK_STAGE: stage,
-        ARK_CHANNEL_PORT: String(channelPort),
-        ARK_CONDUCTOR_URL: opts?.conductorUrl ?? DEFAULT_CONDUCTOR_URL,
-        ARK_ARKD_URL: `http://localhost:${ARKD_POD_PORT}`,
-      },
-    };
-  }
-
+  // IS_SANDBOX=1 lets the claude binary accept --dangerously-skip-permissions
+  // when running as root. The per-session pod runs as root by default and
+  // claude refuses that combination; K8s pods are isolated by construction
+  // (per-session pod, no host fs, no network to user infra) so it is safe.
   buildLaunchEnv(_session: Session): Record<string, string> {
-    // IS_SANDBOX=1 lets the claude binary accept --dangerously-skip-permissions
-    // when running as root. The per-session pod runs as root by default (the
-    // oven/bun base image's USER), and claude refuses that combination with
-    // "cannot be used with root/sudo privileges". K8s pods are isolated by
-    // construction (per-session pod, no host fs, no network to user infra),
-    // so the bypass is safe in this dispatch shape.
     return { IS_SANDBOX: "1" };
   }
 

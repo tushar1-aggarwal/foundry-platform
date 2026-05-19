@@ -29,7 +29,7 @@ describe("session stop preserves claude_session_id", async () => {
     const session = await getApp().sessions.create({ summary: "stop-status-test" });
     await getApp().sessions.update(session.id, { session_id: `ark-s-${session.id}`, status: "running", stage: "work" });
 
-    const result = await app.sessionLifecycle.stop(session.id);
+    const result = await app.sessionTerminator.stop(session.id);
     expect(result.ok).toBe(true);
 
     const updated = (await getApp().sessions.get(session.id))!;
@@ -45,7 +45,7 @@ describe("session stop preserves claude_session_id", async () => {
       session_id: "ark-s-test",
     });
 
-    await app.sessionLifecycle.stop(session.id);
+    await app.sessionTerminator.stop(session.id);
 
     const updated = (await getApp().sessions.get(session.id))!;
     expect(updated.status).toBe("stopped");
@@ -65,7 +65,7 @@ describe("session stop preserves claude_session_id", async () => {
     });
 
     // Stop the session
-    await app.sessionLifecycle.stop(session.id);
+    await app.sessionTerminator.stop(session.id);
     const stopped = (await getApp().sessions.get(session.id))!;
     expect(stopped.status).toBe("stopped");
     expect(stopped.claude_session_id).toBe(claudeId);
@@ -96,19 +96,19 @@ describe("session stop preserves claude_session_id", async () => {
     });
 
     // First stop
-    await app.sessionLifecycle.stop(session.id);
+    await app.sessionTerminator.stop(session.id);
     expect((await getApp().sessions.get(session.id))!.claude_session_id).toBe(claudeId);
 
     // Simulate restart
     await getApp().sessions.update(session.id, { status: "running", session_id: "ark-tmux-2" });
 
     // Second stop
-    await app.sessionLifecycle.stop(session.id);
+    await app.sessionTerminator.stop(session.id);
     expect((await getApp().sessions.get(session.id))!.claude_session_id).toBe(claudeId);
 
     // Third cycle
     await getApp().sessions.update(session.id, { status: "running", session_id: "ark-tmux-3" });
-    await app.sessionLifecycle.stop(session.id);
+    await app.sessionTerminator.stop(session.id);
     expect((await getApp().sessions.get(session.id))!.claude_session_id).toBe(claudeId);
   });
 
@@ -121,7 +121,7 @@ describe("session stop preserves claude_session_id", async () => {
       error: "some transient error",
     });
 
-    await app.sessionLifecycle.stop(session.id);
+    await app.sessionTerminator.stop(session.id);
 
     const updated = (await getApp().sessions.get(session.id))!;
     expect(updated.error).toBeNull();
@@ -137,7 +137,7 @@ describe("session stop preserves claude_session_id", async () => {
       workdir: "/tmp/work",
     });
 
-    await app.sessionLifecycle.stop(session.id);
+    await app.sessionTerminator.stop(session.id);
 
     const updated = (await getApp().sessions.get(session.id))!;
     expect(updated.stage).toBe("review");

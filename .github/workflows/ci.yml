@@ -110,30 +110,18 @@ jobs:
       - name: LocalStack-backed S3 tests
         run: bun test packages/core/storage/__tests__/s3.test.ts --timeout 120000
 
-  # Local-bespoke docs-flow e2e: SQLite + in-process AppContext, no docker.
-  # Exercises the bespoke dispatch chain (the non-Temporal path) end-to-end
-  # against a local git-http-backend with basic auth. One pass + one skip
-  # (the AppContext in-process restart gap is documented separately).
-  e2e-local-bespoke:
-    name: e2e (local-bespoke docs-flow)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install tmux + git
-        run: sudo apt-get update && sudo apt-get install -y tmux git
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run local-bespoke docs-flow e2e
-        run: make test-e2e-local-bespoke
+  # NOTE: the `e2e-local-bespoke` job was retired. It exercised the in-tree
+  # bespoke (non-Temporal) dispatch chain via an in-process fake-claude
+  # harness in e2e/helpers/server-process.ts. `d8ac2ab7 refactor(orchestration):
+  # remove the in-tree StageAdvanceService; Temporal is the sole orchestrator`
+  # removed `app.stageAdvance` from AppContext, but the helper's monkey-patch
+  # at e2e/helpers/server-process.ts:367 still referenced it -- the job has
+  # been failing on `TypeError: undefined is not an object (evaluating
+  # 'app.stageAdvance.advance')` since that refactor landed. The bespoke
+  # arc is deprecated (Temporal is now the sole orchestrator); the
+  # replacement gate is the unified-stack e2e at make test-e2e-control-plane-bare
+  # (added in PR #626's e2e-harness companion). When that gate is wired into
+  # CI it replaces this one.
 
   # Build binaries for all 4 platforms
   build:

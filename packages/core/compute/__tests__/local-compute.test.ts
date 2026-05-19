@@ -36,7 +36,6 @@ describe("LocalCompute", async () => {
     expect(c.kind).toBe("local");
     expect(c.capabilities).toEqual({
       snapshot: false,
-      pool: false,
       networkIsolation: false,
       provisionLatency: "instant",
       singleton: true,

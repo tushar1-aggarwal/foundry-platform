@@ -13,14 +13,14 @@ export interface RuntimeBilling {
   plan?: string;
   /** Fixed monthly cost in USD for this subscription */
   cost_per_month?: number;
-  /** Transcript parser to use: 'claude' | 'codex' | 'gemini' | 'goose' (defaults based on type) */
-  transcript_parser?: "claude" | "codex" | "gemini" | "goose";
+  /** Transcript parser to use. claude-agent is the sole runtime. */
+  transcript_parser?: "claude";
 }
 
 export interface RuntimeDefinition {
   name: string;
   description?: string;
-  type: "claude-code" | "cli-agent" | "subprocess" | "goose" | "claude-agent";
+  type: "claude-agent" | "subprocess" | "stub-runner";
   command?: string[];
   task_delivery?: "stdin" | "file" | "arg";
   permission_mode?: string;

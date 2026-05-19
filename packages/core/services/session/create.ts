@@ -7,11 +7,11 @@ import { execFileSync } from "child_process";
 import { existsSync } from "fs";
 
 import type { Session } from "../../../types/index.js";
-import type { LifecycleHooks, SessionLifecycleDeps, StartSessionOpts } from "./types.js";
+import type { SessionLifecycleDeps, StartSessionOpts } from "./types.js";
 import * as flow from "../flow.js";
 import { loadRepoConfig } from "../../repo-config.js";
 import { profileGroupPrefix } from "../profile.js";
-import { logDebug, logError, logWarn } from "../../observability/structured-log.js";
+import { logError, logWarn } from "../../observability/structured-log.js";
 import { track } from "../../observability/telemetry.js";
 import { emitSessionSpanStart, emitStageSpanStart } from "../../observability/otlp.js";
 import { isRepoUrl } from "../../repo-url.js";
@@ -46,7 +46,7 @@ export function resolveGitHubUrl(dir?: string | null): string | null {
 export class SessionCreator {
   constructor(private readonly deps: SessionLifecycleDeps) {}
 
-  async start(opts: StartSessionOpts, hooks?: LifecycleHooks): Promise<Session> {
+  async start(opts: StartSessionOpts): Promise<Session> {
     const d = this.deps;
     const repoDir = opts.workdir ?? opts.repo;
     const repoConfig = repoDir ? loadRepoConfig(repoDir) : {};
@@ -145,13 +145,9 @@ export class SessionCreator {
       };
     }
 
-    // If a Temporal workflow starter is wired (hosted mode + orchestration flag),
-    // stamp the session as temporal before persisting so the orchestrator column
-    // is correct from the first DB write.
-    const usesTemporal = typeof d.startTemporalWorkflow === "function";
-    if (usesTemporal) {
-      (mergedOpts as Record<string, unknown>).orchestrator = "temporal";
-    }
+    // Temporal is the sole orchestrator: stamp the session before the first
+    // DB write so the orchestrator column is correct from creation.
+    (mergedOpts as Record<string, unknown>).orchestrator = "temporal";
 
     const session = await d.sessions.create(mergedOpts as StartSessionOpts);
 
@@ -207,22 +203,23 @@ export class SessionCreator {
       await d.sessions.update(session.id, { agent: opts.agent });
     }
 
-    try {
-      await d.flows.get(session.flow ?? "default");
-    } catch {
-      logDebug("session", "flow prefetch failed -- continue and rely on legacy sync path");
-    }
-
-    // services/flow still reads app.flows via AppContext; lifecycle is called
-    // from the container path where the FlowStore is warmed above, so the
-    // sync getFirstStage path works. We shim a tiny AppContext-alike to
-    // satisfy the existing helpers' signature.
+    // services/flow reads app.flows via AppContext; shim a tiny
+    // AppContext-alike to satisfy the helpers' signature.
     const flowName = session.flow ?? "default";
     const flowShim = { flows: d.flows } as unknown as Parameters<typeof flow.getFirstStage>[0];
-    const firstStage = flow.getFirstStage(flowShim, flowName);
+    const firstStage = await flow.getFirstStage(flowShim, flowName);
     if (firstStage) {
-      const action = flow.getStageAction(flowShim, flowName, firstStage);
-      await d.sessions.update(session.id, { stage: firstStage, status: "ready" });
+      const action = await flow.getStageAction(flowShim, flowName, firstStage);
+      const firstStageDef = await flow.getStage(flowShim, flowName, firstStage);
+      const stageUpdate: Record<string, unknown> = { stage: firstStage, status: "ready" };
+      // `compute_template:` names a template to materialize per session: the
+      // generic provision path mints an ephemeral pod from the template spec
+      // and binds it to the session via the handle (no row is cloned). Point
+      // the session at the template; an explicit caller compute_name wins.
+      if (firstStageDef?.compute_template && opts.compute_name == null) {
+        stageUpdate.compute_name = firstStageDef.compute_template;
+      }
+      await d.sessions.update(session.id, stageUpdate);
       await d.events.log(session.id, "stage_ready", {
         stage: firstStage,
         actor: "system",
@@ -239,21 +236,15 @@ export class SessionCreator {
       emitStageSpanStart(session.id, { stage: firstStage, agent: agentLabel, gate: "auto" });
     }
 
-    // If Temporal is wired, start the workflow and stamp workflow_id on the row.
-    // This runs after the stage/status columns are set so the worker picks up
-    // an already-advanced session when it first queries.
-    if (usesTemporal && d.startTemporalWorkflow) {
-      const tenantId = d.sessions.getTenant?.() ?? "default";
-      const { workflowId, runId } = await d.startTemporalWorkflow(session.id, flowName, tenantId);
-      await d.sessions.update(session.id, {
-        workflow_id: workflowId,
-        workflow_run_id: runId,
-      } as Partial<Session>);
-    }
-
-    // Phase 3 cutover: bespoke dispatch only fires when Temporal is OFF.
-    // In Temporal mode the workflow drives every stage via dispatchStageActivity.
-    if (!usesTemporal) hooks?.onCreated?.(session.id);
+    // Start the Temporal workflow and stamp workflow_id on the row. Runs
+    // after the stage/status columns are set so the worker picks up an
+    // already-advanced session when it first queries.
+    const tenantId = d.sessions.getTenant?.() ?? "default";
+    const { workflowId, runId } = await d.startTemporalWorkflow(session.id, flowName, tenantId);
+    await d.sessions.update(session.id, {
+      workflow_id: workflowId,
+      workflow_run_id: runId,
+    } as Partial<Session>);
 
     return (await d.sessions.get(session.id))!;
   }
@@ -263,12 +254,12 @@ export class SessionCreator {
    * Resolves the runtime's billing mode (api/subscription/free) so that
    * subscription-based runtimes get cost_usd=0 while still tracking tokens.
    */
-  recordUsage(
+  async recordUsage(
     session: Session,
     usage: { input_tokens: number; output_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number },
     provider: string,
     source: string,
-  ): void {
+  ): Promise<void> {
     if (!usage.input_tokens && !usage.output_tokens) return;
     try {
       const d = this.deps;
@@ -278,7 +269,7 @@ export class SessionCreator {
         logWarn("session", `recordUsage: no runtime resolvable for session ${session.id} -- skipping`);
         return;
       }
-      const runtime = d.runtimes.get(runtimeName);
+      const runtime = await d.runtimes.get(runtimeName);
       const billingMode = runtime?.billing?.mode ?? "api";
       // Runtime no longer owns a default_model. Fall back to "sonnet" (a
       // catalog alias) when neither the session nor the agent carries a model;

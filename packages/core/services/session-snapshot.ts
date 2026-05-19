@@ -18,7 +18,7 @@
  * restart arkd) thickens as subsequent snapshot work lands.
  */
 
-import type { AppContext } from "../app.js";
+import type { OrchestrationDeps } from "./deps.js";
 import type { ComputeKind, ComputeHandle, Snapshot } from "../compute/types.js";
 import type { SnapshotRef } from "../compute/snapshot-store.js";
 import { NotSupportedError } from "../compute/types.js";
@@ -55,20 +55,20 @@ export interface ResumeFromSnapshotResult {
  * `local`, the default compute for this daemon.
  */
 export async function resolveSessionCompute(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
 ): Promise<{ kind: ComputeKind; handle: ComputeHandle } | null> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session) return null;
 
   const name = session.compute_name || "local";
   let kind: ComputeKind = "local";
   if (session.compute_name) {
-    const row = await app.computes.get(session.compute_name);
+    const row = await deps.computes.get(session.compute_name);
     if (!row) return null;
     kind = row.compute_kind as ComputeKind;
   }
-  const compute = app.getCompute(kind);
+  const compute = deps.app!.getCompute(kind);
   if (!compute) return null;
 
   // Derive a handle from the session row. Real handles are minted by
@@ -92,16 +92,16 @@ export async function resolveSessionCompute(
  *   5. Record the finalized `SnapshotRef` on the session + emit an event.
  */
 export async function pauseWithSnapshot(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   opts?: { reason?: string },
 ): Promise<PauseWithSnapshotResult> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session) return { ok: false, message: `Session ${sessionId} not found` };
 
-  const resolved = await resolveSessionCompute(app, sessionId);
+  const resolved = await resolveSessionCompute(deps, sessionId);
   if (!resolved) return { ok: false, message: "Session has no resolvable compute" };
-  const compute = app.getCompute(resolved.kind);
+  const compute = deps.app!.getCompute(resolved.kind);
   if (!compute) return { ok: false, message: `Compute not registered: ${resolved.kind}` };
 
   if (!compute.capabilities.snapshot) {
@@ -126,7 +126,7 @@ export async function pauseWithSnapshot(
   // Step 2: persist to the configured SnapshotStore.
   let ref: SnapshotRef;
   try {
-    ref = await app.snapshotStore.save(
+    ref = await deps.app!.snapshotStore.save(
       {
         computeKind: snap.computeKind,
         sessionId,
@@ -145,13 +145,13 @@ export async function pauseWithSnapshot(
     last_snapshot_id: ref.id,
     last_snapshot_at: ref.createdAt,
   };
-  await app.sessions.update(sessionId, {
+  await deps.sessions.update(sessionId, {
     status: "blocked",
     breakpoint_reason: opts?.reason ?? "User paused",
     config: mergedConfig,
   });
 
-  await app.events.log(sessionId, "session_paused", {
+  await deps.events.log(sessionId, "session_paused", {
     stage: session.stage,
     actor: "user",
     data: {
@@ -171,11 +171,11 @@ export async function pauseWithSnapshot(
  * under the session is used.
  */
 export async function resumeFromSnapshot(
-  app: AppContext,
+  deps: OrchestrationDeps,
   sessionId: string,
   opts?: { snapshotId?: string },
 ): Promise<ResumeFromSnapshotResult> {
-  const session = await app.sessions.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (!session) return { ok: false, message: `Session ${sessionId} not found` };
 
   // Pick the snapshot id: explicit > session.last_snapshot_id > latest for session.
@@ -185,20 +185,20 @@ export async function resumeFromSnapshot(
     if (typeof cfg.last_snapshot_id === "string") snapshotId = cfg.last_snapshot_id;
   }
   if (!snapshotId) {
-    const refs = await app.snapshotStore.list({ sessionId });
+    const refs = await deps.app!.snapshotStore.list({ sessionId });
     if (refs.length === 0) return { ok: false, message: "No snapshot available for session" };
     snapshotId = refs[0].id; // `list()` returns newest-first
   }
 
   // Load the ref + payload stream.
-  let blob: Awaited<ReturnType<typeof app.snapshotStore.load>>;
+  let blob: Awaited<ReturnType<NonNullable<typeof deps.app>["snapshotStore"]["load"]>>;
   try {
-    blob = await app.snapshotStore.load(snapshotId);
+    blob = await deps.app!.snapshotStore.load(snapshotId);
   } catch (e: any) {
     return { ok: false, message: `snapshot load failed: ${e?.message ?? e}` };
   }
 
-  const compute = app.getCompute(blob.ref.computeKind);
+  const compute = deps.app!.getCompute(blob.ref.computeKind);
   if (!compute) return { ok: false, message: `Compute not registered: ${blob.ref.computeKind}` };
 
   if (!compute.capabilities.snapshot) {
@@ -226,12 +226,12 @@ export async function resumeFromSnapshot(
     return { ok: false, message: `restore failed: ${e?.message ?? e}` };
   }
 
-  await app.sessions.update(sessionId, {
+  await deps.sessions.update(sessionId, {
     status: "ready",
     breakpoint_reason: null,
   });
 
-  await app.events.log(sessionId, "session_resumed", {
+  await deps.events.log(sessionId, "session_resumed", {
     stage: session.stage,
     actor: "user",
     data: { from_status: session.status, snapshot_id: blob.ref.id },
