@@ -13,6 +13,16 @@ export type ComputeKindName = "local" | "ec2" | "k8s";
 export type IsolationKindName = "direct" | "docker" | "compose" | "devcontainer" | "worktree";
 
 /**
+ * A fully-specified compute target: where it lives + how the agent is
+ * sandboxed. The two-axis pair is the only thing the scheduler and tenant
+ * policies reason about.
+ */
+export interface ComputeAxes {
+  compute_kind: ComputeKindName;
+  isolation_kind: IsolationKindName;
+}
+
+/**
  * Lifecycle classification for a compute kind.
  *
  * - `persistent`: the compute target points at long-lived infrastructure (a

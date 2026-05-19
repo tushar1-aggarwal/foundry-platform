@@ -1,28 +1,29 @@
 /**
  * Compute pool management -- pre-provisioned pools of compute resources.
  *
- * Pools define a provider, min/max instance counts, and provider-specific config.
- * Sessions can request a compute from a pool instead of specifying a named compute.
- * When a session completes, its compute is released back to the pool for reuse.
+ * Pools define a (compute_kind, isolation_kind) pair, min/max instance
+ * counts, and compute-specific config. Sessions can request a compute from
+ * a pool instead of specifying a named compute. When a session completes,
+ * its compute is released back to the pool for reuse.
  */
 
 import type { AppContext } from "../app.js";
-import type { Compute, ComputeKindName, IsolationKindName } from "../../types/index.js";
+import type { Compute, ComputeAxes } from "../../types/index.js";
 import { logDebug } from "../observability/structured-log.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export interface ComputePool {
   name: string;
-  provider: string; // "ec2", "k8s", "docker", etc.
+  compute: ComputeAxes; // where it lives + how it is sandboxed
   min: number; // minimum warm instances
   max: number; // maximum instances
-  config: Record<string, unknown>; // provider-specific config
+  config: Record<string, unknown>; // compute-specific config
 }
 
 export interface ComputePoolRow {
   name: string;
-  provider: string;
+  compute: string; // JSON-encoded ComputeAxes
   min_instances: number;
   max_instances: number;
   config: string;
@@ -42,7 +43,7 @@ export async function initPoolSchema(db: { exec(sql: string): Promise<void> }): 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS compute_pools (
       name TEXT NOT NULL,
-      provider TEXT NOT NULL,
+      compute TEXT NOT NULL,
       min_instances INTEGER NOT NULL DEFAULT 0,
       max_instances INTEGER NOT NULL DEFAULT 10,
       config TEXT DEFAULT '{}',
@@ -74,11 +75,20 @@ export class ComputePoolManager {
     await this.app.db
       .prepare(
         `
-      INSERT INTO compute_pools (name, provider, min_instances, max_instances, config, tenant_id, created_at, updated_at)
+      INSERT INTO compute_pools (name, compute, min_instances, max_instances, config, tenant_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `,
       )
-      .run(pool.name, pool.provider, pool.min, pool.max, JSON.stringify(pool.config), this.tenantId, ts, ts);
+      .run(
+        pool.name,
+        JSON.stringify(pool.compute),
+        pool.min,
+        pool.max,
+        JSON.stringify(pool.config),
+        this.tenantId,
+        ts,
+        ts,
+      );
     return pool;
   }
 
@@ -121,22 +131,19 @@ export class ComputePoolManager {
       throw new Error(`Pool '${poolName}' at max capacity (${pool.max})`);
     }
 
-    // Create a new compute in the pool. The pool stores a legacy provider
-    // string; map it to a (kind, isolation) pair here. Pool schema migration
-    // to two-axis is filed separately; the mapping is a 1:1 carry-over of
-    // the historical adapter table.
+    // Create a new compute in the pool from the pool's (compute_kind,
+    // isolation_kind) pair.
     const idx = poolComputes.length + 1;
     const computeName = `${poolName}-${idx}`;
-    const axes = legacyProviderNameToAxes(pool.provider);
     await this.app.computeService.create({
       name: computeName,
-      compute: axes.compute_kind,
-      isolation: axes.isolation_kind,
+      compute: pool.compute.compute_kind,
+      isolation: pool.compute.isolation_kind,
       config: { ...pool.config, pool: poolName },
     });
 
     // Provision via the new ComputeTarget API.
-    const computeImpl = this.app.getCompute(axes.compute_kind);
+    const computeImpl = this.app.getCompute(pool.compute.compute_kind);
     if (computeImpl) {
       await computeImpl.provision({ config: { ...pool.config, pool: poolName } });
       await this.app.computes.update(computeName, { status: "running" });
@@ -194,14 +201,20 @@ export class ComputePoolManager {
 
   private _rowToPool(row: ComputePoolRow): ComputePool {
     let config: Record<string, unknown> = {};
+    let compute: ComputeAxes = { compute_kind: "k8s", isolation_kind: "direct" };
     try {
       config = JSON.parse(row.config);
     } catch {
       logDebug("pool", "default");
     }
+    try {
+      compute = JSON.parse(row.compute);
+    } catch {
+      logDebug("pool", "default");
+    }
     return {
       name: row.name,
-      provider: row.provider,
+      compute,
       min: row.min_instances,
       max: row.max_instances,
       config,
@@ -223,34 +236,5 @@ export class ComputePoolManager {
     const compute = await this.app.computes.get(computeName);
     if (compute && (compute.config as Record<string, unknown>)?.pool === poolName) return true;
     return false;
-  }
-}
-
-/** Map a legacy provider-name string to the new two-axis (kind, isolation) pair. */
-function legacyProviderNameToAxes(name: string): {
-  compute_kind: ComputeKindName;
-  isolation_kind: IsolationKindName;
-} {
-  switch (name) {
-    case "local":
-      return { compute_kind: "local", isolation_kind: "direct" };
-    case "docker":
-      return { compute_kind: "local", isolation_kind: "docker" };
-    case "devcontainer":
-      return { compute_kind: "local", isolation_kind: "devcontainer" };
-    case "ec2":
-    case "remote-arkd":
-    case "remote-worktree":
-      return { compute_kind: "ec2", isolation_kind: "direct" };
-    case "ec2-docker":
-    case "remote-docker":
-      return { compute_kind: "ec2", isolation_kind: "docker" };
-    case "ec2-devcontainer":
-    case "remote-devcontainer":
-      return { compute_kind: "ec2", isolation_kind: "devcontainer" };
-    case "k8s":
-      return { compute_kind: "k8s", isolation_kind: "direct" };
-    default:
-      return { compute_kind: "local", isolation_kind: "direct" };
   }
 }

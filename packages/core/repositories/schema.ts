@@ -321,8 +321,8 @@ export async function initSchema(db: DatabaseAdapter): Promise<void> {
     db,
     `CREATE TABLE IF NOT EXISTS tenant_policies (
       tenant_id TEXT PRIMARY KEY,
-      allowed_providers TEXT NOT NULL DEFAULT '[]',
-      default_provider TEXT NOT NULL DEFAULT 'k8s',
+      allowed_compute TEXT NOT NULL DEFAULT '[]',
+      default_compute TEXT NOT NULL DEFAULT '{"compute_kind":"k8s","isolation_kind":"direct"}',
       max_concurrent_sessions INTEGER NOT NULL DEFAULT 10,
       max_cost_per_day_usd REAL,
       compute_pools TEXT NOT NULL DEFAULT '[]',

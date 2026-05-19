@@ -67,9 +67,11 @@ describe("admin/tenant/policy/* handler gate", () => {
       "admin/tenant/policy/set",
       {
         tenant_id: tenantId,
-        allowed_providers: ["k8s", "ec2"],
-        default_provider: "k8s",
-        isolation: "direct",
+        allowed_compute: [
+          { compute_kind: "k8s", isolation_kind: "direct" },
+          { compute_kind: "ec2", isolation_kind: "direct" },
+        ],
+        default_compute: { compute_kind: "k8s", isolation_kind: "direct" },
         max_concurrent_sessions: 7,
         max_cost_per_day_usd: 50,
       },
@@ -78,7 +80,11 @@ describe("admin/tenant/policy/* handler gate", () => {
     expect(setRes.result).toBeDefined();
     const setPolicy = (setRes.result as any).policy;
     expect(setPolicy.tenant_id).toBe(tenantId);
-    expect(setPolicy.allowed_providers).toEqual(["k8s", "ec2"]);
+    expect(setPolicy.allowed_compute).toEqual([
+      { compute_kind: "k8s", isolation_kind: "direct" },
+      { compute_kind: "ec2", isolation_kind: "direct" },
+    ]);
+    expect(setPolicy.default_compute).toEqual({ compute_kind: "k8s", isolation_kind: "direct" });
     expect(setPolicy.max_concurrent_sessions).toBe(7);
     expect(setPolicy.max_cost_per_day_usd).toBe(50);
 
@@ -95,7 +101,10 @@ describe("admin/tenant/policy/* handler gate", () => {
     )) as JsonRpcResponse;
     const updated = (updateRes.result as any).policy;
     expect(updated.max_concurrent_sessions).toBe(12);
-    expect(updated.allowed_providers).toEqual(["k8s", "ec2"]);
+    expect(updated.allowed_compute).toEqual([
+      { compute_kind: "k8s", isolation_kind: "direct" },
+      { compute_kind: "ec2", isolation_kind: "direct" },
+    ]);
 
     // list (our tenant should appear)
     const listRes = (await dispatchAs("admin/tenant/policy/list", {}, admin)) as JsonRpcResponse;

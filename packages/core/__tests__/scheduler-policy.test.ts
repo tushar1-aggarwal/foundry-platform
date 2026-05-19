@@ -33,12 +33,12 @@ afterAll(async () => {
 });
 
 describe("SessionScheduler with tenant policies", async () => {
-  it("rejects dispatch when provider is not allowed for tenant", async () => {
-    // Set up a policy that only allows k8s
+  it("rejects dispatch when the compute pair is not allowed for tenant", async () => {
+    // Set up a policy that only allows k8s/direct
     await pm.setPolicy({
       tenant_id: "strict-tenant",
-      allowed_providers: ["k8s"],
-      default_provider: "k8s",
+      allowed_compute: [{ compute_kind: "k8s", isolation_kind: "direct" }],
+      default_compute: { compute_kind: "k8s", isolation_kind: "direct" },
       max_concurrent_sessions: 10,
       max_cost_per_day_usd: null,
       compute_pools: [],
@@ -74,15 +74,18 @@ describe("SessionScheduler with tenant policies", async () => {
     scheduler.setPolicyManager(pm);
 
     (await expect(scheduler.schedule(session, "strict-tenant"))).rejects.toThrow(
-      'Provider "ec2" not allowed for tenant "strict-tenant"',
+      'Compute "ec2/direct" not allowed for tenant "strict-tenant"',
     );
   });
 
-  it("uses default provider from tenant policy", async () => {
+  it("uses the default compute pair from tenant policy", async () => {
     await pm.setPolicy({
       tenant_id: "default-prov-tenant",
-      allowed_providers: ["k8s", "ec2"],
-      default_provider: "k8s",
+      allowed_compute: [
+        { compute_kind: "k8s", isolation_kind: "direct" },
+        { compute_kind: "ec2", isolation_kind: "direct" },
+      ],
+      default_compute: { compute_kind: "k8s", isolation_kind: "direct" },
       max_concurrent_sessions: 10,
       max_cost_per_day_usd: null,
       compute_pools: [],
@@ -108,11 +111,15 @@ describe("SessionScheduler with tenant policies", async () => {
     expect(worker.id).toBe("w-k8s-default");
   });
 
-  it("allows dispatch when provider is in allowed list", async () => {
+  it("allows dispatch when the compute pair is in the allowed list", async () => {
     await pm.setPolicy({
       tenant_id: "multi-prov-tenant",
-      allowed_providers: ["k8s", "ec2", "docker"],
-      default_provider: "ec2",
+      allowed_compute: [
+        { compute_kind: "k8s", isolation_kind: "direct" },
+        { compute_kind: "ec2", isolation_kind: "direct" },
+        { compute_kind: "local", isolation_kind: "docker" },
+      ],
+      default_compute: { compute_kind: "ec2", isolation_kind: "direct" },
       max_concurrent_sessions: 10,
       max_cost_per_day_usd: null,
       compute_pools: [],
@@ -138,11 +145,11 @@ describe("SessionScheduler with tenant policies", async () => {
     expect(worker.id).toBe("w-ec2-allowed");
   });
 
-  it("allows all providers when allowed_providers is empty", async () => {
+  it("allows all compute pairs when allowed_compute is empty", async () => {
     await pm.setPolicy({
       tenant_id: "open-tenant",
-      allowed_providers: [],
-      default_provider: "k8s",
+      allowed_compute: [],
+      default_compute: { compute_kind: "k8s", isolation_kind: "direct" },
       max_concurrent_sessions: 10,
       max_cost_per_day_usd: null,
       compute_pools: [],

@@ -1008,13 +1008,13 @@ export class ArkClient {
   async tenantPolicyList(): Promise<
     Array<{
       tenant_id: string;
-      allowed_providers: string[];
-      default_provider: string;
+      allowed_compute: Array<{ compute_kind: string; isolation_kind: string }>;
+      default_compute: { compute_kind: string; isolation_kind: string };
       max_concurrent_sessions: number;
       max_cost_per_day_usd: number | null;
       compute_pools: Array<{
         pool_name: string;
-        provider: string;
+        compute: { compute_kind: string; isolation_kind: string };
         min: number;
         max: number;
         config: Record<string, unknown>;
@@ -1039,13 +1039,13 @@ export class ArkClient {
 
   async tenantPolicySet(opts: {
     tenant_id: string;
-    allowed_providers?: string[];
-    default_provider?: string;
+    allowed_compute?: Array<{ compute_kind: string; isolation_kind: string }>;
+    default_compute?: { compute_kind: string; isolation_kind: string };
     max_concurrent_sessions?: number;
     max_cost_per_day_usd?: number | null;
     compute_pools?: Array<{
       pool_name: string;
-      provider: string;
+      compute: { compute_kind: string; isolation_kind: string };
       min: number;
       max: number;
       config: Record<string, unknown>;

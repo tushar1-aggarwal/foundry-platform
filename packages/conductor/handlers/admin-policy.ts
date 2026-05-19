@@ -23,6 +23,7 @@ import { extract } from "../validate.js";
 import { ErrorCodes, RpcError } from "../../protocol/types.js";
 import { requireAdmin } from "../../core/auth/context.js";
 import type { ComputePoolRef, TenantComputePolicy, TenantPolicyManager } from "../../core/auth/index.js";
+import type { ComputeAxes } from "../../types/index.js";
 
 export function registerAdminPolicyHandlers(router: Router, app: AppContext): void {
   // TenantPolicyManager is registered as a DI singleton; `app.tenantPolicyManager`
@@ -51,8 +52,8 @@ export function registerAdminPolicyHandlers(router: Router, app: AppContext): vo
     requireAdmin(ctx);
     const params = extract<{
       tenant_id: string;
-      allowed_providers?: string[];
-      default_provider?: string;
+      allowed_compute?: ComputeAxes[];
+      default_compute?: ComputeAxes;
       max_concurrent_sessions?: number;
       max_cost_per_day_usd?: number | null;
       compute_pools?: ComputePoolRef[];
@@ -69,8 +70,9 @@ export function registerAdminPolicyHandlers(router: Router, app: AppContext): vo
     const existing = await pm.getPolicy(params.tenant_id);
     const next: TenantComputePolicy = {
       tenant_id: params.tenant_id,
-      allowed_providers: params.allowed_providers ?? existing?.allowed_providers ?? [],
-      default_provider: params.default_provider ?? existing?.default_provider ?? "k8s",
+      allowed_compute: params.allowed_compute ?? existing?.allowed_compute ?? [],
+      default_compute: params.default_compute ??
+        existing?.default_compute ?? { compute_kind: "k8s", isolation_kind: "direct" },
       max_concurrent_sessions: params.max_concurrent_sessions ?? existing?.max_concurrent_sessions ?? 10,
       max_cost_per_day_usd:
         params.max_cost_per_day_usd !== undefined
